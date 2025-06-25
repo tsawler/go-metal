@@ -1,7 +1,7 @@
 package metal_bridge
 
 /*
-#cgo LDFLAGS: -framework Metal -framework Foundation -framework CoreFoundation
+#cgo LDFLAGS: -framework Metal -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -framework Foundation -framework CoreFoundation
 #include "metal_bridge.h"
 // Define a Go function callable from C for completion handlers
 extern void goCommandBufferCompleted(void* userData, long statusCode);
@@ -23,6 +23,13 @@ var (
 	ResourceStorageModeShared  = C.MTLResourceStorageModeShared_Const
 	ResourceStorageModeManaged = C.MTLResourceStorageModeManaged_Const
 	ResourceStorageModePrivate = C.MTLResourceStorageModePrivate_Const
+)
+
+// MPSGraph data type constants
+var (
+	MPSDataTypeFloat32 = C.MPSDataTypeFloat32_Const
+	MPSDataTypeFloat16 = C.MPSDataTypeFloat16_Const
+	MPSDataTypeInt32   = C.MPSDataTypeInt32_Const
 )
 
 // Wrapper struct for MTLDevice
@@ -312,4 +319,392 @@ func (cb *CommandBuffer) AddCompletedHandler(handler func(status int)) {
 	// that gets cleaned up when this handler fires.
 	cb.retainedResources = append(cb.retainedResources, handler) // Retain handler to prevent GC
 	C.AddCommandBufferCompletedHandler(cb.c_commandBuffer, nil, (C.CompletionHandlerFunc)(C.goCommandBufferCompleted))
+}
+
+// MPSGraph wrapper structs and functions
+
+// Wrapper struct for MPSGraph  
+type Graph struct {
+	c_graph C.MPSGraphRef
+}
+
+// Wrapper struct for MPSGraphDevice
+type GraphDevice struct {
+	c_device C.MPSGraphDeviceRef
+}
+
+func NewGraph() *Graph {
+	c_graph := C.CreateMPSGraph()
+	if c_graph == nil {
+		return nil
+	}
+	graph := &Graph{c_graph: c_graph}
+	runtime.SetFinalizer(graph, func(g *Graph) {
+		C.ReleaseMetalObject(unsafe.Pointer(g.c_graph))
+	})
+	return graph
+}
+
+func NewGraphDevice(device *Device) *GraphDevice {
+	c_device := C.CreateMPSGraphDevice(device.c_device)
+	if c_device == nil {
+		return nil
+	}
+	graphDevice := &GraphDevice{c_device: c_device}
+	runtime.SetFinalizer(graphDevice, func(gd *GraphDevice) {
+		C.ReleaseMetalObject(unsafe.Pointer(gd.c_device))
+	})
+	return graphDevice
+}
+
+// Wrapper struct for MPSGraphTensor
+type GraphTensor struct {
+	c_tensor C.MPSGraphTensorRef
+	shape    []int
+	dataType int
+}
+
+func (g *Graph) PlaceholderTensor(shape []int, dataType int) *GraphTensor {
+	cShape := make([]C.int, len(shape))
+	for i, dim := range shape {
+		cShape[i] = C.int(dim)
+	}
+	
+	c_tensor := C.MPSGraphPlaceholderTensor(g.c_graph, &cShape[0], C.size_t(len(shape)), C.int(dataType))
+	if c_tensor == nil {
+		return nil
+	}
+	
+	tensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    shape,
+		dataType: dataType,
+	}
+	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return tensor
+}
+
+func (g *Graph) ConstantTensor(value float64, shape []int, dataType int) *GraphTensor {
+	cShape := make([]C.int, len(shape))
+	for i, dim := range shape {
+		cShape[i] = C.int(dim)
+	}
+	
+	c_tensor := C.MPSGraphConstantTensor(g.c_graph, C.double(value), &cShape[0], C.size_t(len(shape)), C.int(dataType))
+	if c_tensor == nil {
+		return nil
+	}
+	
+	tensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    shape,
+		dataType: dataType,
+	}
+	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return tensor
+}
+
+// MPSGraph operations
+func (g *Graph) Addition(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor {
+	c_tensor := C.MPSGraphAddition(g.c_graph, primaryTensor.c_tensor, secondaryTensor.c_tensor)
+	if c_tensor == nil {
+		return nil
+	}
+	
+	tensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    primaryTensor.shape, // Assuming same shape for element-wise ops
+		dataType: primaryTensor.dataType,
+	}
+	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return tensor
+}
+
+func (g *Graph) Subtraction(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor {
+	c_tensor := C.MPSGraphSubtraction(g.c_graph, primaryTensor.c_tensor, secondaryTensor.c_tensor)
+	if c_tensor == nil {
+		return nil
+	}
+	
+	tensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    primaryTensor.shape,
+		dataType: primaryTensor.dataType,
+	}
+	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return tensor
+}
+
+func (g *Graph) Multiplication(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor {
+	c_tensor := C.MPSGraphMultiplication(g.c_graph, primaryTensor.c_tensor, secondaryTensor.c_tensor)
+	if c_tensor == nil {
+		return nil
+	}
+	
+	tensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    primaryTensor.shape,
+		dataType: primaryTensor.dataType,
+	}
+	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return tensor
+}
+
+func (g *Graph) Division(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor {
+	c_tensor := C.MPSGraphDivision(g.c_graph, primaryTensor.c_tensor, secondaryTensor.c_tensor)
+	if c_tensor == nil {
+		return nil
+	}
+	
+	tensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    primaryTensor.shape,
+		dataType: primaryTensor.dataType,
+	}
+	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return tensor
+}
+
+func (g *Graph) MatrixMultiplication(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor {
+	c_tensor := C.MPSGraphMatrixMultiplication(g.c_graph, primaryTensor.c_tensor, secondaryTensor.c_tensor)
+	if c_tensor == nil {
+		return nil
+	}
+	
+	// For matrix multiplication, compute output shape
+	var outputShape []int
+	if len(primaryTensor.shape) == 2 && len(secondaryTensor.shape) == 2 {
+		outputShape = []int{primaryTensor.shape[0], secondaryTensor.shape[1]}
+	} else {
+		outputShape = primaryTensor.shape // Fallback
+	}
+	
+	tensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    outputShape,
+		dataType: primaryTensor.dataType,
+	}
+	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return tensor
+}
+
+func (g *Graph) ReLU(tensor *GraphTensor) *GraphTensor {
+	c_tensor := C.MPSGraphReLU(g.c_graph, tensor.c_tensor)
+	if c_tensor == nil {
+		return nil
+	}
+	
+	resultTensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    tensor.shape,
+		dataType: tensor.dataType,
+	}
+	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return resultTensor
+}
+
+func (g *Graph) Sigmoid(tensor *GraphTensor) *GraphTensor {
+	c_tensor := C.MPSGraphSigmoid(g.c_graph, tensor.c_tensor)
+	if c_tensor == nil {
+		return nil
+	}
+	
+	resultTensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    tensor.shape,
+		dataType: tensor.dataType,
+	}
+	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return resultTensor
+}
+
+func (g *Graph) Softmax(tensor *GraphTensor, axis int) *GraphTensor {
+	c_tensor := C.MPSGraphSoftmax(g.c_graph, tensor.c_tensor, C.size_t(axis))
+	if c_tensor == nil {
+		return nil
+	}
+	
+	resultTensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    tensor.shape,
+		dataType: tensor.dataType,
+	}
+	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return resultTensor
+}
+
+func (g *Graph) Transpose(tensor *GraphTensor, dimension, dimensionTwo int) *GraphTensor {
+	c_tensor := C.MPSGraphTranspose(g.c_graph, tensor.c_tensor, C.size_t(dimension), C.size_t(dimensionTwo))
+	if c_tensor == nil {
+		return nil
+	}
+	
+	// Compute transposed shape
+	transposedShape := make([]int, len(tensor.shape))
+	copy(transposedShape, tensor.shape)
+	if dimension < len(transposedShape) && dimensionTwo < len(transposedShape) {
+		transposedShape[dimension], transposedShape[dimensionTwo] = transposedShape[dimensionTwo], transposedShape[dimension]
+	}
+	
+	resultTensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    transposedShape,
+		dataType: tensor.dataType,
+	}
+	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return resultTensor
+}
+
+func (g *Graph) Reshape(tensor *GraphTensor, shape []int) *GraphTensor {
+	cShape := make([]C.int, len(shape))
+	for i, dim := range shape {
+		cShape[i] = C.int(dim)
+	}
+	
+	c_tensor := C.MPSGraphReshape(g.c_graph, tensor.c_tensor, &cShape[0], C.size_t(len(shape)))
+	if c_tensor == nil {
+		return nil
+	}
+	
+	resultTensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    shape,
+		dataType: tensor.dataType,
+	}
+	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return resultTensor
+}
+
+// Wrapper structs for MPSGraph execution
+type GraphExecutable struct {
+	c_executable C.MPSGraphExecutableRef
+}
+
+type GraphExecutionDescriptor struct {
+	c_descriptor C.MPSGraphExecutionDescriptorRef
+}
+
+type GraphCompilationDescriptor struct {
+	c_descriptor C.MPSGraphCompilationDescriptorRef
+}
+
+func NewGraphExecutionDescriptor() *GraphExecutionDescriptor {
+	c_descriptor := C.CreateMPSGraphExecutionDescriptor()
+	if c_descriptor == nil {
+		return nil
+	}
+	descriptor := &GraphExecutionDescriptor{c_descriptor: c_descriptor}
+	runtime.SetFinalizer(descriptor, func(d *GraphExecutionDescriptor) {
+		C.ReleaseMetalObject(unsafe.Pointer(d.c_descriptor))
+	})
+	return descriptor
+}
+
+func NewGraphCompilationDescriptor() *GraphCompilationDescriptor {
+	c_descriptor := C.CreateMPSGraphCompilationDescriptor()
+	if c_descriptor == nil {
+		return nil
+	}
+	descriptor := &GraphCompilationDescriptor{c_descriptor: c_descriptor}
+	runtime.SetFinalizer(descriptor, func(d *GraphCompilationDescriptor) {
+		C.ReleaseMetalObject(unsafe.Pointer(d.c_descriptor))
+	})
+	return descriptor
+}
+
+func (g *Graph) Compile(device *GraphDevice, inputTensors []*GraphTensor, targetTensors []*GraphTensor, compilationDescriptor *GraphCompilationDescriptor) *GraphExecutable {
+	// Convert Go slices to C arrays
+	var cInputTensors *C.MPSGraphTensorRef
+	var cTargetTensors *C.MPSGraphTensorRef
+	inputCount := len(inputTensors)
+	targetCount := len(targetTensors)
+	
+	if len(inputTensors) > 0 {
+		inputArray := make([]C.MPSGraphTensorRef, len(inputTensors))
+		for i, input := range inputTensors {
+			inputArray[i] = input.c_tensor
+		}
+		cInputTensors = (*C.MPSGraphTensorRef)(unsafe.Pointer(&inputArray[0]))
+	}
+	
+	if len(targetTensors) > 0 {
+		targetArray := make([]C.MPSGraphTensorRef, len(targetTensors))
+		for i, target := range targetTensors {
+			targetArray[i] = target.c_tensor
+		}
+		cTargetTensors = (*C.MPSGraphTensorRef)(unsafe.Pointer(&targetArray[0]))
+	}
+	
+	c_executable := C.MPSGraphCompile(g.c_graph, device.c_device, cInputTensors, C.size_t(inputCount), cTargetTensors, C.size_t(targetCount), compilationDescriptor.c_descriptor)
+	if c_executable == nil {
+		return nil
+	}
+	
+	executable := &GraphExecutable{c_executable: c_executable}
+	runtime.SetFinalizer(executable, func(e *GraphExecutable) {
+		C.ReleaseMetalObject(unsafe.Pointer(e.c_executable))
+	})
+	return executable
+}
+
+func (e *GraphExecutable) Execute(commandQueue *CommandQueue, inputTensors []*GraphTensor, inputBuffers []*Buffer, resultTensors []*GraphTensor, resultBuffers []*Buffer, executionDescriptor *GraphExecutionDescriptor) {
+	inputCount := len(inputTensors)
+	resultCount := len(resultTensors)
+	
+	// Convert Go slices to C arrays
+	var inputTensorArray []C.MPSGraphTensorRef
+	var inputBufferArray []C.MTLBufferRef
+	var resultTensorArray []C.MPSGraphTensorRef
+	var resultBufferArray []C.MTLBufferRef
+	
+	if inputCount > 0 {
+		inputTensorArray = make([]C.MPSGraphTensorRef, inputCount)
+		inputBufferArray = make([]C.MTLBufferRef, inputCount)
+		for i := 0; i < inputCount; i++ {
+			inputTensorArray[i] = inputTensors[i].c_tensor
+			inputBufferArray[i] = inputBuffers[i].c_buffer
+		}
+	}
+	
+	if resultCount > 0 {
+		resultTensorArray = make([]C.MPSGraphTensorRef, resultCount)
+		resultBufferArray = make([]C.MTLBufferRef, resultCount)
+		for i := 0; i < resultCount; i++ {
+			resultTensorArray[i] = resultTensors[i].c_tensor
+			resultBufferArray[i] = resultBuffers[i].c_buffer
+		}
+	}
+	
+	C.MPSGraphExecuteExecutable(e.c_executable, commandQueue.c_queue,
+		(*C.MPSGraphTensorRef)(unsafe.Pointer(&inputTensorArray[0])),
+		(*C.MTLBufferRef)(unsafe.Pointer(&inputBufferArray[0])),
+		C.size_t(inputCount),
+		(*C.MPSGraphTensorRef)(unsafe.Pointer(&resultTensorArray[0])),
+		(*C.MTLBufferRef)(unsafe.Pointer(&resultBufferArray[0])),
+		C.size_t(resultCount),
+		executionDescriptor.c_descriptor)
 }

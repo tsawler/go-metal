@@ -5,6 +5,11 @@ const size_t MTLResourceStorageModeShared_Const = MTLResourceStorageModeShared;
 const size_t MTLResourceStorageModeManaged_Const = MTLResourceStorageModeManaged;
 const size_t MTLResourceStorageModePrivate_Const = MTLResourceStorageModePrivate;
 
+// MPSGraph data type constants
+const int MPSDataTypeFloat32_Const = MPSDataTypeFloat32;
+const int MPSDataTypeFloat16_Const = MPSDataTypeFloat16;
+const int MPSDataTypeInt32_Const = MPSDataTypeInt32;
+
 id<MTLDevice> CreateSystemDefaultDevice() {
     return MTLCreateSystemDefaultDevice();
 }
@@ -108,4 +113,146 @@ void ReleaseMetalObject(void* obj) {
     if (obj) {
         CFRelease((__bridge CFTypeRef)obj); // Requires CoreFoundation
     }
+}
+
+// MPSGraph function implementations
+
+MPSGraph* CreateMPSGraph() {
+    return [[MPSGraph alloc] init];
+}
+
+MPSGraphDevice* CreateMPSGraphDevice(id<MTLDevice> metalDevice) {
+    return [MPSGraphDevice deviceWithMTLDevice:metalDevice];
+}
+
+MPSGraphTensor* MPSGraphPlaceholderTensor(MPSGraph* graph, int* shape, size_t shapeCount, int dataType) {
+    NSMutableArray<NSNumber*>* nsShape = [[NSMutableArray alloc] initWithCapacity:shapeCount];
+    for (size_t i = 0; i < shapeCount; i++) {
+        [nsShape addObject:@(shape[i])];
+    }
+    
+    return [graph placeholderWithShape:nsShape dataType:(MPSDataType)dataType name:nil];
+}
+
+MPSGraphTensor* MPSGraphConstantTensor(MPSGraph* graph, double value, int* shape, size_t shapeCount, int dataType) {
+    NSMutableArray<NSNumber*>* nsShape = [[NSMutableArray alloc] initWithCapacity:shapeCount];
+    for (size_t i = 0; i < shapeCount; i++) {
+        [nsShape addObject:@(shape[i])];
+    }
+    
+    return [graph constantWithScalar:value shape:nsShape dataType:(MPSDataType)dataType];
+}
+
+// MPSGraph operations
+MPSGraphTensor* MPSGraphAddition(MPSGraph* graph, MPSGraphTensor* primaryTensor, MPSGraphTensor* secondaryTensor) {
+    return [graph additionWithPrimaryTensor:primaryTensor secondaryTensor:secondaryTensor name:nil];
+}
+
+MPSGraphTensor* MPSGraphSubtraction(MPSGraph* graph, MPSGraphTensor* primaryTensor, MPSGraphTensor* secondaryTensor) {
+    return [graph subtractionWithPrimaryTensor:primaryTensor secondaryTensor:secondaryTensor name:nil];
+}
+
+MPSGraphTensor* MPSGraphMultiplication(MPSGraph* graph, MPSGraphTensor* primaryTensor, MPSGraphTensor* secondaryTensor) {
+    return [graph multiplicationWithPrimaryTensor:primaryTensor secondaryTensor:secondaryTensor name:nil];
+}
+
+MPSGraphTensor* MPSGraphDivision(MPSGraph* graph, MPSGraphTensor* primaryTensor, MPSGraphTensor* secondaryTensor) {
+    return [graph divisionWithPrimaryTensor:primaryTensor secondaryTensor:secondaryTensor name:nil];
+}
+
+MPSGraphTensor* MPSGraphMatrixMultiplication(MPSGraph* graph, MPSGraphTensor* primaryTensor, MPSGraphTensor* secondaryTensor) {
+    return [graph matrixMultiplicationWithPrimaryTensor:primaryTensor secondaryTensor:secondaryTensor name:nil];
+}
+
+MPSGraphTensor* MPSGraphReLU(MPSGraph* graph, MPSGraphTensor* tensor) {
+    return [graph reLUWithTensor:tensor name:nil];
+}
+
+MPSGraphTensor* MPSGraphSigmoid(MPSGraph* graph, MPSGraphTensor* tensor) {
+    return [graph sigmoidWithTensor:tensor name:nil];
+}
+
+MPSGraphTensor* MPSGraphSoftmax(MPSGraph* graph, MPSGraphTensor* tensor, size_t axis) {
+    return [graph softMaxWithTensor:tensor axis:(NSInteger)axis name:nil];
+}
+
+MPSGraphTensor* MPSGraphTranspose(MPSGraph* graph, MPSGraphTensor* tensor, size_t dimension, size_t dimensionTwo) {
+    return [graph transposeTensor:tensor dimension:(NSUInteger)dimension withDimension:(NSUInteger)dimensionTwo name:nil];
+}
+
+MPSGraphTensor* MPSGraphReshape(MPSGraph* graph, MPSGraphTensor* tensor, int* shape, size_t shapeCount) {
+    NSMutableArray<NSNumber*>* nsShape = [[NSMutableArray alloc] initWithCapacity:shapeCount];
+    for (size_t i = 0; i < shapeCount; i++) {
+        [nsShape addObject:@(shape[i])];
+    }
+    
+    return [graph reshapeTensor:tensor withShape:nsShape name:nil];
+}
+
+// MPSGraph execution
+MPSGraphExecutable* MPSGraphCompile(MPSGraph* graph, MPSGraphDevice* device, MPSGraphTensor** inputTensors, size_t inputTensorsCount, MPSGraphTensor** targetTensors, size_t targetTensorsCount, MPSGraphCompilationDescriptor* compilationDescriptor) {
+    NSMutableArray<MPSGraphTensor*>* targetTensorsArray = [[NSMutableArray alloc] init];
+    NSMutableDictionary<MPSGraphTensor*, MPSGraphShapedType*>* feeds = [[NSMutableDictionary alloc] init];
+    
+    // Convert target tensors C array to NSArray
+    for (size_t i = 0; i < targetTensorsCount; i++) {
+        if (targetTensors[i] != nil) {
+            [targetTensorsArray addObject:targetTensors[i]];
+        }
+    }
+    
+    // Create feeds dictionary for input placeholders
+    for (size_t i = 0; i < inputTensorsCount; i++) {
+        if (inputTensors[i] != nil) {
+            // Create MPSGraphShapedType for the placeholder
+            MPSGraphShapedType* shapedType = [[MPSGraphShapedType alloc] initWithShape:inputTensors[i].shape 
+                                                                              dataType:inputTensors[i].dataType];
+            feeds[inputTensors[i]] = shapedType;
+        }
+    }
+    
+    return [graph compileWithDevice:device
+                              feeds:feeds
+                      targetTensors:targetTensorsArray
+                   targetOperations:nil
+              compilationDescriptor:compilationDescriptor];
+}
+
+MPSGraphExecutableExecutionDescriptor* CreateMPSGraphExecutionDescriptor() {
+    return [[MPSGraphExecutableExecutionDescriptor alloc] init];
+}
+
+MPSGraphCompilationDescriptor* CreateMPSGraphCompilationDescriptor() {
+    return [[MPSGraphCompilationDescriptor alloc] init];
+}
+
+void MPSGraphExecuteExecutable(MPSGraphExecutable* executable, id<MTLCommandQueue> commandQueue, MPSGraphTensor** inputTensors, id<MTLBuffer>* inputBuffers, size_t inputCount, MPSGraphTensor** resultTensors, id<MTLBuffer>* resultBuffers, size_t resultCount, MPSGraphExecutableExecutionDescriptor* executionDescriptor) {
+    NSMutableArray<MPSGraphTensorData*>* inputsArray = [[NSMutableArray alloc] init];
+    NSMutableArray<MPSGraphTensorData*>* resultsArray = [[NSMutableArray alloc] init];
+    
+    // Setup input feeds
+    for (size_t i = 0; i < inputCount; i++) {
+        if (inputTensors[i] != nil && inputBuffers[i] != nil) {
+            MPSGraphTensorData* tensorData = [[MPSGraphTensorData alloc] initWithMTLBuffer:inputBuffers[i] 
+                                                                                     shape:inputTensors[i].shape 
+                                                                                  dataType:inputTensors[i].dataType];
+            [inputsArray addObject:tensorData];
+        }
+    }
+    
+    // Setup result buffers  
+    for (size_t i = 0; i < resultCount; i++) {
+        if (resultTensors[i] != nil && resultBuffers[i] != nil) {
+            MPSGraphTensorData* tensorData = [[MPSGraphTensorData alloc] initWithMTLBuffer:resultBuffers[i] 
+                                                                                     shape:resultTensors[i].shape 
+                                                                                  dataType:resultTensors[i].dataType];
+            [resultsArray addObject:tensorData];
+        }
+    }
+    
+    // Execute the graph
+    [executable runWithMTLCommandQueue:commandQueue
+                           inputsArray:inputsArray
+                          resultsArray:resultsArray.count > 0 ? resultsArray : nil
+                   executionDescriptor:executionDescriptor];
 }

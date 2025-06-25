@@ -66,6 +66,22 @@ const (
 func (d DeviceType) String() string
 ```
 
+#### type MPSGraphEngine
+
+```go
+type MPSGraphEngine struct {
+}
+```
+
+MPSGraphEngine provides high-level ML operations using MPSGraph
+
+#### func  GetMPSGraphEngine
+
+```go
+func GetMPSGraphEngine() (*MPSGraphEngine, error)
+```
+GetMPSGraphEngine returns the singleton MPSGraph engine
+
 #### type Operation
 
 ```go
@@ -102,6 +118,13 @@ func Add(t1, t2 *Tensor) (*Tensor, error)
 func AddGPU(t1, t2 *Tensor) (*Tensor, error)
 ```
 AddGPU performs tensor addition on GPU
+
+#### func  AddMPS
+
+```go
+func AddMPS(a, b *Tensor) (*Tensor, error)
+```
+AddMPS performs tensor addition using MPSGraph
 
 #### func  Div
 
@@ -146,6 +169,13 @@ func MatMulGPU(t1, t2 *Tensor) (*Tensor, error)
 ```
 MatMulGPU performs matrix multiplication on GPU
 
+#### func  MatMulMPS
+
+```go
+func MatMulMPS(a, b *Tensor) (*Tensor, error)
+```
+MatMulMPS performs matrix multiplication using MPSGraph
+
 #### func  Mul
 
 ```go
@@ -189,6 +219,13 @@ func ReLUGPU(t *Tensor) (*Tensor, error)
 ```
 ReLUGPU performs ReLU activation on GPU
 
+#### func  ReLUMPS
+
+```go
+func ReLUMPS(a *Tensor) (*Tensor, error)
+```
+ReLUMPS performs ReLU activation using MPSGraph
+
 #### func  Reshape
 
 ```go
@@ -200,6 +237,13 @@ func Reshape(t *Tensor, newShape []int) (*Tensor, error)
 ```go
 func Sigmoid(t *Tensor) (*Tensor, error)
 ```
+
+#### func  SigmoidMPS
+
+```go
+func SigmoidMPS(a *Tensor) (*Tensor, error)
+```
+SigmoidMPS performs Sigmoid activation using MPSGraph
 
 #### func  Squeeze
 

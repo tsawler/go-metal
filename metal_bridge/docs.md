@@ -96,6 +96,15 @@ var (
 ```
 Resource storage mode constants
 
+```go
+var (
+	MPSDataTypeFloat32 = C.MPSDataTypeFloat32_Const
+	MPSDataTypeFloat16 = C.MPSDataTypeFloat16_Const
+	MPSDataTypeInt32   = C.MPSDataTypeInt32_Const
+)
+```
+MPSGraph data type constants
+
 #### type Buffer
 
 ```go
@@ -326,6 +335,167 @@ type Function struct {
 ```
 
 Wrapper struct for MTLFunction
+
+#### type Graph
+
+```go
+type Graph struct {
+}
+```
+
+Wrapper struct for MPSGraph
+
+#### func  NewGraph
+
+```go
+func NewGraph() *Graph
+```
+
+#### func (*Graph) Addition
+
+```go
+func (g *Graph) Addition(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+```
+MPSGraph operations
+
+#### func (*Graph) Compile
+
+```go
+func (g *Graph) Compile(device *GraphDevice, inputTensors []*GraphTensor, targetTensors []*GraphTensor, compilationDescriptor *GraphCompilationDescriptor) *GraphExecutable
+```
+
+#### func (*Graph) ConstantTensor
+
+```go
+func (g *Graph) ConstantTensor(value float64, shape []int, dataType int) *GraphTensor
+```
+
+#### func (*Graph) Division
+
+```go
+func (g *Graph) Division(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+```
+
+#### func (*Graph) MatrixMultiplication
+
+```go
+func (g *Graph) MatrixMultiplication(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+```
+
+#### func (*Graph) Multiplication
+
+```go
+func (g *Graph) Multiplication(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+```
+
+#### func (*Graph) PlaceholderTensor
+
+```go
+func (g *Graph) PlaceholderTensor(shape []int, dataType int) *GraphTensor
+```
+
+#### func (*Graph) ReLU
+
+```go
+func (g *Graph) ReLU(tensor *GraphTensor) *GraphTensor
+```
+
+#### func (*Graph) Reshape
+
+```go
+func (g *Graph) Reshape(tensor *GraphTensor, shape []int) *GraphTensor
+```
+
+#### func (*Graph) Sigmoid
+
+```go
+func (g *Graph) Sigmoid(tensor *GraphTensor) *GraphTensor
+```
+
+#### func (*Graph) Softmax
+
+```go
+func (g *Graph) Softmax(tensor *GraphTensor, axis int) *GraphTensor
+```
+
+#### func (*Graph) Subtraction
+
+```go
+func (g *Graph) Subtraction(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+```
+
+#### func (*Graph) Transpose
+
+```go
+func (g *Graph) Transpose(tensor *GraphTensor, dimension, dimensionTwo int) *GraphTensor
+```
+
+#### type GraphCompilationDescriptor
+
+```go
+type GraphCompilationDescriptor struct {
+}
+```
+
+
+#### func  NewGraphCompilationDescriptor
+
+```go
+func NewGraphCompilationDescriptor() *GraphCompilationDescriptor
+```
+
+#### type GraphDevice
+
+```go
+type GraphDevice struct {
+}
+```
+
+Wrapper struct for MPSGraphDevice
+
+#### func  NewGraphDevice
+
+```go
+func NewGraphDevice(device *Device) *GraphDevice
+```
+
+#### type GraphExecutable
+
+```go
+type GraphExecutable struct {
+}
+```
+
+Wrapper structs for MPSGraph execution
+
+#### func (*GraphExecutable) Execute
+
+```go
+func (e *GraphExecutable) Execute(commandQueue *CommandQueue, inputTensors []*GraphTensor, inputBuffers []*Buffer, resultTensors []*GraphTensor, resultBuffers []*Buffer, executionDescriptor *GraphExecutionDescriptor)
+```
+
+#### type GraphExecutionDescriptor
+
+```go
+type GraphExecutionDescriptor struct {
+}
+```
+
+
+#### func  NewGraphExecutionDescriptor
+
+```go
+func NewGraphExecutionDescriptor() *GraphExecutionDescriptor
+```
+
+#### type GraphTensor
+
+```go
+type GraphTensor struct {
+}
+```
+
+Wrapper struct for MPSGraphTensor
 
 #### type Library
 
