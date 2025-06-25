@@ -599,6 +599,125 @@ func (g *Graph) Reshape(tensor *GraphTensor, shape []int) *GraphTensor {
 	return resultTensor
 }
 
+// Conv2D performs 2D convolution operation
+func (g *Graph) Conv2D(source, weights, bias *GraphTensor, strideX, strideY, dilationX, dilationY, paddingLeft, paddingRight, paddingTop, paddingBottom, groups int) *GraphTensor {
+	var cBias C.MPSGraphTensorRef
+	if bias != nil {
+		cBias = bias.c_tensor
+	}
+	
+	c_tensor := C.MPSGraphConvolution2D(g.c_graph, source.c_tensor, weights.c_tensor, cBias, 
+		C.int(strideX), C.int(strideY), C.int(dilationX), C.int(dilationY),
+		C.int(paddingLeft), C.int(paddingRight), C.int(paddingTop), C.int(paddingBottom), C.int(groups))
+	if c_tensor == nil {
+		return nil
+	}
+	
+	// Calculate output shape for NCHW format
+	// Output = (Input - Kernel + PaddingLeft + PaddingRight) / Stride + 1
+	var outputShape []int
+	if len(source.shape) == 4 && len(weights.shape) == 4 {
+		N := source.shape[0]  // Batch size
+		C := weights.shape[0] // Output channels
+		H := source.shape[2]  // Input height
+		W := source.shape[3]  // Input width
+		
+		kernelH := weights.shape[2]
+		kernelW := weights.shape[3]
+		
+		outputH := (H-kernelH+paddingTop+paddingBottom)/strideY + 1
+		outputW := (W-kernelW+paddingLeft+paddingRight)/strideX + 1
+		
+		outputShape = []int{N, C, outputH, outputW}
+	} else {
+		outputShape = source.shape // Fallback
+	}
+	
+	resultTensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    outputShape,
+		dataType: source.dataType,
+	}
+	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return resultTensor
+}
+
+// MaxPool2D performs 2D max pooling operation
+func (g *Graph) MaxPool2D(source *GraphTensor, kernelWidth, kernelHeight, strideX, strideY, paddingLeft, paddingRight, paddingTop, paddingBottom int) *GraphTensor {
+	c_tensor := C.MPSGraphMaxPooling2D(g.c_graph, source.c_tensor,
+		C.int(kernelWidth), C.int(kernelHeight),
+		C.int(strideX), C.int(strideY),
+		C.int(paddingLeft), C.int(paddingRight), C.int(paddingTop), C.int(paddingBottom))
+	if c_tensor == nil {
+		return nil
+	}
+	
+	// Calculate output shape for pooling
+	var outputShape []int
+	if len(source.shape) == 4 {
+		N := source.shape[0] // Batch size
+		C := source.shape[1] // Channels
+		H := source.shape[2] // Input height
+		W := source.shape[3] // Input width
+		
+		outputH := (H-kernelHeight+paddingTop+paddingBottom)/strideY + 1
+		outputW := (W-kernelWidth+paddingLeft+paddingRight)/strideX + 1
+		
+		outputShape = []int{N, C, outputH, outputW}
+	} else {
+		outputShape = source.shape // Fallback
+	}
+	
+	resultTensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    outputShape,
+		dataType: source.dataType,
+	}
+	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return resultTensor
+}
+
+// AvgPool2D performs 2D average pooling operation
+func (g *Graph) AvgPool2D(source *GraphTensor, kernelWidth, kernelHeight, strideX, strideY, paddingLeft, paddingRight, paddingTop, paddingBottom int) *GraphTensor {
+	c_tensor := C.MPSGraphAvgPooling2D(g.c_graph, source.c_tensor,
+		C.int(kernelWidth), C.int(kernelHeight),
+		C.int(strideX), C.int(strideY),
+		C.int(paddingLeft), C.int(paddingRight), C.int(paddingTop), C.int(paddingBottom))
+	if c_tensor == nil {
+		return nil
+	}
+	
+	// Calculate output shape for pooling (same as MaxPool2D)
+	var outputShape []int
+	if len(source.shape) == 4 {
+		N := source.shape[0] // Batch size
+		C := source.shape[1] // Channels
+		H := source.shape[2] // Input height
+		W := source.shape[3] // Input width
+		
+		outputH := (H-kernelHeight+paddingTop+paddingBottom)/strideY + 1
+		outputW := (W-kernelWidth+paddingLeft+paddingRight)/strideX + 1
+		
+		outputShape = []int{N, C, outputH, outputW}
+	} else {
+		outputShape = source.shape // Fallback
+	}
+	
+	resultTensor := &GraphTensor{
+		c_tensor: c_tensor,
+		shape:    outputShape,
+		dataType: source.dataType,
+	}
+	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
+		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+	})
+	return resultTensor
+}
+
 // Wrapper structs for MPSGraph execution
 type GraphExecutable struct {
 	c_executable C.MPSGraphExecutableRef

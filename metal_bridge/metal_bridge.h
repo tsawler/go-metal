@@ -110,6 +110,11 @@ MPSGraphTensorRef MPSGraphSoftmax(MPSGraphRef graph, MPSGraphTensorRef tensor, s
 MPSGraphTensorRef MPSGraphTranspose(MPSGraphRef graph, MPSGraphTensorRef tensor, size_t dimension, size_t dimensionTwo);
 MPSGraphTensorRef MPSGraphReshape(MPSGraphRef graph, MPSGraphTensorRef tensor, int* shape, size_t shapeCount);
 
+// MPSGraph Convolution and Pooling operations
+MPSGraphTensorRef MPSGraphConvolution2D(MPSGraphRef graph, MPSGraphTensorRef source, MPSGraphTensorRef weights, MPSGraphTensorRef bias, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups);
+MPSGraphTensorRef MPSGraphMaxPooling2D(MPSGraphRef graph, MPSGraphTensorRef source, int kernelWidth, int kernelHeight, int strideInX, int strideInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom);
+MPSGraphTensorRef MPSGraphAvgPooling2D(MPSGraphRef graph, MPSGraphTensorRef source, int kernelWidth, int kernelHeight, int strideInX, int strideInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom);
+
 // MPSGraph execution  
 MPSGraphExecutableRef MPSGraphCompile(MPSGraphRef graph, MPSGraphDeviceRef device, MPSGraphTensorRef* inputTensors, size_t inputTensorsCount, MPSGraphTensorRef* targetTensors, size_t targetTensorsCount, MPSGraphCompilationDescriptorRef compilationDescriptor);
 MPSGraphExecutionDescriptorRef CreateMPSGraphExecutionDescriptor(void);

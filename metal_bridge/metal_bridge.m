@@ -189,6 +189,72 @@ MPSGraphTensor* MPSGraphReshape(MPSGraph* graph, MPSGraphTensor* tensor, int* sh
     return [graph reshapeTensor:tensor withShape:nsShape name:nil];
 }
 
+// MPSGraph Convolution and Pooling operations
+MPSGraphTensor* MPSGraphConvolution2D(MPSGraph* graph, MPSGraphTensor* source, MPSGraphTensor* weights, MPSGraphTensor* bias, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups) {
+    MPSGraphConvolution2DOpDescriptor* descriptor = [[MPSGraphConvolution2DOpDescriptor alloc] init];
+    
+    descriptor.strideInX = strideInX;
+    descriptor.strideInY = strideInY;
+    descriptor.dilationRateInX = dilationRateInX;
+    descriptor.dilationRateInY = dilationRateInY;
+    descriptor.paddingLeft = paddingLeft;
+    descriptor.paddingRight = paddingRight;
+    descriptor.paddingTop = paddingTop;
+    descriptor.paddingBottom = paddingBottom;
+    descriptor.groups = groups;
+    descriptor.dataLayout = MPSGraphTensorNamedDataLayoutNCHW;
+    descriptor.weightsLayout = MPSGraphTensorNamedDataLayoutOIHW;
+    
+    if (bias != nil) {
+        MPSGraphTensor* conv = [graph convolution2DWithSourceTensor:source
+                                                     weightsTensor:weights
+                                                        descriptor:descriptor
+                                                              name:nil];
+        return [graph additionWithPrimaryTensor:conv secondaryTensor:bias name:nil];
+    } else {
+        return [graph convolution2DWithSourceTensor:source
+                                      weightsTensor:weights
+                                         descriptor:descriptor
+                                               name:nil];
+    }
+}
+
+MPSGraphTensor* MPSGraphMaxPooling2D(MPSGraph* graph, MPSGraphTensor* source, int kernelWidth, int kernelHeight, int strideInX, int strideInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom) {
+    MPSGraphPooling2DOpDescriptor* descriptor = [[MPSGraphPooling2DOpDescriptor alloc] init];
+    
+    descriptor.kernelWidth = kernelWidth;
+    descriptor.kernelHeight = kernelHeight;
+    descriptor.strideInX = strideInX;
+    descriptor.strideInY = strideInY;
+    descriptor.paddingLeft = paddingLeft;
+    descriptor.paddingRight = paddingRight;
+    descriptor.paddingTop = paddingTop;
+    descriptor.paddingBottom = paddingBottom;
+    descriptor.dilationRateInX = 1; // Must be positive
+    descriptor.dilationRateInY = 1; // Must be positive
+    descriptor.dataLayout = MPSGraphTensorNamedDataLayoutNCHW;
+    
+    return [graph maxPooling2DWithSourceTensor:source descriptor:descriptor name:nil];
+}
+
+MPSGraphTensor* MPSGraphAvgPooling2D(MPSGraph* graph, MPSGraphTensor* source, int kernelWidth, int kernelHeight, int strideInX, int strideInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom) {
+    MPSGraphPooling2DOpDescriptor* descriptor = [[MPSGraphPooling2DOpDescriptor alloc] init];
+    
+    descriptor.kernelWidth = kernelWidth;
+    descriptor.kernelHeight = kernelHeight;
+    descriptor.strideInX = strideInX;
+    descriptor.strideInY = strideInY;
+    descriptor.paddingLeft = paddingLeft;
+    descriptor.paddingRight = paddingRight;
+    descriptor.paddingTop = paddingTop;
+    descriptor.paddingBottom = paddingBottom;
+    descriptor.dilationRateInX = 1; // Must be positive
+    descriptor.dilationRateInY = 1; // Must be positive
+    descriptor.dataLayout = MPSGraphTensorNamedDataLayoutNCHW;
+    
+    return [graph avgPooling2DWithSourceTensor:source descriptor:descriptor name:nil];
+}
+
 // MPSGraph execution
 MPSGraphExecutable* MPSGraphCompile(MPSGraph* graph, MPSGraphDevice* device, MPSGraphTensor** inputTensors, size_t inputTensorsCount, MPSGraphTensor** targetTensors, size_t targetTensorsCount, MPSGraphCompilationDescriptor* compilationDescriptor) {
     NSMutableArray<MPSGraphTensor*>* targetTensorsArray = [[NSMutableArray alloc] init];

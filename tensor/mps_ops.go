@@ -491,3 +491,367 @@ func calculateTensorSize(shape []int, dtype DType) uintptr {
 	
 	return uintptr(numElems * elemSize)
 }
+
+// Conv2DMPS performs 2D convolution using MPSGraph
+func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, paddingRight, paddingTop, paddingBottom int) (*Tensor, error) {
+	// Validate input tensors
+	if len(input.Shape) != 4 {
+		return nil, fmt.Errorf("input tensor must be 4D (NCHW), got %d dimensions", len(input.Shape))
+	}
+	if len(weights.Shape) != 4 {
+		return nil, fmt.Errorf("weights tensor must be 4D (OIHW), got %d dimensions", len(weights.Shape))
+	}
+	if input.DType != weights.DType {
+		return nil, fmt.Errorf("input and weights must have the same data type")
+	}
+	if bias != nil && (bias.DType != input.DType || len(bias.Shape) != 1) {
+		return nil, fmt.Errorf("bias must be 1D and have the same data type as input")
+	}
+	
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+	
+	// Create graph
+	graph := metal_bridge.NewGraph()
+	if graph == nil {
+		return nil, fmt.Errorf("failed to create MPSGraph")
+	}
+	
+	// Create placeholders
+	dataType := convertDTypeToMPS(input.DType)
+	placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
+	placeholderWeights := graph.PlaceholderTensor(weights.Shape, dataType)
+	
+	var placeholderBias *metal_bridge.GraphTensor
+	var inputTensors []*metal_bridge.GraphTensor
+	if bias != nil {
+		placeholderBias = graph.PlaceholderTensor(bias.Shape, dataType)
+		inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights, placeholderBias}
+	} else {
+		inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights}
+	}
+	
+	if placeholderInput == nil || placeholderWeights == nil {
+		return nil, fmt.Errorf("failed to create placeholder tensors")
+	}
+	
+	// Create convolution operation
+	resultTensor := graph.Conv2D(placeholderInput, placeholderWeights, placeholderBias, 
+		1, 1, // strideX, strideY (using 1,1 for simplicity, can be parameterized later)
+		1, 1, // dilationX, dilationY
+		paddingLeft, paddingRight, paddingTop, paddingBottom,
+		1) // groups
+	if resultTensor == nil {
+		return nil, fmt.Errorf("failed to create convolution operation")
+	}
+	
+	// Compile graph
+	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+	if compilationDescriptor == nil {
+		return nil, fmt.Errorf("failed to create compilation descriptor")
+	}
+	
+	executable := graph.Compile(engine.graphDevice, inputTensors, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+	if executable == nil {
+		return nil, fmt.Errorf("failed to compile graph")
+	}
+	
+	// Calculate output shape
+	N := input.Shape[0]     // Batch size
+	C_out := weights.Shape[0] // Output channels
+	H := input.Shape[2]     // Input height
+	W := input.Shape[3]     // Input width
+	kernelH := weights.Shape[2]
+	kernelW := weights.Shape[3]
+	
+	outputH := (H-kernelH+paddingTop+paddingBottom)/strideY + 1
+	outputW := (W-kernelW+paddingLeft+paddingRight)/strideX + 1
+	outputShape := []int{N, C_out, outputH, outputW}
+	
+	// Create output tensor
+	result := &Tensor{
+		Shape:    outputShape,
+		Strides:  calculateStrides(outputShape),
+		DType:    input.DType,
+		Device:   GPU,
+		NumElems: N * C_out * outputH * outputW,
+	}
+	
+	// Create Metal buffers
+	inputBuffer, err := engine.device.CreateBufferWithBytes(input.Data, metal_bridge.ResourceStorageModeShared)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
+	}
+	
+	weightsBuffer, err := engine.device.CreateBufferWithBytes(weights.Data, metal_bridge.ResourceStorageModeShared)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for weights: %v", err)
+	}
+	
+	var inputBuffers []*metal_bridge.Buffer
+	if bias != nil {
+		biasBuffer, err := engine.device.CreateBufferWithBytes(bias.Data, metal_bridge.ResourceStorageModeShared)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create buffer for bias: %v", err)
+		}
+		inputBuffers = []*metal_bridge.Buffer{inputBuffer, weightsBuffer, biasBuffer}
+	} else {
+		inputBuffers = []*metal_bridge.Buffer{inputBuffer, weightsBuffer}
+	}
+	
+	// Allocate result buffer
+	resultSize := calculateTensorSize(result.Shape, result.DType)
+	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result buffer: %v", err)
+	}
+	
+	// Execute graph
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+	
+	executable.Execute(engine.commandQueue,
+		inputTensors,
+		inputBuffers,
+		[]*metal_bridge.GraphTensor{resultTensor},
+		[]*metal_bridge.Buffer{resultBuffer},
+		executionDescriptor)
+	
+	// Copy result data from Metal buffer to CPU slice
+	switch result.DType {
+	case Float32:
+		resultData := make([]float32, result.NumElems)
+		bufferContents := resultBuffer.ContentsAsFloat32()
+		copy(resultData, bufferContents[:result.NumElems])
+		result.Data = resultData
+	case Int32:
+		resultData := make([]int32, result.NumElems)
+		bufferContents := resultBuffer.ContentsAsInt32()
+		copy(resultData, bufferContents[:result.NumElems])
+		result.Data = resultData
+	default:
+		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	}
+	
+	return result, nil
+}
+
+// MaxPool2DMPS performs 2D max pooling using MPSGraph
+func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, error) {
+	if len(input.Shape) != 4 {
+		return nil, fmt.Errorf("input tensor must be 4D (NCHW), got %d dimensions", len(input.Shape))
+	}
+	
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+	
+	// Create graph
+	graph := metal_bridge.NewGraph()
+	if graph == nil {
+		return nil, fmt.Errorf("failed to create MPSGraph")
+	}
+	
+	// Create placeholder
+	dataType := convertDTypeToMPS(input.DType)
+	placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
+	if placeholderInput == nil {
+		return nil, fmt.Errorf("failed to create placeholder tensor")
+	}
+	
+	// Create max pooling operation
+	resultTensor := graph.MaxPool2D(placeholderInput, 
+		kernelSize, kernelSize, // kernelWidth, kernelHeight
+		stride, stride,         // strideX, strideY
+		padding, padding, padding, padding) // paddingLeft, paddingRight, paddingTop, paddingBottom
+	if resultTensor == nil {
+		return nil, fmt.Errorf("failed to create max pooling operation")
+	}
+	
+	// Compile graph
+	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+	if compilationDescriptor == nil {
+		return nil, fmt.Errorf("failed to create compilation descriptor")
+	}
+	
+	executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+	if executable == nil {
+		return nil, fmt.Errorf("failed to compile graph")
+	}
+	
+	// Calculate output shape
+	N := input.Shape[0] // Batch size
+	C := input.Shape[1] // Channels
+	H := input.Shape[2] // Input height
+	W := input.Shape[3] // Input width
+	
+	outputH := (H-kernelSize+2*padding)/stride + 1
+	outputW := (W-kernelSize+2*padding)/stride + 1
+	outputShape := []int{N, C, outputH, outputW}
+	
+	// Create output tensor
+	result := &Tensor{
+		Shape:    outputShape,
+		Strides:  calculateStrides(outputShape),
+		DType:    input.DType,
+		Device:   GPU,
+		NumElems: N * C * outputH * outputW,
+	}
+	
+	// Create Metal buffer
+	inputBuffer, err := engine.device.CreateBufferWithBytes(input.Data, metal_bridge.ResourceStorageModeShared)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
+	}
+	
+	// Allocate result buffer
+	resultSize := calculateTensorSize(result.Shape, result.DType)
+	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result buffer: %v", err)
+	}
+	
+	// Execute graph
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+	
+	executable.Execute(engine.commandQueue,
+		[]*metal_bridge.GraphTensor{placeholderInput},
+		[]*metal_bridge.Buffer{inputBuffer},
+		[]*metal_bridge.GraphTensor{resultTensor},
+		[]*metal_bridge.Buffer{resultBuffer},
+		executionDescriptor)
+	
+	// Copy result data from Metal buffer to CPU slice
+	switch result.DType {
+	case Float32:
+		resultData := make([]float32, result.NumElems)
+		bufferContents := resultBuffer.ContentsAsFloat32()
+		copy(resultData, bufferContents[:result.NumElems])
+		result.Data = resultData
+	case Int32:
+		resultData := make([]int32, result.NumElems)
+		bufferContents := resultBuffer.ContentsAsInt32()
+		copy(resultData, bufferContents[:result.NumElems])
+		result.Data = resultData
+	default:
+		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	}
+	
+	return result, nil
+}
+
+// AvgPool2DMPS performs 2D average pooling using MPSGraph
+func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, error) {
+	if len(input.Shape) != 4 {
+		return nil, fmt.Errorf("input tensor must be 4D (NCHW), got %d dimensions", len(input.Shape))
+	}
+	
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+	
+	// Create graph
+	graph := metal_bridge.NewGraph()
+	if graph == nil {
+		return nil, fmt.Errorf("failed to create MPSGraph")
+	}
+	
+	// Create placeholder
+	dataType := convertDTypeToMPS(input.DType)
+	placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
+	if placeholderInput == nil {
+		return nil, fmt.Errorf("failed to create placeholder tensor")
+	}
+	
+	// Create average pooling operation
+	resultTensor := graph.AvgPool2D(placeholderInput, 
+		kernelSize, kernelSize, // kernelWidth, kernelHeight
+		stride, stride,         // strideX, strideY
+		padding, padding, padding, padding) // paddingLeft, paddingRight, paddingTop, paddingBottom
+	if resultTensor == nil {
+		return nil, fmt.Errorf("failed to create average pooling operation")
+	}
+	
+	// Compile graph
+	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+	if compilationDescriptor == nil {
+		return nil, fmt.Errorf("failed to create compilation descriptor")
+	}
+	
+	executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+	if executable == nil {
+		return nil, fmt.Errorf("failed to compile graph")
+	}
+	
+	// Calculate output shape (same as MaxPool2D)
+	N := input.Shape[0] // Batch size
+	C := input.Shape[1] // Channels
+	H := input.Shape[2] // Input height
+	W := input.Shape[3] // Input width
+	
+	outputH := (H-kernelSize+2*padding)/stride + 1
+	outputW := (W-kernelSize+2*padding)/stride + 1
+	outputShape := []int{N, C, outputH, outputW}
+	
+	// Create output tensor
+	result := &Tensor{
+		Shape:    outputShape,
+		Strides:  calculateStrides(outputShape),
+		DType:    input.DType,
+		Device:   GPU,
+		NumElems: N * C * outputH * outputW,
+	}
+	
+	// Create Metal buffer
+	inputBuffer, err := engine.device.CreateBufferWithBytes(input.Data, metal_bridge.ResourceStorageModeShared)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
+	}
+	
+	// Allocate result buffer
+	resultSize := calculateTensorSize(result.Shape, result.DType)
+	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result buffer: %v", err)
+	}
+	
+	// Execute graph
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+	
+	executable.Execute(engine.commandQueue,
+		[]*metal_bridge.GraphTensor{placeholderInput},
+		[]*metal_bridge.Buffer{inputBuffer},
+		[]*metal_bridge.GraphTensor{resultTensor},
+		[]*metal_bridge.Buffer{resultBuffer},
+		executionDescriptor)
+	
+	// Copy result data from Metal buffer to CPU slice
+	switch result.DType {
+	case Float32:
+		resultData := make([]float32, result.NumElems)
+		bufferContents := resultBuffer.ContentsAsFloat32()
+		copy(resultData, bufferContents[:result.NumElems])
+		result.Data = resultData
+	case Int32:
+		resultData := make([]int32, result.NumElems)
+		bufferContents := resultBuffer.ContentsAsInt32()
+		copy(resultData, bufferContents[:result.NumElems])
+		result.Data = resultData
+	default:
+		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	}
+	
+	return result, nil
+}

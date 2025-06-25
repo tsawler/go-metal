@@ -77,6 +77,128 @@ func (t *Tensor) Grad() *Tensor {
 	return t.grad
 }
 
+// ZeroGrad clears the gradient for this tensor
+func (t *Tensor) ZeroGrad() {
+	t.grad = nil
+}
+
+// Backward performs backpropagation from this tensor
+func (t *Tensor) Backward() error {
+	// This should be called on a scalar loss tensor
+	if t.NumElems != 1 {
+		return fmt.Errorf("backward() can only be called on scalar tensors, got shape %v", t.Shape)
+	}
+	
+	// Initialize gradient with ones for the loss tensor
+	var err error
+	t.grad, err = Ones(t.Shape, t.DType, t.Device)
+	if err != nil {
+		return fmt.Errorf("failed to initialize gradient: %v", err)
+	}
+	
+	// Perform reverse-mode automatic differentiation
+	visited := make(map[*Tensor]bool)
+	return t.backwardImpl(visited)
+}
+
+// backwardImpl recursively computes gradients using topological ordering
+func (t *Tensor) backwardImpl(visited map[*Tensor]bool) error {
+	if visited[t] {
+		return nil // Already visited this tensor
+	}
+	visited[t] = true
+	
+	// If this tensor has a creator (was produced by an operation), compute gradients
+	if t.creator != nil && t.requiresGrad {
+		// Get gradients for inputs from the operation's backward method
+		inputGrads := t.creator.Backward(t.grad)
+		
+		// Get the input tensors from the operation
+		// We need to access inputs through reflection or store them in operation
+		// For now, we'll implement a simpler approach
+		inputs := t.getCreatorInputs()
+		
+		if len(inputGrads) != len(inputs) {
+			return fmt.Errorf("operation returned %d gradients but has %d inputs", len(inputGrads), len(inputs))
+		}
+		
+		// Accumulate gradients for each input tensor
+		for i, input := range inputs {
+			if input != nil && input.requiresGrad && inputGrads[i] != nil {
+				err := input.accumulateGradient(inputGrads[i])
+				if err != nil {
+					return fmt.Errorf("failed to accumulate gradient for input %d: %v", i, err)
+				}
+				
+				// Recursively compute gradients for this input
+				err = input.backwardImpl(visited)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// accumulateGradient adds the given gradient to this tensor's gradient
+func (t *Tensor) accumulateGradient(grad *Tensor) error {
+	if t.grad == nil {
+		// First gradient - just assign it
+		var err error
+		t.grad, err = grad.Clone()
+		if err != nil {
+			return fmt.Errorf("failed to clone gradient: %v", err)
+		}
+	} else {
+		// Accumulate by adding to existing gradient
+		var result *Tensor
+		var err error
+		
+		if t.grad.Device == GPU || grad.Device == GPU {
+			result, err = AddMPS(t.grad, grad)
+		} else {
+			result, err = Add(t.grad, grad)
+		}
+		
+		if err != nil {
+			return fmt.Errorf("failed to accumulate gradient: %v", err)
+		}
+		
+		t.grad = result
+	}
+	
+	return nil
+}
+
+// getCreatorInputs extracts input tensors from the operation that created this tensor
+// This is a simplified implementation - in practice, operations should store their inputs
+func (t *Tensor) getCreatorInputs() []*Tensor {
+	if t.creator == nil {
+		return nil
+	}
+	
+	// For now, we'll use type assertions to get inputs from specific operation types
+	// In a more robust implementation, operations would store their inputs
+	switch op := t.creator.(type) {
+	case *AddOp:
+		return op.inputs
+	case *SubOp:
+		return op.inputs
+	case *MulOp:
+		return op.inputs
+	case *MatMulOp:
+		return op.inputs
+	case *ReLUOp:
+		return op.inputs
+	case *SigmoidOp:
+		return op.inputs
+	default:
+		return nil
+	}
+}
+
 func calculateStrides(shape []int) []int {
 	if len(shape) == 0 {
 		return []int{}

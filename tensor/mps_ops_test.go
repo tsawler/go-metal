@@ -243,3 +243,204 @@ func TestMPSPerformanceComparison(t *testing.T) {
 
 	t.Logf("Successfully processed %d elements using MPSGraph", size)
 }
+
+func TestConv2DMPS(t *testing.T) {
+	_, err := GetMPSGraphEngine()
+	if err != nil {
+		t.Skipf("MPSGraph not available on this system: %v", err)
+	}
+
+	t.Run("Basic Conv2D without bias", func(t *testing.T) {
+		// Input: 1 batch, 1 channel, 4x4 image
+		input, _ := NewTensor([]int{1, 1, 4, 4}, Float32, CPU, []float32{
+			1, 2, 3, 4,
+			5, 6, 7, 8,
+			9, 10, 11, 12,
+			13, 14, 15, 16,
+		})
+		
+		// Weights: 1 output channel, 1 input channel, 3x3 kernel
+		weights, _ := NewTensor([]int{1, 1, 3, 3}, Float32, CPU, []float32{
+			1, 0, -1,
+			1, 0, -1,
+			1, 0, -1,
+		})
+
+		result, err := Conv2DMPS(input, weights, nil, 1, 1, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatalf("Conv2DMPS failed: %v", err)
+		}
+
+		expectedShape := []int{1, 1, 2, 2}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		if result.Device != GPU {
+			t.Errorf("Result device = %v, expected %v", result.Device, GPU)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		resultData := cpuResult.Data.([]float32)
+		t.Logf("Conv2D result: %v", resultData)
+
+		// Basic sanity check - result should have correct number of elements
+		if len(resultData) != 4 {
+			t.Errorf("Expected 4 elements, got %d", len(resultData))
+		}
+	})
+
+	t.Run("Conv2D with bias", func(t *testing.T) {
+		// Input: 1 batch, 1 channel, 3x3 image
+		input, _ := NewTensor([]int{1, 1, 3, 3}, Float32, CPU, []float32{
+			1, 2, 3,
+			4, 5, 6,
+			7, 8, 9,
+		})
+		
+		// Weights: 1 output channel, 1 input channel, 2x2 kernel
+		weights, _ := NewTensor([]int{1, 1, 2, 2}, Float32, CPU, []float32{
+			1, 1,
+			1, 1,
+		})
+
+		// Bias: 1 element for 1 output channel
+		bias, _ := NewTensor([]int{1}, Float32, CPU, []float32{10})
+
+		result, err := Conv2DMPS(input, weights, bias, 1, 1, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatalf("Conv2DMPS with bias failed: %v", err)
+		}
+
+		expectedShape := []int{1, 1, 2, 2}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+	})
+
+	t.Run("Invalid input dimensions", func(t *testing.T) {
+		// 3D input (should fail)
+		input, _ := NewTensor([]int{1, 4, 4}, Float32, CPU, make([]float32, 16))
+		weights, _ := NewTensor([]int{1, 1, 3, 3}, Float32, CPU, make([]float32, 9))
+
+		_, err := Conv2DMPS(input, weights, nil, 1, 1, 0, 0, 0, 0)
+		if err == nil {
+			t.Error("Expected error for 3D input tensor")
+		}
+	})
+}
+
+func TestMaxPool2DMPS(t *testing.T) {
+	_, err := GetMPSGraphEngine()
+	if err != nil {
+		t.Skipf("MPSGraph not available on this system: %v", err)
+	}
+
+	t.Run("Basic MaxPool2D", func(t *testing.T) {
+		// Input: 1 batch, 1 channel, 4x4 image
+		input, _ := NewTensor([]int{1, 1, 4, 4}, Float32, CPU, []float32{
+			1, 2, 3, 4,
+			5, 6, 7, 8,
+			9, 10, 11, 12,
+			13, 14, 15, 16,
+		})
+
+		result, err := MaxPool2DMPS(input, 2, 2, 0) // 2x2 kernel, stride 2, no padding
+		if err != nil {
+			t.Fatalf("MaxPool2DMPS failed: %v", err)
+		}
+
+		expectedShape := []int{1, 1, 2, 2}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		if result.Device != GPU {
+			t.Errorf("Result device = %v, expected %v", result.Device, GPU)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		resultData := cpuResult.Data.([]float32)
+		t.Logf("MaxPool2D result: %v", resultData)
+
+		// Basic sanity check - result should have correct number of elements
+		if len(resultData) != 4 {
+			t.Errorf("Expected 4 elements, got %d", len(resultData))
+		}
+	})
+
+	t.Run("Invalid input dimensions", func(t *testing.T) {
+		// 3D input (should fail)
+		input, _ := NewTensor([]int{1, 4, 4}, Float32, CPU, make([]float32, 16))
+
+		_, err := MaxPool2DMPS(input, 2, 2, 0)
+		if err == nil {
+			t.Error("Expected error for 3D input tensor")
+		}
+	})
+}
+
+func TestAvgPool2DMPS(t *testing.T) {
+	_, err := GetMPSGraphEngine()
+	if err != nil {
+		t.Skipf("MPSGraph not available on this system: %v", err)
+	}
+
+	t.Run("Basic AvgPool2D", func(t *testing.T) {
+		// Input: 1 batch, 1 channel, 4x4 image
+		input, _ := NewTensor([]int{1, 1, 4, 4}, Float32, CPU, []float32{
+			1, 2, 3, 4,
+			5, 6, 7, 8,
+			9, 10, 11, 12,
+			13, 14, 15, 16,
+		})
+
+		result, err := AvgPool2DMPS(input, 2, 2, 0) // 2x2 kernel, stride 2, no padding
+		if err != nil {
+			t.Fatalf("AvgPool2DMPS failed: %v", err)
+		}
+
+		expectedShape := []int{1, 1, 2, 2}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		if result.Device != GPU {
+			t.Errorf("Result device = %v, expected %v", result.Device, GPU)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		resultData := cpuResult.Data.([]float32)
+		t.Logf("AvgPool2D result: %v", resultData)
+
+		// Basic sanity check - result should have correct number of elements
+		if len(resultData) != 4 {
+			t.Errorf("Expected 4 elements, got %d", len(resultData))
+		}
+	})
+
+	t.Run("Invalid input dimensions", func(t *testing.T) {
+		// 3D input (should fail)
+		input, _ := NewTensor([]int{1, 4, 4}, Float32, CPU, make([]float32, 16))
+
+		_, err := AvgPool2DMPS(input, 2, 2, 0)
+		if err == nil {
+			t.Error("Expected error for 3D input tensor")
+		}
+	})
+}

@@ -16,21 +16,8 @@ func checkCompatibility(t1, t2 *Tensor) error {
 }
 
 func checkShapesCompatible(shape1, shape2 []int) ([]int, error) {
-	if len(shape1) == 0 || len(shape2) == 0 {
-		return nil, fmt.Errorf("cannot operate on empty tensors")
-	}
-
-	if len(shape1) != len(shape2) {
-		return nil, fmt.Errorf("tensor shapes must have same number of dimensions: %v vs %v", shape1, shape2)
-	}
-
-	for i := range shape1 {
-		if shape1[i] != shape2[i] {
-			return nil, fmt.Errorf("tensor shapes must match: %v vs %v", shape1, shape2)
-		}
-	}
-
-	return shape1, nil
+	// Use broadcasting rules instead of requiring exact shape match
+	return BroadcastShapes(shape1, shape2)
 }
 
 func Add(t1, t2 *Tensor) (*Tensor, error) {
@@ -38,31 +25,33 @@ func Add(t1, t2 *Tensor) (*Tensor, error) {
 		return nil, err
 	}
 
-	outputShape, err := checkShapesCompatible(t1.Shape, t2.Shape)
+	// Broadcast tensors to compatible shape
+	t1Broadcast, t2Broadcast, err := BroadcastTensorsForOperation(t1, t2)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to broadcast tensors for addition: %v", err)
 	}
 
-	result, err := Zeros(outputShape, t1.DType, t1.Device)
+	// Create result tensor with broadcast shape
+	result, err := Zeros(t1Broadcast.Shape, t1.DType, t1.Device)
 	if err != nil {
 		return nil, err
 	}
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		data1 := t1Broadcast.Data.([]float32)
+		data2 := t2Broadcast.Data.([]float32)
 		resultData := result.Data.([]float32)
 		
-		for i := 0; i < t1.NumElems; i++ {
+		for i := 0; i < t1Broadcast.NumElems; i++ {
 			resultData[i] = data1[i] + data2[i]
 		}
 	case Int32:
-		data1 := t1.Data.([]int32)
-		data2 := t2.Data.([]int32)
+		data1 := t1Broadcast.Data.([]int32)
+		data2 := t2Broadcast.Data.([]int32)
 		resultData := result.Data.([]int32)
 		
-		for i := 0; i < t1.NumElems; i++ {
+		for i := 0; i < t1Broadcast.NumElems; i++ {
 			resultData[i] = data1[i] + data2[i]
 		}
 	default:
@@ -77,31 +66,33 @@ func Sub(t1, t2 *Tensor) (*Tensor, error) {
 		return nil, err
 	}
 
-	outputShape, err := checkShapesCompatible(t1.Shape, t2.Shape)
+	// Broadcast tensors to compatible shape
+	t1Broadcast, t2Broadcast, err := BroadcastTensorsForOperation(t1, t2)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to broadcast tensors for subtraction: %v", err)
 	}
 
-	result, err := Zeros(outputShape, t1.DType, t1.Device)
+	// Create result tensor with broadcast shape
+	result, err := Zeros(t1Broadcast.Shape, t1.DType, t1.Device)
 	if err != nil {
 		return nil, err
 	}
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		data1 := t1Broadcast.Data.([]float32)
+		data2 := t2Broadcast.Data.([]float32)
 		resultData := result.Data.([]float32)
 		
-		for i := 0; i < t1.NumElems; i++ {
+		for i := 0; i < t1Broadcast.NumElems; i++ {
 			resultData[i] = data1[i] - data2[i]
 		}
 	case Int32:
-		data1 := t1.Data.([]int32)
-		data2 := t2.Data.([]int32)
+		data1 := t1Broadcast.Data.([]int32)
+		data2 := t2Broadcast.Data.([]int32)
 		resultData := result.Data.([]int32)
 		
-		for i := 0; i < t1.NumElems; i++ {
+		for i := 0; i < t1Broadcast.NumElems; i++ {
 			resultData[i] = data1[i] - data2[i]
 		}
 	default:
@@ -116,31 +107,33 @@ func Mul(t1, t2 *Tensor) (*Tensor, error) {
 		return nil, err
 	}
 
-	outputShape, err := checkShapesCompatible(t1.Shape, t2.Shape)
+	// Broadcast tensors to compatible shape
+	t1Broadcast, t2Broadcast, err := BroadcastTensorsForOperation(t1, t2)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to broadcast tensors for multiplication: %v", err)
 	}
 
-	result, err := Zeros(outputShape, t1.DType, t1.Device)
+	// Create result tensor with broadcast shape
+	result, err := Zeros(t1Broadcast.Shape, t1.DType, t1.Device)
 	if err != nil {
 		return nil, err
 	}
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		data1 := t1Broadcast.Data.([]float32)
+		data2 := t2Broadcast.Data.([]float32)
 		resultData := result.Data.([]float32)
 		
-		for i := 0; i < t1.NumElems; i++ {
+		for i := 0; i < t1Broadcast.NumElems; i++ {
 			resultData[i] = data1[i] * data2[i]
 		}
 	case Int32:
-		data1 := t1.Data.([]int32)
-		data2 := t2.Data.([]int32)
+		data1 := t1Broadcast.Data.([]int32)
+		data2 := t2Broadcast.Data.([]int32)
 		resultData := result.Data.([]int32)
 		
-		for i := 0; i < t1.NumElems; i++ {
+		for i := 0; i < t1Broadcast.NumElems; i++ {
 			resultData[i] = data1[i] * data2[i]
 		}
 	default:
@@ -155,34 +148,36 @@ func Div(t1, t2 *Tensor) (*Tensor, error) {
 		return nil, err
 	}
 
-	outputShape, err := checkShapesCompatible(t1.Shape, t2.Shape)
+	// Broadcast tensors to compatible shape
+	t1Broadcast, t2Broadcast, err := BroadcastTensorsForOperation(t1, t2)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to broadcast tensors for division: %v", err)
 	}
 
-	result, err := Zeros(outputShape, t1.DType, t1.Device)
+	// Create result tensor with broadcast shape
+	result, err := Zeros(t1Broadcast.Shape, t1.DType, t1.Device)
 	if err != nil {
 		return nil, err
 	}
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		data1 := t1Broadcast.Data.([]float32)
+		data2 := t2Broadcast.Data.([]float32)
 		resultData := result.Data.([]float32)
 		
-		for i := 0; i < t1.NumElems; i++ {
+		for i := 0; i < t1Broadcast.NumElems; i++ {
 			if data2[i] == 0 {
 				return nil, fmt.Errorf("division by zero at index %d", i)
 			}
 			resultData[i] = data1[i] / data2[i]
 		}
 	case Int32:
-		data1 := t1.Data.([]int32)
-		data2 := t2.Data.([]int32)
+		data1 := t1Broadcast.Data.([]int32)
+		data2 := t2Broadcast.Data.([]int32)
 		resultData := result.Data.([]int32)
 		
-		for i := 0; i < t1.NumElems; i++ {
+		for i := 0; i < t1Broadcast.NumElems; i++ {
 			if data2[i] == 0 {
 				return nil, fmt.Errorf("division by zero at index %d", i)
 			}

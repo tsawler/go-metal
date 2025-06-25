@@ -73,9 +73,15 @@ func TestCheckShapesCompatible(t *testing.T) {
 		shape1 := []int{}
 		shape2 := []int{2, 3}
 		
-		_, err := checkShapesCompatible(shape1, shape2)
-		if err == nil {
-			t.Error("Expected error for empty shapes")
+		result, err := checkShapesCompatible(shape1, shape2)
+		if err != nil {
+			t.Fatalf("Unexpected error for empty shapes with broadcasting: %v", err)
+		}
+		
+		// With broadcasting, empty shape should broadcast to the other shape
+		expected := []int{2, 3}
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("Expected %v, got %v", expected, result)
 		}
 	})
 }
