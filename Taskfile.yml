@@ -1,0 +1,33 @@
+version: '3'
+
+tasks:
+  build:
+    desc: "Build module"
+    cmds:
+      - go clean -cache
+      - env CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go build ./...
+    silent: true
+
+  test:
+    desc: "Run tests"
+    cmds:
+      - env CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go test ./... -count=1 
+
+  coverage:
+    aliases:
+      - cover
+    desc: "Overall test coverage"
+    silent: false
+    cmds:
+      - |
+        env CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go test ./... -coverprofile=coverage.out && go tool cover -func coverage.out | grep total | awk '{print "Total Coverage: " substr($3, 1, length($3)-1) "%"}'
+
+  docs:
+    desc: "Produce simple documentation in packages"
+    cmds:
+      - task: docs-tensor
+
+  docs-tensor:
+    dir: ./tensor
+    cmds:
+      - godocdown -output docs.md
