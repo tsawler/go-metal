@@ -10,8 +10,10 @@ import "C"
 import (
 	"fmt"
 	"runtime"
+	"sync/atomic"
 	"unsafe"
 )
+
 
 // Go equivalent of MTLSize
 type MTLSize struct {
@@ -68,8 +70,11 @@ func (d *Device) NewCommandQueue() *CommandQueue {
 
 // Wrapper struct for MTLBuffer
 type Buffer struct {
-	c_buffer C.MTLBufferRef
-	length   uintptr // Length in bytes
+	c_buffer  C.MTLBufferRef
+	length    uintptr // Length in bytes
+	inUse     bool    // Whether buffer is currently in use
+	refCount  int32   // Reference count for lifetime management
+	allocator *BufferAllocator // Reference to allocator for release
 }
 
 func (d *Device) CreateBufferWithBytes(data interface{}, options C.size_t) (*Buffer, error) {
@@ -92,10 +97,14 @@ func (d *Device) CreateBufferWithBytes(data interface{}, options C.size_t) (*Buf
 		// to explicitly manage its lifetime in Go. This makes Go the owner.
 		// The `ReleaseMetalObject` in the finalizer will then call `CFRelease`.
 		C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_buf))) // Explicitly retain to ensure Go owns it
-		buf := &Buffer{c_buffer: c_buf, length: uintptr(byteLength)}
-		runtime.SetFinalizer(buf, func(b *Buffer) {
-			C.ReleaseMetalObject(unsafe.Pointer(b.c_buffer))
-		})
+		buf := &Buffer{
+			c_buffer:  c_buf, 
+			length:    uintptr(byteLength),
+			inUse:     true,
+			refCount:  1,
+			allocator: nil, // Will be set by allocator if created through it
+		}
+		runtime.SetFinalizer(buf, (*Buffer).finalize)
 		return buf, nil
 	case []int32:
 		if len(v) == 0 {
@@ -107,10 +116,14 @@ func (d *Device) CreateBufferWithBytes(data interface{}, options C.size_t) (*Buf
 			return nil, fmt.Errorf("failed to create Metal buffer")
 		}
 		C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_buf)))
-		buf := &Buffer{c_buffer: c_buf, length: uintptr(byteLength)}
-		runtime.SetFinalizer(buf, func(b *Buffer) {
-			C.ReleaseMetalObject(unsafe.Pointer(b.c_buffer))
-		})
+		buf := &Buffer{
+			c_buffer:  c_buf, 
+			length:    uintptr(byteLength),
+			inUse:     true,
+			refCount:  1,
+			allocator: nil,
+		}
+		runtime.SetFinalizer(buf, (*Buffer).finalize)
 		return buf, nil
 	case []uint32:
 		if len(v) == 0 {
@@ -122,10 +135,14 @@ func (d *Device) CreateBufferWithBytes(data interface{}, options C.size_t) (*Buf
 			return nil, fmt.Errorf("failed to create Metal buffer")
 		}
 		C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_buf)))
-		buf := &Buffer{c_buffer: c_buf, length: uintptr(byteLength)}
-		runtime.SetFinalizer(buf, func(b *Buffer) {
-			C.ReleaseMetalObject(unsafe.Pointer(b.c_buffer))
-		})
+		buf := &Buffer{
+			c_buffer:  c_buf, 
+			length:    uintptr(byteLength),
+			inUse:     true,
+			refCount:  1,
+			allocator: nil,
+		}
+		runtime.SetFinalizer(buf, (*Buffer).finalize)
 		return buf, nil
 	default:
 		return nil, fmt.Errorf("unsupported data type for buffer creation")
@@ -138,10 +155,14 @@ func (d *Device) CreateBufferWithLength(length uintptr, options C.size_t) (*Buff
 		return nil, fmt.Errorf("failed to create Metal buffer")
 	}
 	C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_buf)))
-	buf := &Buffer{c_buffer: c_buf, length: length}
-	runtime.SetFinalizer(buf, func(b *Buffer) {
-		C.ReleaseMetalObject(unsafe.Pointer(b.c_buffer))
-	})
+	buf := &Buffer{
+		c_buffer:  c_buf, 
+		length:    length,
+		inUse:     true,
+		refCount:  1,
+		allocator: nil,
+	}
+	runtime.SetFinalizer(buf, (*Buffer).finalize)
 	return buf, nil
 }
 
@@ -161,6 +182,48 @@ func (b *Buffer) ContentsAsFloat32() []float32 {
 func (b *Buffer) ContentsAsInt32() []int32 {
 	// This is unsafe, assume int32 for example
 	return (*[1 << 30]int32)(C.GetBufferContents(b.c_buffer))[:b.length/unsafe.Sizeof(int32(0))]
+}
+
+// Retain increments the reference count for this buffer
+func (b *Buffer) Retain() {
+	atomic.AddInt32(&b.refCount, 1)
+}
+
+// Release decrements the reference count and returns the buffer to allocator when it reaches zero
+func (b *Buffer) Release() {
+	newCount := atomic.AddInt32(&b.refCount, -1)
+	if newCount == 0 && b.allocator != nil {
+		b.allocator.Release(b)
+	} else if newCount < 0 {
+		// Safety check - prevent double release
+		atomic.StoreInt32(&b.refCount, 0)
+	}
+}
+
+// RefCount returns the current reference count
+func (b *Buffer) RefCount() int32 {
+	return atomic.LoadInt32(&b.refCount)
+}
+
+// releaseNow immediately releases the Metal buffer without going through allocator
+func (b *Buffer) releaseNow() {
+	if b.c_buffer != nil {
+		C.ReleaseMetalObject(unsafe.Pointer(b.c_buffer))
+		b.c_buffer = nil
+	}
+	b.inUse = false
+	atomic.StoreInt32(&b.refCount, 0)
+}
+
+// finalize is called by Go's finalizer when buffer is garbage collected
+func (b *Buffer) finalize() {
+	if b.inUse && b.allocator != nil {
+		// Buffer is still in use but being finalized - return to allocator
+		b.allocator.Release(b)
+	} else if b.c_buffer != nil {
+		// Buffer was not managed by allocator, release directly
+		b.releaseNow()
+	}
 }
 
 // Wrapper struct for MTLLibrary

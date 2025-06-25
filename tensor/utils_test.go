@@ -482,7 +482,7 @@ func TestRelease(t *testing.T) {
 		grad, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{5, 6, 7, 8})
 		tensor.grad = grad
 		
-		tensor.Release()
+		tensor.Cleanup()
 		
 		if tensor.Data != nil {
 			t.Error("Data should be nil after release")

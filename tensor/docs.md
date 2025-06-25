@@ -522,6 +522,12 @@ func (t *Tensor) Backward() error
 ```
 Backward performs backpropagation from this tensor
 
+#### func (*Tensor) Cleanup
+
+```go
+func (t *Tensor) Cleanup()
+```
+
 #### func (*Tensor) Clone
 
 ```go
@@ -545,6 +551,13 @@ func (t *Tensor) Equal(other *Tensor) (bool, error)
 ```go
 func (t *Tensor) GetFloat32Data() ([]float32, error)
 ```
+
+#### func (*Tensor) GetGPUBuffer
+
+```go
+func (t *Tensor) GetGPUBuffer() interface{}
+```
+GetGPUBuffer returns the GPU buffer for this tensor
 
 #### func (*Tensor) GetInt32Data
 
@@ -576,11 +589,20 @@ func (t *Tensor) Numel() int
 func (t *Tensor) PrintData(maxElements int) string
 ```
 
+#### func (*Tensor) RefCount
+
+```go
+func (t *Tensor) RefCount() int32
+```
+RefCount returns the current reference count for GPU tensors
+
 #### func (*Tensor) Release
 
 ```go
 func (t *Tensor) Release()
 ```
+Release decrements the reference count and releases GPU buffer when count
+reaches zero
 
 #### func (*Tensor) RequiresGrad
 
@@ -588,11 +610,26 @@ func (t *Tensor) Release()
 func (t *Tensor) RequiresGrad() bool
 ```
 
+#### func (*Tensor) Retain
+
+```go
+func (t *Tensor) Retain()
+```
+Retain increments the reference count for GPU tensors
+
 #### func (*Tensor) SetAt
 
 ```go
 func (t *Tensor) SetAt(value interface{}, indices ...int) error
 ```
+
+#### func (*Tensor) SetGPUBuffer
+
+```go
+func (t *Tensor) SetGPUBuffer(buffer interface{})
+```
+SetGPUBuffer sets the GPU buffer for this tensor and initializes reference
+counting
 
 #### func (*Tensor) SetRequiresGrad
 
@@ -630,7 +667,7 @@ func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error)
 ```go
 func (t *Tensor) ToGPU() (*Tensor, error)
 ```
-ToGPU moves a tensor to GPU device (creates a copy with GPU device type)
+ToGPU moves a tensor to GPU device using the BufferAllocator
 
 #### func (*Tensor) ZeroGrad
 

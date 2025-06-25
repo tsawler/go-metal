@@ -2,6 +2,7 @@ package tensor
 
 import (
 	"fmt"
+	"sync/atomic"
 )
 
 type DType int
@@ -58,6 +59,10 @@ type Tensor struct {
 	requiresGrad bool
 	grad         *Tensor
 	creator      Operation
+	
+	// GPU memory management fields
+	gpuBuffer    interface{} // *metal_bridge.Buffer for GPU tensors
+	refCount     int32       // Reference count for GPU tensor lifetime management
 }
 
 func (t *Tensor) String() string {
@@ -245,4 +250,59 @@ func getSizeForDType(dtype DType) int {
 	default:
 		return 4
 	}
+}
+
+// GPU Memory Management Methods
+
+// Retain increments the reference count for GPU tensors
+func (t *Tensor) Retain() {
+	if t.Device == GPU && t.gpuBuffer != nil {
+		atomic.AddInt32(&t.refCount, 1)
+		// Also retain the underlying buffer if it supports it
+		if buffer, ok := t.gpuBuffer.(interface{ Retain() }); ok {
+			buffer.Retain()
+		}
+	}
+}
+
+// Release decrements the reference count and releases GPU buffer when count reaches zero
+func (t *Tensor) Release() {
+	if t.Device == GPU && t.gpuBuffer != nil {
+		newCount := atomic.AddInt32(&t.refCount, -1)
+		
+		// Also release the underlying buffer if it supports it
+		if buffer, ok := t.gpuBuffer.(interface{ Release() }); ok {
+			buffer.Release()
+		}
+		
+		if newCount <= 0 {
+			// Clear reference to buffer when ref count reaches zero
+			t.gpuBuffer = nil
+			atomic.StoreInt32(&t.refCount, 0)
+		}
+	}
+}
+
+// RefCount returns the current reference count for GPU tensors
+func (t *Tensor) RefCount() int32 {
+	if t.Device == GPU {
+		return atomic.LoadInt32(&t.refCount)
+	}
+	return 0
+}
+
+// SetGPUBuffer sets the GPU buffer for this tensor and initializes reference counting
+func (t *Tensor) SetGPUBuffer(buffer interface{}) {
+	if t.Device == GPU {
+		t.gpuBuffer = buffer
+		atomic.StoreInt32(&t.refCount, 1)
+	}
+}
+
+// GetGPUBuffer returns the GPU buffer for this tensor
+func (t *Tensor) GetGPUBuffer() interface{} {
+	if t.Device == GPU {
+		return t.gpuBuffer
+	}
+	return nil
 }

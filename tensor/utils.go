@@ -262,7 +262,7 @@ func ZeroGrad(tensors []*Tensor) {
 	}
 }
 
-func (t *Tensor) Release() {
+func (t *Tensor) Cleanup() {
 	t.Data = nil
 	t.grad = nil
 	t.creator = nil

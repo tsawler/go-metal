@@ -105,6 +105,25 @@ var (
 ```
 MPSGraph data type constants
 
+#### type AllocatorConfig
+
+```go
+type AllocatorConfig struct {
+	MaxPoolSize    int    // Maximum buffers per size pool (default: 32)
+	MaxTotalMemory uint64 // Maximum total cached memory in bytes (default: 1GB)
+	MinBufferSize  uint64 // Minimum buffer size to pool in bytes (default: 1KB)
+}
+```
+
+AllocatorConfig holds configuration for the BufferAllocator
+
+#### func  DefaultAllocatorConfig
+
+```go
+func DefaultAllocatorConfig() AllocatorConfig
+```
+DefaultAllocatorConfig returns sensible defaults for the allocator
+
 #### type Buffer
 
 ```go
@@ -137,6 +156,91 @@ func (b *Buffer) ContentsAsInt32() []int32
 ```go
 func (b *Buffer) Length() uintptr
 ```
+
+#### func (*Buffer) RefCount
+
+```go
+func (b *Buffer) RefCount() int32
+```
+RefCount returns the current reference count
+
+#### func (*Buffer) Release
+
+```go
+func (b *Buffer) Release()
+```
+Release decrements the reference count and returns the buffer to allocator when
+it reaches zero
+
+#### func (*Buffer) Retain
+
+```go
+func (b *Buffer) Retain()
+```
+Retain increments the reference count for this buffer
+
+#### type BufferAllocator
+
+```go
+type BufferAllocator struct {
+}
+```
+
+BufferAllocator manages a pool of MTLBuffers for efficient memory management It
+categorizes buffers by size to minimize fragmentation and allocation overhead
+
+#### func  GetGlobalAllocator
+
+```go
+func GetGlobalAllocator() *BufferAllocator
+```
+GetGlobalAllocator returns the singleton BufferAllocator instance
+
+#### func  NewBufferAllocator
+
+```go
+func NewBufferAllocator(device *Device, config AllocatorConfig) *BufferAllocator
+```
+NewBufferAllocator creates a new BufferAllocator with the given device and
+configuration
+
+#### func (*BufferAllocator) Allocate
+
+```go
+func (a *BufferAllocator) Allocate(sizeInBytes uint64, options C.NSUInteger) (*Buffer, error)
+```
+Allocate allocates a buffer of the specified size from the pool or creates a new
+one
+
+#### func (*BufferAllocator) GetMemoryStats
+
+```go
+func (a *BufferAllocator) GetMemoryStats() MemoryStats
+```
+GetMemoryStats returns current memory usage statistics
+
+#### func (*BufferAllocator) Release
+
+```go
+func (a *BufferAllocator) Release(buffer *Buffer)
+```
+Release returns a buffer to the pool for reuse
+
+#### func (*BufferAllocator) Shutdown
+
+```go
+func (a *BufferAllocator) Shutdown()
+```
+Shutdown performs cleanup and releases all resources
+
+#### type BufferPool
+
+```go
+type BufferPool struct {
+}
+```
+
+BufferPool represents a pool of buffers for a specific size category
 
 #### type CommandBuffer
 
@@ -542,3 +646,20 @@ type MTLSize struct {
 ```
 
 Go equivalent of MTLSize
+
+#### type MemoryStats
+
+```go
+type MemoryStats struct {
+	TotalAllocated   uint64 // Total bytes allocated from Metal
+	TotalFree        uint64 // Total bytes available in pools
+	NumAllocations   uint64 // Number of allocation requests
+	NumDeallocations uint64 // Number of deallocation requests
+	NumPoolHits      uint64 // Number of successful pool retrievals
+	NumPoolMisses    uint64 // Number of new allocations needed
+	FragmentedMemory uint64 // Estimated fragmented memory
+	NumPools         int    // Number of active pools
+}
+```
+
+MemoryStats holds memory usage statistics

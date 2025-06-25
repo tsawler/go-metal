@@ -76,6 +76,33 @@ func convertDTypeToMPS(dtype DType) int {
 	}
 }
 
+// createMPSBufferFromTensor creates a GPU buffer using the allocator and copies tensor data
+func createMPSBufferFromTensor(tensor *Tensor, allocator *metal_bridge.BufferAllocator) (*metal_bridge.Buffer, error) {
+	size := calculateTensorSize(tensor.Shape, tensor.DType)
+	buffer, err := allocator.Allocate(uint64(size), 0) // 0 = MTLResourceStorageModeShared
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate buffer: %v", err)
+	}
+	
+	err = copyDataToGPUBuffer(tensor.Data, buffer, tensor.DType)
+	if err != nil {
+		buffer.Release() // Clean up on error
+		return nil, fmt.Errorf("failed to copy data to buffer: %v", err)
+	}
+	
+	return buffer, nil
+}
+
+// createMPSResultBuffer creates a result buffer using the allocator
+func createMPSResultBuffer(shape []int, dtype DType, allocator *metal_bridge.BufferAllocator) (*metal_bridge.Buffer, error) {
+	size := calculateTensorSize(shape, dtype)
+	buffer, err := allocator.Allocate(uint64(size), 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate result buffer: %v", err)
+	}
+	return buffer, nil
+}
+
 // AddMPS performs tensor addition using MPSGraph
 func AddMPS(a, b *Tensor) (*Tensor, error) {
 	if !isCompatibleForOp(a, b) {
@@ -128,23 +155,28 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 		NumElems: a.NumElems,
 	}
 	
-	// Create Metal buffers directly from tensor data
-	aBuffer, err := engine.device.CreateBufferWithBytes(a.Data, metal_bridge.ResourceStorageModeShared)
+	// Use BufferAllocator for efficient memory management
+	allocator := metal_bridge.GetGlobalAllocator()
+	
+	// Create input buffers using helper functions
+	aBuffer, err := createMPSBufferFromTensor(a, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
+	defer aBuffer.Release()
 	
-	bBuffer, err := engine.device.CreateBufferWithBytes(b.Data, metal_bridge.ResourceStorageModeShared)
+	bBuffer, err := createMPSBufferFromTensor(b, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
+	defer bBuffer.Release()
 	
-	// Allocate result buffer
-	resultSize := calculateTensorSize(result.Shape, result.DType)
-	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	// Create result buffer
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
+	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -160,20 +192,11 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 		executionDescriptor)
 	
 	// Copy result data from Metal buffer to CPU slice
-	switch result.DType {
-	case Float32:
-		resultData := make([]float32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsFloat32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	case Int32:
-		resultData := make([]int32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsInt32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	default:
-		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
 	}
+	result.Data = resultData
 	
 	return result, nil
 }
@@ -238,23 +261,28 @@ func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 		NumElems: outputShape[0] * outputShape[1],
 	}
 	
-	// Create Metal buffers directly from tensor data
-	aBuffer, err := engine.device.CreateBufferWithBytes(a.Data, metal_bridge.ResourceStorageModeShared)
+	// Use BufferAllocator for efficient memory management
+	allocator := metal_bridge.GetGlobalAllocator()
+	
+	// Create input buffers using helper functions
+	aBuffer, err := createMPSBufferFromTensor(a, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
+	defer aBuffer.Release()
 	
-	bBuffer, err := engine.device.CreateBufferWithBytes(b.Data, metal_bridge.ResourceStorageModeShared)
+	bBuffer, err := createMPSBufferFromTensor(b, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
+	defer bBuffer.Release()
 	
-	// Allocate result buffer
-	resultSize := calculateTensorSize(result.Shape, result.DType)
-	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	// Create result buffer
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
+	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -270,20 +298,11 @@ func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 		executionDescriptor)
 	
 	// Copy result data from Metal buffer to CPU slice
-	switch result.DType {
-	case Float32:
-		resultData := make([]float32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsFloat32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	case Int32:
-		resultData := make([]int32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsInt32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	default:
-		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
 	}
+	result.Data = resultData
 	
 	return result, nil
 }
@@ -335,17 +354,21 @@ func ReLUMPS(a *Tensor) (*Tensor, error) {
 	}
 	
 	// Create Metal buffer directly from tensor data
-	aBuffer, err := engine.device.CreateBufferWithBytes(a.Data, metal_bridge.ResourceStorageModeShared)
+	// Use BufferAllocator for efficient memory management
+	allocator := metal_bridge.GetGlobalAllocator()
+	
+	aBuffer, err := createMPSBufferFromTensor(a, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
+	defer aBuffer.Release()
 	
-	// Allocate result buffer
-	resultSize := calculateTensorSize(result.Shape, result.DType)
-	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	// Create result buffer using allocator
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
+	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -361,20 +384,11 @@ func ReLUMPS(a *Tensor) (*Tensor, error) {
 		executionDescriptor)
 	
 	// Copy result data from Metal buffer to CPU slice
-	switch result.DType {
-	case Float32:
-		resultData := make([]float32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsFloat32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	case Int32:
-		resultData := make([]int32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsInt32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	default:
-		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
 	}
+	result.Data = resultData
 	
 	return result, nil
 }
@@ -426,17 +440,21 @@ func SigmoidMPS(a *Tensor) (*Tensor, error) {
 	}
 	
 	// Create Metal buffer directly from tensor data
-	aBuffer, err := engine.device.CreateBufferWithBytes(a.Data, metal_bridge.ResourceStorageModeShared)
+	// Use BufferAllocator for efficient memory management
+	allocator := metal_bridge.GetGlobalAllocator()
+	
+	aBuffer, err := createMPSBufferFromTensor(a, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
+	defer aBuffer.Release()
 	
-	// Allocate result buffer
-	resultSize := calculateTensorSize(result.Shape, result.DType)
-	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	// Create result buffer using allocator
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
+	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -452,20 +470,11 @@ func SigmoidMPS(a *Tensor) (*Tensor, error) {
 		executionDescriptor)
 	
 	// Copy result data from Metal buffer to CPU slice
-	switch result.DType {
-	case Float32:
-		resultData := make([]float32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsFloat32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	case Int32:
-		resultData := make([]int32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsInt32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	default:
-		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
 	}
+	result.Data = resultData
 	
 	return result, nil
 }
@@ -579,34 +588,40 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		NumElems: N * C_out * outputH * outputW,
 	}
 	
-	// Create Metal buffers
-	inputBuffer, err := engine.device.CreateBufferWithBytes(input.Data, metal_bridge.ResourceStorageModeShared)
+	// Use BufferAllocator for efficient memory management
+	allocator := metal_bridge.GetGlobalAllocator()
+	
+	// Create input buffers
+	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
+	defer inputBuffer.Release()
 	
-	weightsBuffer, err := engine.device.CreateBufferWithBytes(weights.Data, metal_bridge.ResourceStorageModeShared)
+	weightsBuffer, err := createMPSBufferFromTensor(weights, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for weights: %v", err)
 	}
+	defer weightsBuffer.Release()
 	
 	var inputBuffers []*metal_bridge.Buffer
 	if bias != nil {
-		biasBuffer, err := engine.device.CreateBufferWithBytes(bias.Data, metal_bridge.ResourceStorageModeShared)
+		biasBuffer, err := createMPSBufferFromTensor(bias, allocator)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create buffer for bias: %v", err)
 		}
+		defer biasBuffer.Release()
 		inputBuffers = []*metal_bridge.Buffer{inputBuffer, weightsBuffer, biasBuffer}
 	} else {
 		inputBuffers = []*metal_bridge.Buffer{inputBuffer, weightsBuffer}
 	}
 	
-	// Allocate result buffer
-	resultSize := calculateTensorSize(result.Shape, result.DType)
-	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	// Create result buffer using allocator
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
+	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -622,20 +637,11 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		executionDescriptor)
 	
 	// Copy result data from Metal buffer to CPU slice
-	switch result.DType {
-	case Float32:
-		resultData := make([]float32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsFloat32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	case Int32:
-		resultData := make([]int32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsInt32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	default:
-		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
 	}
+	result.Data = resultData
 	
 	return result, nil
 }
@@ -703,18 +709,22 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		NumElems: N * C * outputH * outputW,
 	}
 	
-	// Create Metal buffer
-	inputBuffer, err := engine.device.CreateBufferWithBytes(input.Data, metal_bridge.ResourceStorageModeShared)
+	// Use BufferAllocator for efficient memory management
+	allocator := metal_bridge.GetGlobalAllocator()
+	
+	// Create input buffer
+	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
+	defer inputBuffer.Release()
 	
-	// Allocate result buffer
-	resultSize := calculateTensorSize(result.Shape, result.DType)
-	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	// Create result buffer using allocator
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
+	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -730,20 +740,11 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		executionDescriptor)
 	
 	// Copy result data from Metal buffer to CPU slice
-	switch result.DType {
-	case Float32:
-		resultData := make([]float32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsFloat32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	case Int32:
-		resultData := make([]int32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsInt32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	default:
-		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
 	}
+	result.Data = resultData
 	
 	return result, nil
 }
@@ -811,18 +812,22 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		NumElems: N * C * outputH * outputW,
 	}
 	
-	// Create Metal buffer
-	inputBuffer, err := engine.device.CreateBufferWithBytes(input.Data, metal_bridge.ResourceStorageModeShared)
+	// Use BufferAllocator for efficient memory management
+	allocator := metal_bridge.GetGlobalAllocator()
+	
+	// Create input buffer
+	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
+	defer inputBuffer.Release()
 	
-	// Allocate result buffer
-	resultSize := calculateTensorSize(result.Shape, result.DType)
-	resultBuffer, err := engine.device.CreateBufferWithLength(resultSize, metal_bridge.ResourceStorageModeShared)
+	// Create result buffer using allocator
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
+	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -838,20 +843,11 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		executionDescriptor)
 	
 	// Copy result data from Metal buffer to CPU slice
-	switch result.DType {
-	case Float32:
-		resultData := make([]float32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsFloat32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	case Int32:
-		resultData := make([]int32, result.NumElems)
-		bufferContents := resultBuffer.ContentsAsInt32()
-		copy(resultData, bufferContents[:result.NumElems])
-		result.Data = resultData
-	default:
-		return nil, fmt.Errorf("unsupported data type for result copying: %v", result.DType)
+	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
 	}
+	result.Data = resultData
 	
 	return result, nil
 }
