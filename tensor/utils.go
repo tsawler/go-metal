@@ -2,8 +2,75 @@ package tensor
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
+
+// Reshape returns a new tensor with the same data but different shape
+// The new shape must have the same total number of elements
+func (t *Tensor) Reshape(newShape []int) (*Tensor, error) {
+	// Calculate total elements in new shape
+	newNumElems := 1
+	hasNegOne := false
+	negOneIdx := -1
+	
+	for i, dim := range newShape {
+		if dim < 0 {
+			if dim != -1 {
+				return nil, fmt.Errorf("negative dimension %d at index %d is not allowed (only -1 is allowed)", dim, i)
+			}
+			if hasNegOne {
+				return nil, fmt.Errorf("only one dimension can be -1")
+			}
+			hasNegOne = true
+			negOneIdx = i
+		} else if dim == 0 {
+			return nil, fmt.Errorf("dimension %d cannot be 0", i)
+		} else {
+			newNumElems *= dim
+		}
+	}
+	
+	// If there's a -1, calculate what it should be
+	if hasNegOne {
+		if t.NumElems%newNumElems != 0 {
+			return nil, fmt.Errorf("cannot reshape tensor of size %d into shape with -1: size must be divisible by %d", t.NumElems, newNumElems)
+		}
+		inferredDim := t.NumElems / newNumElems
+		newShape[negOneIdx] = inferredDim
+		newNumElems *= inferredDim
+	}
+	
+	// Check that total elements match
+	if newNumElems != t.NumElems {
+		return nil, fmt.Errorf("cannot reshape tensor of size %d into shape %v (size %d)", t.NumElems, newShape, newNumElems)
+	}
+	
+	// Create new tensor with same data but new shape
+	reshaped := &Tensor{
+		Shape:        make([]int, len(newShape)),
+		Strides:      calculateStrides(newShape),
+		DType:        t.DType,
+		Device:       t.Device,
+		Data:         t.Data, // Share the same underlying data
+		NumElems:     t.NumElems,
+		requiresGrad: t.requiresGrad,
+		grad:         nil, // Don't copy gradient
+		creator:      nil, // Don't copy autograd graph
+	}
+	
+	copy(reshaped.Shape, newShape)
+	
+	// If on GPU, share the same buffer
+	if t.Device == GPU {
+		reshaped.gpuBuffer = t.gpuBuffer
+		reshaped.refCount = t.refCount
+		// Increment reference count since we're sharing the buffer
+		t.Retain()
+	}
+	
+	return reshaped, nil
+}
 
 func (t *Tensor) Clone() (*Tensor, error) {
 	clone := &Tensor{
@@ -266,4 +333,42 @@ func (t *Tensor) Cleanup() {
 	t.Data = nil
 	t.grad = nil
 	t.creator = nil
+}
+
+// FromScalar creates a scalar tensor from a float64 value
+func FromScalar(value float64, dtype DType, device DeviceType) *Tensor {
+	switch dtype {
+	case Float32:
+		data := []float32{float32(value)}
+		tensor, _ := NewTensor([]int{1}, dtype, device, data)
+		return tensor
+	case Int32:
+		data := []int32{int32(value)}
+		tensor, _ := NewTensor([]int{1}, dtype, device, data)
+		return tensor
+	default:
+		// Default to Float32
+		data := []float32{float32(value)}
+		tensor, _ := NewTensor([]int{1}, dtype, device, data)
+		return tensor
+	}
+}
+
+// Sqrt computes the square root of a tensor element-wise
+func Sqrt(t *Tensor) (*Tensor, error) {
+	if t.DType != Float32 {
+		return nil, fmt.Errorf("sqrt only supports Float32 tensors")
+	}
+	
+	data := t.Data.([]float32)
+	result := make([]float32, len(data))
+	
+	for i, val := range data {
+		if val < 0 {
+			return nil, fmt.Errorf("sqrt of negative number at index %d", i)
+		}
+		result[i] = float32(math.Sqrt(float64(val)))
+	}
+	
+	return NewTensor(t.Shape, t.DType, t.Device, result)
 }

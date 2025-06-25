@@ -306,3 +306,18 @@ func (t *Tensor) GetGPUBuffer() interface{} {
 	}
 	return nil
 }
+
+// Transpose returns a transposed tensor
+func (t *Tensor) Transpose(dim0, dim1 int) (*Tensor, error) {
+	return Transpose(t, dim0, dim1)
+}
+
+// SetData sets the data for this tensor (public version of setData)
+func (t *Tensor) SetData(data interface{}) error {
+	return t.setData(data)
+}
+
+// SetGrad sets the gradient for this tensor
+func (t *Tensor) SetGrad(grad *Tensor) {
+	t.grad = grad
+}
