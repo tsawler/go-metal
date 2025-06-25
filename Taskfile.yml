@@ -26,8 +26,14 @@ tasks:
     desc: "Produce simple documentation in packages"
     cmds:
       - task: docs-tensor
+      - task: docs-metal_bridge
 
   docs-tensor:
     dir: ./tensor
+    cmds:
+      - godocdown -output docs.md
+
+  docs-metal_bridge:
+    dir: ./metal_bridge
     cmds:
       - godocdown -output docs.md

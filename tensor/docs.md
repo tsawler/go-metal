@@ -5,6 +5,20 @@
 
 ## Usage
 
+#### func  GPUInfo
+
+```go
+func GPUInfo() (string, error)
+```
+GPUInfo returns information about the GPU device
+
+#### func  IsGPUAvailable
+
+```go
+func IsGPUAvailable() bool
+```
+IsGPUAvailable checks if Metal GPU compute is available
+
 #### func  ZeroGrad
 
 ```go
@@ -82,6 +96,13 @@ type Tensor struct {
 func Add(t1, t2 *Tensor) (*Tensor, error)
 ```
 
+#### func  AddGPU
+
+```go
+func AddGPU(t1, t2 *Tensor) (*Tensor, error)
+```
+AddGPU performs tensor addition on GPU
+
 #### func  Div
 
 ```go
@@ -118,6 +139,13 @@ func Log(t *Tensor) (*Tensor, error)
 func MatMul(t1, t2 *Tensor) (*Tensor, error)
 ```
 
+#### func  MatMulGPU
+
+```go
+func MatMulGPU(t1, t2 *Tensor) (*Tensor, error)
+```
+MatMulGPU performs matrix multiplication on GPU
+
 #### func  Mul
 
 ```go
@@ -153,6 +181,13 @@ func RandomNormal(shape []int, mean, std float32, dtype DType, device DeviceType
 ```go
 func ReLU(t *Tensor) (*Tensor, error)
 ```
+
+#### func  ReLUGPU
+
+```go
+func ReLUGPU(t *Tensor) (*Tensor, error)
+```
+ReLUGPU performs ReLU activation on GPU
 
 #### func  Reshape
 
@@ -304,8 +339,22 @@ func (t *Tensor) Size() []int
 func (t *Tensor) String() string
 ```
 
+#### func (*Tensor) ToCPU
+
+```go
+func (t *Tensor) ToCPU() (*Tensor, error)
+```
+ToCPU moves a tensor to CPU device (creates a copy with CPU device type)
+
 #### func (*Tensor) ToDevice
 
 ```go
 func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error)
 ```
+
+#### func (*Tensor) ToGPU
+
+```go
+func (t *Tensor) ToGPU() (*Tensor, error)
+```
+ToGPU moves a tensor to GPU device (creates a copy with GPU device type)
