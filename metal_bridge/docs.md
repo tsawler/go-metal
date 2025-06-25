@@ -358,6 +358,13 @@ func (g *Graph) Addition(primaryTensor, secondaryTensor *GraphTensor) *GraphTens
 ```
 MPSGraph operations
 
+#### func (*Graph) AvgPool2D
+
+```go
+func (g *Graph) AvgPool2D(source *GraphTensor, kernelWidth, kernelHeight, strideX, strideY, paddingLeft, paddingRight, paddingTop, paddingBottom int) *GraphTensor
+```
+AvgPool2D performs 2D average pooling operation
+
 #### func (*Graph) Compile
 
 ```go
@@ -370,6 +377,13 @@ func (g *Graph) Compile(device *GraphDevice, inputTensors []*GraphTensor, target
 func (g *Graph) ConstantTensor(value float64, shape []int, dataType int) *GraphTensor
 ```
 
+#### func (*Graph) Conv2D
+
+```go
+func (g *Graph) Conv2D(source, weights, bias *GraphTensor, strideX, strideY, dilationX, dilationY, paddingLeft, paddingRight, paddingTop, paddingBottom, groups int) *GraphTensor
+```
+Conv2D performs 2D convolution operation
+
 #### func (*Graph) Division
 
 ```go
@@ -381,6 +395,13 @@ func (g *Graph) Division(primaryTensor, secondaryTensor *GraphTensor) *GraphTens
 ```go
 func (g *Graph) MatrixMultiplication(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
 ```
+
+#### func (*Graph) MaxPool2D
+
+```go
+func (g *Graph) MaxPool2D(source *GraphTensor, kernelWidth, kernelHeight, strideX, strideY, paddingLeft, paddingRight, paddingTop, paddingBottom int) *GraphTensor
+```
+MaxPool2D performs 2D max pooling operation
 
 #### func (*Graph) Multiplication
 
