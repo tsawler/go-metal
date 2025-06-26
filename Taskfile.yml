@@ -14,8 +14,11 @@ tasks:
       - env CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go test ./... -count=1 
 
   coverage:
-    aliases:
-      - cover
+    desc: "Display test coverage"
+    cmds:
+      - go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out
+
+  cover:
     desc: "Overall test coverage"
     silent: false
     cmds:
