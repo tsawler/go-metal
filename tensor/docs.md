@@ -84,13 +84,13 @@ AddOp implements the Operation interface for tensor addition
 #### func (*AddOp) Backward
 
 ```go
-func (op *AddOp) Backward(gradOut *Tensor) []*Tensor
+func (op *AddOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 ```
 
 #### func (*AddOp) Forward
 
 ```go
-func (op *AddOp) Forward(inputs ...*Tensor) *Tensor
+func (op *AddOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
 #### type DType
@@ -339,14 +339,15 @@ type MPSGraphEngine struct {
 }
 ```
 
-MPSGraphEngine provides high-level ML operations using MPSGraph
+MPSGraphEngine provides high-level ML operations using MPSGraph. It now includes
+a thread-safe cache for compiled graph executables.
 
 #### func  GetMPSGraphEngine
 
 ```go
 func GetMPSGraphEngine() (*MPSGraphEngine, error)
 ```
-GetMPSGraphEngine returns the singleton MPSGraph engine
+GetMPSGraphEngine returns the singleton MPSGraph engine, initialized safely.
 
 #### type MatMulOp
 
@@ -360,13 +361,13 @@ MatMulOp implements the Operation interface for matrix multiplication
 #### func (*MatMulOp) Backward
 
 ```go
-func (op *MatMulOp) Backward(gradOut *Tensor) []*Tensor
+func (op *MatMulOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 ```
 
 #### func (*MatMulOp) Forward
 
 ```go
-func (op *MatMulOp) Forward(inputs ...*Tensor) *Tensor
+func (op *MatMulOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
 #### type MulOp
@@ -381,21 +382,21 @@ MulOp implements the Operation interface for tensor multiplication
 #### func (*MulOp) Backward
 
 ```go
-func (op *MulOp) Backward(gradOut *Tensor) []*Tensor
+func (op *MulOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 ```
 
 #### func (*MulOp) Forward
 
 ```go
-func (op *MulOp) Forward(inputs ...*Tensor) *Tensor
+func (op *MulOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
 #### type Operation
 
 ```go
 type Operation interface {
-	Forward(...*Tensor) *Tensor
-	Backward(gradOut *Tensor) []*Tensor
+	Forward(...*Tensor) (*Tensor, error)
+	Backward(gradOut *Tensor) ([]*Tensor, error)
 }
 ```
 
@@ -476,13 +477,13 @@ ReLUOp implements the Operation interface for ReLU activation
 #### func (*ReLUOp) Backward
 
 ```go
-func (op *ReLUOp) Backward(gradOut *Tensor) []*Tensor
+func (op *ReLUOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 ```
 
 #### func (*ReLUOp) Forward
 
 ```go
-func (op *ReLUOp) Forward(inputs ...*Tensor) *Tensor
+func (op *ReLUOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
 #### type SigmoidOp
@@ -497,13 +498,13 @@ SigmoidOp implements the Operation interface for Sigmoid activation
 #### func (*SigmoidOp) Backward
 
 ```go
-func (op *SigmoidOp) Backward(gradOut *Tensor) []*Tensor
+func (op *SigmoidOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 ```
 
 #### func (*SigmoidOp) Forward
 
 ```go
-func (op *SigmoidOp) Forward(inputs ...*Tensor) *Tensor
+func (op *SigmoidOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
 #### type SubOp
@@ -518,13 +519,13 @@ SubOp implements the Operation interface for tensor subtraction
 #### func (*SubOp) Backward
 
 ```go
-func (op *SubOp) Backward(gradOut *Tensor) []*Tensor
+func (op *SubOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 ```
 
 #### func (*SubOp) Forward
 
 ```go
-func (op *SubOp) Forward(inputs ...*Tensor) *Tensor
+func (op *SubOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
 #### type Tensor
@@ -550,7 +551,7 @@ func Add(t1, t2 *Tensor) (*Tensor, error)
 #### func  AddAutograd
 
 ```go
-func AddAutograd(a, b *Tensor) *Tensor
+func AddAutograd(a, b *Tensor) (*Tensor, error)
 ```
 AddAutograd performs addition with automatic differentiation
 
@@ -566,7 +567,7 @@ AddGPU performs tensor addition on GPU
 ```go
 func AddMPS(a, b *Tensor) (*Tensor, error)
 ```
-AddMPS performs tensor addition using MPSGraph
+AddMPS performs tensor addition using a cached MPSGraph
 
 #### func  AvgPool2DMPS
 
@@ -680,7 +681,7 @@ func MatMul(t1, t2 *Tensor) (*Tensor, error)
 #### func  MatMulAutograd
 
 ```go
-func MatMulAutograd(a, b *Tensor) *Tensor
+func MatMulAutograd(a, b *Tensor) (*Tensor, error)
 ```
 MatMulAutograd performs matrix multiplication with automatic differentiation
 
@@ -695,7 +696,7 @@ func MatMulGPU(t1, t2 *Tensor) (*Tensor, error)
 ```go
 func MatMulMPS(a, b *Tensor) (*Tensor, error)
 ```
-MatMulMPS performs matrix multiplication using MPSGraph
+MatMulMPS performs matrix multiplication using a cached MPSGraph
 
 #### func  MaxPool2DMPS
 
@@ -713,7 +714,7 @@ func Mul(t1, t2 *Tensor) (*Tensor, error)
 #### func  MulAutograd
 
 ```go
-func MulAutograd(a, b *Tensor) *Tensor
+func MulAutograd(a, b *Tensor) (*Tensor, error)
 ```
 MulAutograd performs multiplication with automatic differentiation
 
@@ -750,7 +751,7 @@ func ReLU(t *Tensor) (*Tensor, error)
 #### func  ReLUAutograd
 
 ```go
-func ReLUAutograd(a *Tensor) *Tensor
+func ReLUAutograd(a *Tensor) (*Tensor, error)
 ```
 ReLUAutograd performs ReLU activation with automatic differentiation
 
@@ -766,7 +767,7 @@ ReLUGPU performs ReLU activation on GPU
 ```go
 func ReLUMPS(a *Tensor) (*Tensor, error)
 ```
-ReLUMPS performs ReLU activation using MPSGraph
+ReLUMPS performs ReLU activation using a cached MPSGraph
 
 #### func  Reshape
 
@@ -783,7 +784,7 @@ func Sigmoid(t *Tensor) (*Tensor, error)
 #### func  SigmoidAutograd
 
 ```go
-func SigmoidAutograd(a *Tensor) *Tensor
+func SigmoidAutograd(a *Tensor) (*Tensor, error)
 ```
 SigmoidAutograd performs Sigmoid activation with automatic differentiation
 
@@ -792,7 +793,7 @@ SigmoidAutograd performs Sigmoid activation with automatic differentiation
 ```go
 func SigmoidMPS(a *Tensor) (*Tensor, error)
 ```
-SigmoidMPS performs Sigmoid activation using MPSGraph
+SigmoidMPS performs Sigmoid activation using a cached MPSGraph
 
 #### func  Sqrt
 
@@ -816,7 +817,7 @@ func Sub(t1, t2 *Tensor) (*Tensor, error)
 #### func  SubAutograd
 
 ```go
-func SubAutograd(a, b *Tensor) *Tensor
+func SubAutograd(a, b *Tensor) (*Tensor, error)
 ```
 SubAutograd performs subtraction with automatic differentiation
 

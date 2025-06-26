@@ -2,70 +2,96 @@ package tensor
 
 import (
 	"fmt"
-	"time"
+	"sync"
 	"github.com/tsawler/go-metal/metal_bridge"
 )
 
-// MPSGraphEngine provides high-level ML operations using MPSGraph
+// cachedGraph holds all the necessary components for a reusable, compiled graph.
+// This prevents re-creation and re-compilation for identical operations.
+type cachedGraph struct {
+	executable    *metal_bridge.GraphExecutable
+	inputTensors  []*metal_bridge.GraphTensor
+	resultTensors []*metal_bridge.GraphTensor
+}
+
+// MPSGraphEngine provides high-level ML operations using MPSGraph.
+// It now includes a thread-safe cache for compiled graph executables.
 type MPSGraphEngine struct {
-	device      *metal_bridge.Device
-	graphDevice *metal_bridge.GraphDevice
+	device       *metal_bridge.Device
+	graphDevice  *metal_bridge.GraphDevice
 	commandQueue *metal_bridge.CommandQueue
-	
-	// Simple semaphore to serialize graph operations
-	graphPool chan struct{}
-	poolSize  int
+
+	// Cache for compiled graph executables and their tensors.
+	cacheMutex sync.Mutex
+	graphCache map[string]*cachedGraph
 }
 
 var mpsGraphEngine *MPSGraphEngine
+var once sync.Once
 
-// GetMPSGraphEngine returns the singleton MPSGraph engine
+// GetMPSGraphEngine returns the singleton MPSGraph engine, initialized safely.
 func GetMPSGraphEngine() (*MPSGraphEngine, error) {
-	if mpsGraphEngine == nil {
+	var err error
+	once.Do(func() {
 		device := metal_bridge.CreateSystemDefaultDevice()
 		if device == nil {
-			return nil, fmt.Errorf("failed to create Metal device")
+			err = fmt.Errorf("failed to create Metal device")
+			return
 		}
-		
+
 		graphDevice := metal_bridge.NewGraphDevice(device)
 		if graphDevice == nil {
-			return nil, fmt.Errorf("failed to create MPSGraph device")
+			err = fmt.Errorf("failed to create MPSGraph device")
+			return
 		}
-		
+
 		commandQueue := device.NewCommandQueue()
 		if commandQueue == nil {
-			return nil, fmt.Errorf("failed to create command queue")
+			err = fmt.Errorf("failed to create command queue")
+			return
 		}
-		
+
 		mpsGraphEngine = &MPSGraphEngine{
-			device:      device,
-			graphDevice: graphDevice,
+			device:       device,
+			graphDevice:  graphDevice,
 			commandQueue: commandQueue,
-			graphPool:   make(chan struct{}, 1), // Simple semaphore with capacity 1
-			poolSize:    1,
+			cacheMutex:   sync.Mutex{},
+			graphCache:   make(map[string]*cachedGraph),
 		}
-	}
-	return mpsGraphEngine, nil
+	})
+	return mpsGraphEngine, err
 }
 
-// acquireGraphLock acquires exclusive access to graph operations
-func (engine *MPSGraphEngine) acquireGraphLock() bool {
-	select {
-	case engine.graphPool <- struct{}{}:
-		return true
-	case <-time.After(10 * time.Second):
-		return false
+// generateCacheKey creates a unique key for an operation based on its name and tensor properties.
+func generateCacheKey(opName string, tensors ...*Tensor) string {
+	key := opName
+	for _, t := range tensors {
+		key += fmt.Sprintf(":%s:%v", t.DType, t.Shape)
 	}
+	return key
 }
 
-// releaseGraphLock releases exclusive access to graph operations
-func (engine *MPSGraphEngine) releaseGraphLock() {
-	select {
-	case <-engine.graphPool:
-		// Successfully released
-	default:
-		// Already released
+// getOrCreateGraph handles the caching logic for MPS graphs.
+func (engine *MPSGraphEngine) getOrCreateGraph(key string, createGraphFunc func() *cachedGraph) (*cachedGraph, error) {
+	engine.cacheMutex.Lock()
+	if graph, found := engine.graphCache[key]; found {
+		engine.cacheMutex.Unlock()
+		return graph, nil
 	}
+	engine.cacheMutex.Unlock()
+
+	// If not found, create and compile the graph.
+	newGraph := createGraphFunc()
+	if newGraph == nil || newGraph.executable == nil {
+		return nil, fmt.Errorf("failed to create and compile graph for key: %s", key)
+	}
+
+	// Store the entire cachedGraph object.
+	engine.cacheMutex.Lock()
+	engine.graphCache[key] = newGraph
+	engine.cacheMutex.Unlock()
+
+	return newGraph, nil
 }
 
 // determineResultDevice determines the device type for the result based on input tensors
@@ -223,59 +249,34 @@ func createMPSResultBuffer(shape []int, dtype DType, allocator *metal_bridge.Buf
 	return buffer, nil
 }
 
-// AddMPS performs tensor addition using MPSGraph
+// AddMPS performs tensor addition using a cached MPSGraph
 func AddMPS(a, b *Tensor) (*Tensor, error) {
 	if !isCompatibleForOp(a, b) {
 		return nil, fmt.Errorf("tensors are not compatible for addition")
 	}
-	
+
 	engine, err := GetMPSGraphEngine()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
-	
-	// Acquire exclusive access to graph operations
-	if !engine.acquireGraphLock() {
-		return nil, fmt.Errorf("failed to acquire graph lock for addition - timeout")
+
+	cacheKey := generateCacheKey("add", a, b)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(a.DType)
+		placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
+		placeholderB := graph.PlaceholderTensor(b.Shape, dataType)
+		resultTensor := graph.Addition(placeholderA, placeholderB)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
 	}
-	defer engine.releaseGraphLock()
-	
-	// Create fresh graph for this operation
-	graph := metal_bridge.NewGraph()
-	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph for addition")
-	}
-	
-	// Create placeholders for inputs
-	dataType := convertDTypeToMPS(a.DType)
-	placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
-	placeholderB := graph.PlaceholderTensor(b.Shape, dataType)
-	
-	if placeholderA == nil || placeholderB == nil {
-		return nil, fmt.Errorf("failed to create placeholder tensors")
-	}
-	
-	// Create addition operation
-	resultTensor := graph.Addition(placeholderA, placeholderB)
-	if resultTensor == nil {
-		return nil, fmt.Errorf("failed to create addition operation")
-	}
-	
-	// Compile graph
-	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
-	if compilationDescriptor == nil {
-		return nil, fmt.Errorf("failed to create compilation descriptor")
-	}
-	
-	executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
-	if executable == nil {
-		return nil, fmt.Errorf("failed to compile graph")
-	}
-	
-	// Determine result device based on input tensors
+
 	resultDevice := determineResultDevice(a, b)
-	
-	// Create output tensor
 	result := &Tensor{
 		Shape:    a.Shape,
 		Strides:  a.Strides,
@@ -283,109 +284,78 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 		Device:   resultDevice,
 		NumElems: a.NumElems,
 	}
-	
-	// Use BufferAllocator for efficient memory management
+
 	allocator := metal_bridge.GetGlobalAllocator()
-	
-	// Create input buffers using helper functions
 	aBuffer, err := createMPSBufferFromTensor(a, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
 	defer aBuffer.Release()
-	
+
 	bBuffer, err := createMPSBufferFromTensor(b, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
 	defer bBuffer.Release()
-	
-	// Create result buffer
+
 	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	// resultBuffer lifecycle is managed by handleMPSResult
-	
-	// Execute graph
+
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
 	if executionDescriptor == nil {
 		return nil, fmt.Errorf("failed to create execution descriptor")
 	}
-	
-	executable.Execute(engine.commandQueue,
-		[]*metal_bridge.GraphTensor{placeholderA, placeholderB},
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
 		[]*metal_bridge.Buffer{aBuffer, bBuffer},
-		[]*metal_bridge.GraphTensor{resultTensor},
+		cached.resultTensors,
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
-	
-	// Handle result based on device type (persistent GPU or copy to CPU)
-	err = handleMPSResult(result, resultBuffer)
-	if err != nil {
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
 
-// MatMulMPS performs matrix multiplication using MPSGraph
+// MatMulMPS performs matrix multiplication using a cached MPSGraph
 func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 	if len(a.Shape) != 2 || len(b.Shape) != 2 {
 		return nil, fmt.Errorf("matmul requires 2D tensors")
 	}
 	if a.Shape[1] != b.Shape[0] {
-		return nil, fmt.Errorf("incompatible dimensions for matrix multiplication: (%d,%d) x (%d,%d)", 
+		return nil, fmt.Errorf("incompatible dimensions for matrix multiplication: (%d,%d) x (%d,%d)",
 			a.Shape[0], a.Shape[1], b.Shape[0], b.Shape[1])
 	}
 	if a.DType != b.DType {
 		return nil, fmt.Errorf("tensors must have the same data type")
 	}
-	
+
 	engine, err := GetMPSGraphEngine()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
-	
-	// Acquire exclusive access to graph operations
-	if !engine.acquireGraphLock() {
-		return nil, fmt.Errorf("failed to acquire graph lock for matrix multiplication - timeout")
+
+	cacheKey := generateCacheKey("matmul", a, b)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(a.DType)
+		placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
+		placeholderB := graph.PlaceholderTensor(b.Shape, dataType)
+		resultTensor := graph.MatrixMultiplication(placeholderA, placeholderB)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
 	}
-	defer engine.releaseGraphLock()
-	
-	// Create fresh graph for this operation
-	graph := metal_bridge.NewGraph()
-	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph for matrix multiplication")
-	}
-	
-	// Create placeholders for inputs
-	dataType := convertDTypeToMPS(a.DType)
-	placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
-	placeholderB := graph.PlaceholderTensor(b.Shape, dataType)
-	
-	if placeholderA == nil || placeholderB == nil {
-		return nil, fmt.Errorf("failed to create placeholder tensors")
-	}
-	
-	// Create matrix multiplication operation
-	resultTensor := graph.MatrixMultiplication(placeholderA, placeholderB)
-	if resultTensor == nil {
-		return nil, fmt.Errorf("failed to create matrix multiplication operation")
-	}
-	
-	// Compile graph
-	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
-	if compilationDescriptor == nil {
-		return nil, fmt.Errorf("failed to create compilation descriptor")
-	}
-	
-	executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
-	if executable == nil {
-		return nil, fmt.Errorf("failed to compile graph")
-	}
-	
-	// Create output tensor with correct shape
+
 	outputShape := []int{a.Shape[0], b.Shape[1]}
 	result := &Tensor{
 		Shape:    outputShape,
@@ -394,96 +364,66 @@ func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 		Device:   determineResultDevice(a, b),
 		NumElems: outputShape[0] * outputShape[1],
 	}
-	
-	// Use BufferAllocator for efficient memory management
+
 	allocator := metal_bridge.GetGlobalAllocator()
-	
-	// Create input buffers using helper functions
 	aBuffer, err := createMPSBufferFromTensor(a, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
 	defer aBuffer.Release()
-	
+
 	bBuffer, err := createMPSBufferFromTensor(b, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
 	defer bBuffer.Release()
-	
-	// Create result buffer
+
 	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	// resultBuffer lifecycle is managed by handleMPSResult
-	
-	// Execute graph
+
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
 	if executionDescriptor == nil {
 		return nil, fmt.Errorf("failed to create execution descriptor")
 	}
-	
-	executable.Execute(engine.commandQueue,
-		[]*metal_bridge.GraphTensor{placeholderA, placeholderB},
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
 		[]*metal_bridge.Buffer{aBuffer, bBuffer},
-		[]*metal_bridge.GraphTensor{resultTensor},
+		cached.resultTensors,
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
-	
-	// Handle result based on device type (persistent GPU or copy to CPU)
-	err = handleMPSResult(result, resultBuffer)
-	if err != nil {
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
 
-// ReLUMPS performs ReLU activation using MPSGraph
+// ReLUMPS performs ReLU activation using a cached MPSGraph
 func ReLUMPS(a *Tensor) (*Tensor, error) {
 	engine, err := GetMPSGraphEngine()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
-	
-	// Acquire exclusive access to graph operations
-	if !engine.acquireGraphLock() {
-		return nil, fmt.Errorf("failed to acquire graph lock for ReLU - timeout")
+
+	cacheKey := generateCacheKey("relu", a)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(a.DType)
+		placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
+		resultTensor := graph.ReLU(placeholderA)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderA}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
 	}
-	defer engine.releaseGraphLock()
-	
-	// Create fresh graph for this operation
-	graph := metal_bridge.NewGraph()
-	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph for ReLU")
-	}
-	
-	// Create placeholder for input
-	dataType := convertDTypeToMPS(a.DType)
-	placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
-	if placeholderA == nil {
-		return nil, fmt.Errorf("failed to create placeholder tensor")
-	}
-	
-	// Create ReLU operation
-	resultTensor := graph.ReLU(placeholderA)
-	if resultTensor == nil {
-		return nil, fmt.Errorf("failed to create ReLU operation")
-	}
-	
-	// Compile graph
-	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
-	if compilationDescriptor == nil {
-		return nil, fmt.Errorf("failed to create compilation descriptor")
-	}
-	
-	executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
-	if executable == nil {
-		return nil, fmt.Errorf("failed to compile graph")
-	}
-	
-	// Create output tensor
+
 	result := &Tensor{
 		Shape:    a.Shape,
 		Strides:  a.Strides,
@@ -491,89 +431,60 @@ func ReLUMPS(a *Tensor) (*Tensor, error) {
 		Device:   determineResultDevice(a),
 		NumElems: a.NumElems,
 	}
-	
-	// Create Metal buffer directly from tensor data
-	// Use BufferAllocator for efficient memory management
+
 	allocator := metal_bridge.GetGlobalAllocator()
-	
 	aBuffer, err := createMPSBufferFromTensor(a, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
 	defer aBuffer.Release()
-	
-	// Create result buffer using allocator
+
 	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	
-	// Execute graph
+
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
 	if executionDescriptor == nil {
 		return nil, fmt.Errorf("failed to create execution descriptor")
 	}
-	
-	executable.Execute(engine.commandQueue,
-		[]*metal_bridge.GraphTensor{placeholderA},
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
 		[]*metal_bridge.Buffer{aBuffer},
-		[]*metal_bridge.GraphTensor{resultTensor},
+		cached.resultTensors,
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
-	
-	// Handle result based on device type (persistent GPU or copy to CPU)
-	err = handleMPSResult(result, resultBuffer)
-	if err != nil {
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
 
-// SigmoidMPS performs Sigmoid activation using MPSGraph
+// SigmoidMPS performs Sigmoid activation using a cached MPSGraph
 func SigmoidMPS(a *Tensor) (*Tensor, error) {
 	engine, err := GetMPSGraphEngine()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
-	
-	// Acquire exclusive access to graph operations
-	if !engine.acquireGraphLock() {
-		return nil, fmt.Errorf("failed to acquire graph lock for Sigmoid - timeout")
+
+	cacheKey := generateCacheKey("sigmoid", a)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(a.DType)
+		placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
+		resultTensor := graph.Sigmoid(placeholderA)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderA}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
 	}
-	defer engine.releaseGraphLock()
-	
-	// Create fresh graph for this operation
-	graph := metal_bridge.NewGraph()
-	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph for Sigmoid")
-	}
-	
-	// Create placeholder for input
-	dataType := convertDTypeToMPS(a.DType)
-	placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
-	if placeholderA == nil {
-		return nil, fmt.Errorf("failed to create placeholder tensor")
-	}
-	
-	// Create Sigmoid operation
-	resultTensor := graph.Sigmoid(placeholderA)
-	if resultTensor == nil {
-		return nil, fmt.Errorf("failed to create Sigmoid operation")
-	}
-	
-	// Compile graph
-	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
-	if compilationDescriptor == nil {
-		return nil, fmt.Errorf("failed to create compilation descriptor")
-	}
-	
-	executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
-	if executable == nil {
-		return nil, fmt.Errorf("failed to compile graph")
-	}
-	
-	// Create output tensor
+
 	result := &Tensor{
 		Shape:    a.Shape,
 		Strides:  a.Strides,
@@ -581,44 +492,38 @@ func SigmoidMPS(a *Tensor) (*Tensor, error) {
 		Device:   determineResultDevice(a),
 		NumElems: a.NumElems,
 	}
-	
-	// Create Metal buffer directly from tensor data
-	// Use BufferAllocator for efficient memory management
+
 	allocator := metal_bridge.GetGlobalAllocator()
-	
 	aBuffer, err := createMPSBufferFromTensor(a, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
 	defer aBuffer.Release()
-	
-	// Create result buffer using allocator
+
 	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	
-	// Execute graph
+
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
 	if executionDescriptor == nil {
 		return nil, fmt.Errorf("failed to create execution descriptor")
 	}
-	
-	executable.Execute(engine.commandQueue,
-		[]*metal_bridge.GraphTensor{placeholderA},
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
 		[]*metal_bridge.Buffer{aBuffer},
-		[]*metal_bridge.GraphTensor{resultTensor},
+		cached.resultTensors,
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
-	
-	// Handle result based on device type (persistent GPU or copy to CPU)
-	err = handleMPSResult(result, resultBuffer)
-	if err != nil {
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
+
 
 // calculateTensorSize calculates the size in bytes for a tensor
 func calculateTensorSize(shape []int, dtype DType) uintptr {
@@ -664,10 +569,10 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 	}
 	
 	// Acquire exclusive access to graph operations
-	if !engine.acquireGraphLock() {
-		return nil, fmt.Errorf("failed to acquire graph lock for Conv2D - timeout")
-	}
-	defer engine.releaseGraphLock()
+	//if !engine.acquireGraphLock() {
+	//	return nil, fmt.Errorf("failed to acquire graph lock for Conv2D - timeout")
+	//}
+	//defer engine.releaseGraphLock()
 	
 	// Create fresh graph for this operation
 	graph := metal_bridge.NewGraph()
@@ -804,10 +709,10 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 	}
 	
 	// Acquire exclusive access to graph operations
-	if !engine.acquireGraphLock() {
-		return nil, fmt.Errorf("failed to acquire graph lock for MaxPool2D - timeout")
-	}
-	defer engine.releaseGraphLock()
+	//if !engine.acquireGraphLock() {
+	//	return nil, fmt.Errorf("failed to acquire graph lock for MaxPool2D - timeout")
+	//}
+	//defer engine.releaseGraphLock()
 	
 	// Create fresh graph for this operation
 	graph := metal_bridge.NewGraph()
@@ -912,10 +817,10 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 	}
 	
 	// Acquire exclusive access to graph operations
-	if !engine.acquireGraphLock() {
-		return nil, fmt.Errorf("failed to acquire graph lock for AvgPool2D - timeout")
-	}
-	defer engine.releaseGraphLock()
+	//if !engine.acquireGraphLock() {
+	//	return nil, fmt.Errorf("failed to acquire graph lock for AvgPool2D - timeout")
+	//}
+	//defer engine.releaseGraphLock()
 	
 	// Create fresh graph for this operation
 	graph := metal_bridge.NewGraph()

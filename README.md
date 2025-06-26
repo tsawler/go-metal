@@ -1330,6 +1330,24 @@ IsTraining() bool // Returns true if in training mode
 
 **Resolution**: Fixed **all** GPU memory and execution management issues through persistent GPU tensors, operation fusion, and async execution.
 
+### ✅ **Graph Caching for Performance and Stability**
+**Problem**: The initial MPSGraph implementation created and compiled a new graph for every single operation. This was not only inefficient due to constant recompilation, but also created a race condition between graph creation in the main thread and graph release in the Go garbage collector's finalizer thread, leading to intermittent `SIGSEGV` crashes.
+
+**Solution**: A thread-safe caching mechanism for `MPSGraphExecutable` objects has been implemented.
+- **Cache Implementation**: A new `cachedGraph` struct holds the compiled `MPSGraphExecutable` along with its necessary input and output `MPSGraphTensor` placeholders.
+- **Thread-Safe Access**: The `MPSGraphEngine` now contains a `map[string]*cachedGraph` protected by a `sync.Mutex` to ensure safe concurrent access.
+- **Lifecycle Management**: On the first call for a unique operation (e.g., ReLU on a `[1, 512]` tensor), the graph is compiled and the `cachedGraph` object is stored. Subsequent calls retrieve the cached object, completely avoiding graph re-creation and eliminating the race condition.
+
+**Impact**:
+- ✅ **Crash Elimination**: The `SIGSEGV` race condition has been resolved.
+- ✅ **Performance Boost**: Eliminates redundant graph compilation, significantly speeding up sequences of identical operations.
+- ✅ **Stability**: Provides a robust and production-ready foundation for all MPS-based operations.
+
+**Files Modified**:
+- `tensor/mps_ops.go`: Re-architected to use the new caching layer.
+
+
+
 ### ✅ **Performance Optimizations COMPLETED:**
 
 **Overall Progress**: 📊 **100% Complete** (All 3 priorities fully implemented)
