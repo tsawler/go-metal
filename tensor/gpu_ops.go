@@ -49,8 +49,9 @@ func AddGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error {
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		// Materialize views if needed for contiguous data access
+		data1 := t1.materializeView().([]float32)
+		data2 := t2.materializeView().([]float32)
 
 		err := engine.AddArraysFloat32Async(data1, data2, func(result []float32, err error) {
 			if err != nil {
@@ -111,8 +112,9 @@ func AddGPU(t1, t2 *Tensor) (*Tensor, error) {
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		// Materialize views if needed for contiguous data access
+		data1 := t1.materializeView().([]float32)
+		data2 := t2.materializeView().([]float32)
 
 		result, err := engine.AddArraysFloat32(data1, data2)
 		if err != nil {
@@ -121,8 +123,9 @@ func AddGPU(t1, t2 *Tensor) (*Tensor, error) {
 		resultData = result
 
 	case Int32:
-		data1 := t1.Data.([]int32)
-		data2 := t2.Data.([]int32)
+		// Materialize views if needed for contiguous data access
+		data1 := t1.materializeView().([]int32)
+		data2 := t2.materializeView().([]int32)
 
 		result, err := engine.AddArraysInt32(data1, data2)
 		if err != nil {
@@ -153,7 +156,8 @@ func ReLUGPU(t *Tensor) (*Tensor, error) {
 
 	switch t.DType {
 	case Float32:
-		data := t.Data.([]float32)
+		// Materialize views if needed for contiguous data access
+		data := t.materializeView().([]float32)
 
 		result, err := engine.ReLUFloat32(data)
 		if err != nil {
@@ -213,8 +217,9 @@ func MatMulGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error {
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		// Materialize views if needed for contiguous data access
+		data1 := t1.materializeView().([]float32)
+		data2 := t2.materializeView().([]float32)
 
 		err := engine.MatMulFloat32Async(data1, data2, uint(rows1), uint(cols1), uint(cols2), func(result []float32, err error) {
 			if err != nil {
@@ -289,8 +294,9 @@ func MatMulGPU(t1, t2 *Tensor) (*Tensor, error) {
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		// Materialize views if needed for contiguous data access
+		data1 := t1.materializeView().([]float32)
+		data2 := t2.materializeView().([]float32)
 
 		result, err := engine.MatMulFloat32(data1, data2, uint(rows1), uint(cols1), uint(cols2))
 		if err != nil {

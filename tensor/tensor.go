@@ -48,8 +48,8 @@ func (d DeviceType) String() string {
 }
 
 type Operation interface {
-	Forward(...*Tensor) *Tensor
-	Backward(gradOut *Tensor) []*Tensor
+	Forward(...*Tensor) (*Tensor, error)
+	Backward(gradOut *Tensor) ([]*Tensor, error)
 }
 
 type Tensor struct {
@@ -66,11 +66,78 @@ type Tensor struct {
 	// GPU memory management fields
 	gpuBuffer    interface{} // *metal_bridge.Buffer for GPU tensors
 	refCount     int32       // Reference count for GPU tensor lifetime management
+	
+	// View management fields
+	isView       bool        // Whether this tensor is a view of another tensor
+	baseData     interface{} // Points to the underlying data buffer (for views)
+	baseTensor   *Tensor     // Reference to base tensor (for view lifecycle management)
+	offset       int         // Offset into the base data (for slicing views)
 }
 
 func (t *Tensor) String() string {
 	return fmt.Sprintf("Tensor(shape=%v, dtype=%s, device=%s, elements=%d)", 
 		t.Shape, t.DType, t.Device, t.NumElems)
+}
+
+// getDataBuffer returns the actual data buffer, handling views
+func (t *Tensor) getDataBuffer() interface{} {
+	if t.isView && t.baseData != nil {
+		return t.baseData
+	}
+	return t.Data
+}
+
+// getLinearIndex converts multi-dimensional indices to linear index using strides
+func (t *Tensor) getLinearIndex(indices []int) int {
+	if len(indices) != len(t.Shape) {
+		panic(fmt.Sprintf("indices length %d doesn't match tensor dimensions %d", len(indices), len(t.Shape)))
+	}
+	
+	index := t.offset // Start with view offset
+	for i, idx := range indices {
+		if idx < 0 || idx >= t.Shape[i] {
+			panic(fmt.Sprintf("index %d out of bounds for dimension %d (size %d)", idx, i, t.Shape[i]))
+		}
+		index += idx * t.Strides[i]
+	}
+	return index
+}
+
+
+// materializeView creates a materialized copy of the view data if needed
+// This is used for operations that require contiguous data layout
+func (t *Tensor) materializeView() interface{} {
+	if !t.isView {
+		return t.Data
+	}
+	
+	// Create a new contiguous data buffer
+	switch t.DType {
+	case Float32:
+		newData := make([]float32, t.NumElems)
+		for i := 0; i < t.NumElems; i++ {
+			indices := getIndicesFromLinear(i, t.Shape)
+			val, err := t.At(indices...)
+			if err != nil {
+				panic(fmt.Sprintf("materializeView failed: %v", err))
+			}
+			newData[i] = val.(float32)
+		}
+		return newData
+	case Int32:
+		newData := make([]int32, t.NumElems)
+		for i := 0; i < t.NumElems; i++ {
+			indices := getIndicesFromLinear(i, t.Shape)
+			val, err := t.At(indices...)
+			if err != nil {
+				panic(fmt.Sprintf("materializeView failed: %v", err))
+			}
+			newData[i] = val.(int32)
+		}
+		return newData
+	default:
+		panic(fmt.Sprintf("unsupported dtype: %s", t.DType))
+	}
 }
 
 func (t *Tensor) RequiresGrad() bool {
@@ -119,7 +186,10 @@ func (t *Tensor) backwardImpl(visited map[*Tensor]bool) error {
 	// If this tensor has a creator (was produced by an operation), compute gradients
 	if t.creator != nil && t.requiresGrad {
 		// Get gradients for inputs from the operation's backward method
-		inputGrads := t.creator.Backward(t.grad)
+		inputGrads, err := t.creator.Backward(t.grad)
+		if err != nil {
+			return fmt.Errorf("backward pass failed: %v", err)
+		}
 		
 		// Get the input tensors from the operation
 		// We need to access inputs through reflection or store them in operation

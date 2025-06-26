@@ -14,7 +14,10 @@ func TestAutogradBroadcasting(t *testing.T) {
 		b.SetRequiresGrad(true)
 		
 		// Forward pass
-		result := AddAutograd(a, b)
+		result, err := AddAutograd(a, b)
+		if err != nil {
+			t.Fatalf("AddAutograd failed: %v", err)
+		}
 		
 		// Create a scalar loss by summing all elements
 		sumData := result.Data.([]float32)
@@ -32,9 +35,12 @@ func TestAutogradBroadcasting(t *testing.T) {
 		a1.SetRequiresGrad(true)
 		b1.SetRequiresGrad(true)
 		
-		result1 := AddAutograd(a1, b1)
+		result1, err := AddAutograd(a1, b1)
+		if err != nil {
+			t.Fatalf("AddAutograd failed: %v", err)
+		}
 		
-		err := result1.Backward()
+		err = result1.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}
@@ -66,9 +72,12 @@ func TestAutogradBroadcasting(t *testing.T) {
 		a.SetRequiresGrad(true)
 		b.SetRequiresGrad(true)
 		
-		result := MulAutograd(a, b)
+		result, err := MulAutograd(a, b)
+		if err != nil {
+			t.Fatalf("MulAutograd failed: %v", err)
+		}
 		
-		err := result.Backward()
+		err = result.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}

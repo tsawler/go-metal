@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 )
 
 // Reshape returns a new tensor with the same data but different shape
@@ -61,12 +62,15 @@ func (t *Tensor) Reshape(newShape []int) (*Tensor, error) {
 	
 	copy(reshaped.Shape, newShape)
 	
-	// If on GPU, share the same buffer
+	// If on GPU, share the same buffer with proper reference counting
 	if t.Device == GPU {
 		reshaped.gpuBuffer = t.gpuBuffer
-		reshaped.refCount = t.refCount
-		// Increment reference count since we're sharing the buffer
-		t.Retain()
+		// Initialize the new tensor's reference count to 1
+		atomic.StoreInt32(&reshaped.refCount, 1)
+		// Retain the underlying Metal buffer to prevent premature release
+		if buffer, ok := t.gpuBuffer.(interface{ Retain() }); ok {
+			buffer.Retain()
+		}
 	}
 	
 	return reshaped, nil
@@ -161,15 +165,15 @@ func (t *Tensor) At(indices ...int) (interface{}, error) {
 		}
 	}
 
-	linearIndex := getIndex(indices, t.Strides)
+	// Use view-aware data access
+	linearIndex := t.getLinearIndex(indices)
+	dataBuffer := t.getDataBuffer()
 	
 	switch t.DType {
 	case Float32:
-		data := t.Data.([]float32)
-		return data[linearIndex], nil
+		return dataBuffer.([]float32)[linearIndex], nil
 	case Int32:
-		data := t.Data.([]int32)
-		return data[linearIndex], nil
+		return dataBuffer.([]int32)[linearIndex], nil
 	default:
 		return nil, fmt.Errorf("unsupported dtype for At: %s", t.DType)
 	}
@@ -186,23 +190,23 @@ func (t *Tensor) SetAt(value interface{}, indices ...int) error {
 		}
 	}
 
-	linearIndex := getIndex(indices, t.Strides)
+	// Use view-aware data access
+	linearIndex := t.getLinearIndex(indices)
+	dataBuffer := t.getDataBuffer()
 	
 	switch t.DType {
 	case Float32:
-		data := t.Data.([]float32)
 		val, ok := value.(float32)
 		if !ok {
 			return fmt.Errorf("expected float32 value for Float32 tensor")
 		}
-		data[linearIndex] = val
+		dataBuffer.([]float32)[linearIndex] = val
 	case Int32:
-		data := t.Data.([]int32)
 		val, ok := value.(int32)
 		if !ok {
 			return fmt.Errorf("expected int32 value for Int32 tensor")
 		}
-		data[linearIndex] = val
+		dataBuffer.([]int32)[linearIndex] = val
 	default:
 		return fmt.Errorf("unsupported dtype for SetAt: %s", t.DType)
 	}

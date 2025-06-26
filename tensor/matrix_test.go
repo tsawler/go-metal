@@ -135,10 +135,42 @@ func TestTranspose(t *testing.T) {
 			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
 		}
 		
-		expected := []float32{1, 4, 2, 5, 3, 6}
-		resultData := result.Data.([]float32)
-		if !reflect.DeepEqual(resultData, expected) {
-			t.Errorf("Result = %v, expected %v", resultData, expected)
+		// Test that the transpose is a true view
+		if !result.isView {
+			t.Error("Transpose result should be a view")
+		}
+		
+		// Test individual element access using stride-aware methods
+		expectedValues := [][]float32{
+			{1, 4}, // First row: (0,0)=1, (0,1)=4
+			{2, 5}, // Second row: (1,0)=2, (1,1)=5  
+			{3, 6}, // Third row: (2,0)=3, (2,1)=6
+		}
+		
+		for i := 0; i < result.Shape[0]; i++ {
+			for j := 0; j < result.Shape[1]; j++ {
+				actual, err := result.At(i, j)
+				if err != nil {
+					t.Fatalf("At(%d,%d) failed: %v", i, j, err)
+				}
+				expected := expectedValues[i][j]
+				if actual.(float32) != expected {
+					t.Errorf("At(%d,%d) = %f, expected %f", i, j, actual.(float32), expected)
+				}
+			}
+		}
+		
+		// Test that modifying the original tensor affects the view
+		setErr := a.SetAt(float32(99), 0, 0) // Change original (0,0) from 1 to 99
+		if setErr != nil {
+			t.Fatalf("SetAt failed: %v", setErr)
+		}
+		actual, getErr := result.At(0, 0)
+		if getErr != nil {
+			t.Fatalf("At failed: %v", getErr)
+		}
+		if actual.(float32) != 99 {
+			t.Error("View should reflect changes to original tensor")
 		}
 	})
 

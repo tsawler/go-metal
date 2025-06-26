@@ -93,6 +93,7 @@ func handleMPSResult(result *Tensor, resultBuffer interface{}) error {
 		// Store the GPU buffer in the tensor for persistent GPU tensors
 		result.SetGPUBuffer(resultBuffer)
 		result.Data = nil // No CPU data for persistent GPU tensors
+		// Buffer is now owned by the tensor - don't release it here
 	} else {
 		// Copy result data from Metal buffer to CPU slice for temporary GPU tensors
 		resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
@@ -102,7 +103,7 @@ func handleMPSResult(result *Tensor, resultBuffer interface{}) error {
 		result.Data = resultData
 		// Release the GPU buffer since we copied to CPU
 		if buffer, ok := resultBuffer.(interface{ Release() }); ok {
-			defer buffer.Release()
+			buffer.Release()
 		}
 	}
 	return nil
@@ -159,17 +160,18 @@ func createMPSBufferFromTensor(tensor *Tensor, allocator *metal_bridge.BufferAll
 			buffer.Release() // Clean up on error
 			return nil, fmt.Errorf("failed to copy GPU buffer to buffer: %v", err)
 		}
-	} else if tensor.Data != nil {
-		// For CPU or temporary GPU tensors, copy from CPU data
-		err = copyDataToGPUBuffer(tensor.Data, buffer, tensor.DType)
+	} else {
+		// For CPU tensors, views, or temporary GPU tensors, materialize the data and copy
+		data := tensor.materializeView()
+		if data == nil {
+			buffer.Release()
+			return nil, fmt.Errorf("failed to materialize tensor data")
+		}
+		err = copyDataToGPUBuffer(data, buffer, tensor.DType)
 		if err != nil {
 			buffer.Release() // Clean up on error
 			return nil, fmt.Errorf("failed to copy data to buffer: %v", err)
 		}
-	} else {
-		// This shouldn't happen - tensor has neither CPU data nor GPU buffer
-		buffer.Release()
-		return nil, fmt.Errorf("tensor has no data to copy (neither CPU data nor GPU buffer)")
 	}
 	
 	return buffer, nil
@@ -303,7 +305,7 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	defer resultBuffer.Release()
+	// resultBuffer lifecycle is managed by handleMPSResult
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -414,7 +416,7 @@ func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	defer resultBuffer.Release()
+	// resultBuffer lifecycle is managed by handleMPSResult
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -766,7 +768,7 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	defer resultBuffer.Release()
+	// resultBuffer lifecycle is managed by handleMPSResult
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -874,7 +876,7 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	defer resultBuffer.Release()
+	// resultBuffer lifecycle is managed by handleMPSResult
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -982,7 +984,7 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	defer resultBuffer.Release()
+	// resultBuffer lifecycle is managed by handleMPSResult
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()

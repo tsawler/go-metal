@@ -14,7 +14,10 @@ func TestAutogradBasicOperations(t *testing.T) {
 		a.SetRequiresGrad(true)
 		b.SetRequiresGrad(true)
 		
-		result := AddAutograd(a, b)
+		result, err := AddAutograd(a, b)
+		if err != nil {
+			t.Fatalf("AddAutograd failed: %v", err)
+		}
 		
 		if !result.RequiresGrad() {
 			t.Error("Result should require gradients")
@@ -33,7 +36,10 @@ func TestAutogradBasicOperations(t *testing.T) {
 		a.SetRequiresGrad(true)
 		b.SetRequiresGrad(true)
 		
-		result := MulAutograd(a, b)
+		result, err := MulAutograd(a, b)
+		if err != nil {
+			t.Fatalf("MulAutograd failed: %v", err)
+		}
 		
 		expected := []float32{2, 6, 12, 20}
 		actual := result.Data.([]float32)
@@ -51,10 +57,13 @@ func TestAutogradBackward(t *testing.T) {
 		x1.SetRequiresGrad(true)
 		x2.SetRequiresGrad(true)
 		
-		y := AddAutograd(x1, x2)
+		y, err := AddAutograd(x1, x2)
+		if err != nil {
+			t.Fatalf("AddAutograd failed: %v", err)
+		}
 		
 		// Perform backward pass
-		err := y.Backward()
+		err = y.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}
@@ -86,10 +95,13 @@ func TestAutogradBackward(t *testing.T) {
 		x1.SetRequiresGrad(true)
 		x2.SetRequiresGrad(true)
 		
-		y := MulAutograd(x1, x2)
+		y, err := MulAutograd(x1, x2)
+		if err != nil {
+			t.Fatalf("MulAutograd failed: %v", err)
+		}
 		
 		// Perform backward pass
-		err := y.Backward()
+		err = y.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}
@@ -124,11 +136,17 @@ func TestAutogradBackward(t *testing.T) {
 		x3.SetRequiresGrad(true)
 		
 		// Build computational graph
-		sum := AddAutograd(x1, x2) // sum = 5.0
-		y := MulAutograd(sum, x3)  // y = 20.0
+		sum, err := AddAutograd(x1, x2) // sum = 5.0
+		if err != nil {
+			t.Fatalf("AddAutograd failed: %v", err)
+		}
+		y, err := MulAutograd(sum, x3)  // y = 20.0
+		if err != nil {
+			t.Fatalf("MulAutograd failed: %v", err)
+		}
 		
 		// Perform backward pass
-		err := y.Backward()
+		err = y.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}
@@ -172,9 +190,12 @@ func TestAutogradActivations(t *testing.T) {
 		// Test with a scalar output since backward requires scalar
 		x_scalar, _ := NewTensor([]int{1}, Float32, CPU, []float32{2.0})
 		x_scalar.SetRequiresGrad(true)
-		y_scalar := ReLUAutograd(x_scalar)
+		y_scalar, err := ReLUAutograd(x_scalar)
+		if err != nil {
+			t.Fatalf("ReLUAutograd failed: %v", err)
+		}
 		
-		err := y_scalar.Backward()
+		err = y_scalar.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}
@@ -195,9 +216,12 @@ func TestAutogradActivations(t *testing.T) {
 		x, _ := NewTensor([]int{1}, Float32, CPU, []float32{0.0})
 		x.SetRequiresGrad(true)
 		
-		y := SigmoidAutograd(x)
+		y, err := SigmoidAutograd(x)
+		if err != nil {
+			t.Fatalf("SigmoidAutograd failed: %v", err)
+		}
 		
-		err := y.Backward()
+		err = y.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}
@@ -223,7 +247,10 @@ func TestMatMulBackward(t *testing.T) {
 		A.SetRequiresGrad(true)
 		B.SetRequiresGrad(true)
 		
-		Y := MatMulAutograd(A, B)
+		Y, err := MatMulAutograd(A, B)
+		if err != nil {
+			t.Fatalf("MatMulAutograd failed: %v", err)
+		}
 		
 		// Since backward requires scalar, let's sum all elements
 		// In practice, this would be done with a Sum operation
@@ -243,9 +270,12 @@ func TestMatMulBackward(t *testing.T) {
 		a.SetRequiresGrad(true)
 		b.SetRequiresGrad(true)
 		
-		result := MatMulAutograd(a, b)
+		result, err := MatMulAutograd(a, b)
+		if err != nil {
+			t.Fatalf("MatMulAutograd failed: %v", err)
+		}
 		
-		err := result.Backward()
+		err = result.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}
@@ -279,11 +309,17 @@ func TestGradientAccumulation(t *testing.T) {
 		x.SetRequiresGrad(true)
 		
 		// Create two different computations using the same x
-		y1 := MulAutograd(x, x) // y1 = x^2
-		y2 := AddAutograd(x, x) // y2 = 2x
+		y1, err := MulAutograd(x, x) // y1 = x^2
+		if err != nil {
+			t.Fatalf("MulAutograd failed: %v", err)
+		}
+		y2, err := AddAutograd(x, x) // y2 = 2x
+		if err != nil {
+			t.Fatalf("AddAutograd failed: %v", err)
+		}
 		
 		// Backward from y1
-		err := y1.Backward()
+		err = y1.Backward()
 		if err != nil {
 			t.Fatalf("First backward pass failed: %v", err)
 		}
@@ -311,9 +347,12 @@ func TestAutogradZeroGrad(t *testing.T) {
 		x, _ := NewTensor([]int{1}, Float32, CPU, []float32{3.0})
 		x.SetRequiresGrad(true)
 		
-		y := MulAutograd(x, x)
+		y, err := MulAutograd(x, x)
+		if err != nil {
+			t.Fatalf("MulAutograd failed: %v", err)
+		}
 		
-		err := y.Backward()
+		err = y.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}
@@ -341,11 +380,20 @@ func TestComplexComputationalGraph(t *testing.T) {
 		x3.SetRequiresGrad(true)
 		
 		// Build computational graph
-		prod1 := MulAutograd(x1, x2) // x1 * x2 = 6
-		prod2 := MulAutograd(x1, x3) // x1 * x3 = 8  
-		y := AddAutograd(prod1, prod2) // y = 14
+		prod1, err := MulAutograd(x1, x2) // x1 * x2 = 6
+		if err != nil {
+			t.Fatalf("MulAutograd failed: %v", err)
+		}
+		prod2, err := MulAutograd(x1, x3) // x1 * x3 = 8
+		if err != nil {
+			t.Fatalf("MulAutograd failed: %v", err)
+		}
+		y, err := AddAutograd(prod1, prod2) // y = 14
+		if err != nil {
+			t.Fatalf("AddAutograd failed: %v", err)
+		}
 		
-		err := y.Backward()
+		err = y.Backward()
 		if err != nil {
 			t.Fatalf("Backward pass failed: %v", err)
 		}

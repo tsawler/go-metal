@@ -2,6 +2,7 @@ package tensor
 
 import (
 	"fmt"
+	"sync/atomic"
 )
 
 func getIndex(indices []int, strides []int) int {
@@ -72,8 +73,9 @@ func MatMul(t1, t2 *Tensor) (*Tensor, error) {
 
 	switch t1.DType {
 	case Float32:
-		data1 := t1.Data.([]float32)
-		data2 := t2.Data.([]float32)
+		// Materialize views if needed for contiguous data access
+		data1 := t1.materializeView().([]float32)
+		data2 := t2.materializeView().([]float32)
 		resultData := result.Data.([]float32)
 
 		for i := 0; i < rows1; i++ {
@@ -89,8 +91,9 @@ func MatMul(t1, t2 *Tensor) (*Tensor, error) {
 			}
 		}
 	case Int32:
-		data1 := t1.Data.([]int32)
-		data2 := t2.Data.([]int32)
+		// Materialize views if needed for contiguous data access
+		data1 := t1.materializeView().([]int32)
+		data2 := t2.materializeView().([]int32)
 		resultData := result.Data.([]int32)
 
 		for i := 0; i < rows1; i++ {
@@ -120,44 +123,70 @@ func Transpose(t *Tensor, dim0, dim1 int) (*Tensor, error) {
 		return nil, fmt.Errorf("dim1 %d out of range for tensor with %d dimensions", dim1, len(t.Shape))
 	}
 
+	// Create transposed shape
 	outputShape := make([]int, len(t.Shape))
 	copy(outputShape, t.Shape)
 	outputShape[dim0], outputShape[dim1] = outputShape[dim1], outputShape[dim0]
 
-	result, err := Zeros(outputShape, t.DType, t.Device)
-	if err != nil {
-		return nil, err
+	// Create transposed strides - this is the key to view-based transpose
+	outputStrides := make([]int, len(t.Strides))
+	copy(outputStrides, t.Strides)
+	outputStrides[dim0], outputStrides[dim1] = outputStrides[dim1], outputStrides[dim0]
+
+	// Get the base data and base tensor for proper view management
+	var baseData interface{}
+	var baseTensor *Tensor
+	var offset int
+	
+	if t.isView {
+		// If the original tensor is already a view, chain to the base
+		baseData = t.baseData
+		baseTensor = t.baseTensor
+		offset = t.offset
+	} else {
+		// If original tensor is not a view, it becomes the base
+		baseData = t.Data
+		baseTensor = t
+		offset = 0
 	}
 
-	switch t.DType {
-	case Float32:
-		data := t.Data.([]float32)
-		resultData := result.Data.([]float32)
+	// Create result tensor as a TRUE VIEW - no data copying!
+	result := &Tensor{
+		Data:         nil, // Views don't have their own Data field
+		Shape:        outputShape,
+		Strides:      outputStrides,
+		DType:        t.DType,
+		Device:       t.Device,
+		NumElems:     t.NumElems,
+		requiresGrad: t.requiresGrad,
+		
+		// View-specific fields
+		isView:       true,
+		baseData:     baseData,
+		baseTensor:   baseTensor,
+		offset:       offset,
+	}
 
-		for i := 0; i < t.NumElems; i++ {
-			indices := getIndicesFromLinear(i, t.Shape)
-			transposedIndices := make([]int, len(indices))
-			copy(transposedIndices, indices)
-			transposedIndices[dim0], transposedIndices[dim1] = transposedIndices[dim1], transposedIndices[dim0]
-			
-			resultIdx := getIndex(transposedIndices, result.Strides)
-			resultData[resultIdx] = data[i]
+	// For GPU tensors, share the Metal buffer with proper reference counting
+	if t.Device == GPU || t.Device == PersistentGPU {
+		if t.gpuBuffer != nil {
+			result.gpuBuffer = t.gpuBuffer
+			// Initialize reference count for the new tensor
+			atomic.StoreInt32(&result.refCount, 1)
+			// Retain the underlying Metal buffer to prevent premature release
+			if buffer, ok := t.gpuBuffer.(interface{ Retain() }); ok {
+				buffer.Retain()
+			}
 		}
-	case Int32:
-		data := t.Data.([]int32)
-		resultData := result.Data.([]int32)
+	}
 
-		for i := 0; i < t.NumElems; i++ {
-			indices := getIndicesFromLinear(i, t.Shape)
-			transposedIndices := make([]int, len(indices))
-			copy(transposedIndices, indices)
-			transposedIndices[dim0], transposedIndices[dim1] = transposedIndices[dim1], transposedIndices[dim0]
-			
-			resultIdx := getIndex(transposedIndices, result.Strides)
-			resultData[resultIdx] = data[i]
+	// Keep a reference to the base tensor to prevent it from being garbage collected
+	// This is critical for view lifecycle management
+	if baseTensor != nil {
+		// Increment reference count of base tensor if it's a GPU tensor
+		if baseTensor.Device == GPU || baseTensor.Device == PersistentGPU {
+			atomic.AddInt32(&baseTensor.refCount, 1)
 		}
-	default:
-		return nil, fmt.Errorf("unsupported dtype for Transpose: %s", t.DType)
 	}
 
 	return result, nil

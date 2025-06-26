@@ -201,9 +201,9 @@ type AddOp struct {
 	inputs []*Tensor
 }
 
-func (op *AddOp) Forward(inputs ...*Tensor) *Tensor {
+func (op *AddOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	if len(inputs) != 2 {
-		panic("AddOp requires exactly 2 inputs")
+		return nil, fmt.Errorf("AddOp requires exactly 2 inputs, got %d", len(inputs))
 	}
 	
 	a, b := inputs[0], inputs[1]
@@ -220,19 +220,19 @@ func (op *AddOp) Forward(inputs ...*Tensor) *Tensor {
 	}
 	
 	if err != nil {
-		panic(fmt.Sprintf("Forward pass failed: %v", err))
+		return nil, fmt.Errorf("AddOp forward pass failed: %v", err)
 	}
 	
 	// Set autograd properties
 	result.creator = op
 	result.requiresGrad = a.requiresGrad || b.requiresGrad
 	
-	return result
+	return result, nil
 }
 
-func (op *AddOp) Backward(gradOut *Tensor) []*Tensor {
+func (op *AddOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 	if len(op.inputs) != 2 {
-		panic("AddOp inputs not properly stored")
+		return nil, fmt.Errorf("AddOp inputs not properly stored, expected 2 got %d", len(op.inputs))
 	}
 	
 	// For addition: gradient flows unchanged to both inputs
@@ -240,15 +240,15 @@ func (op *AddOp) Backward(gradOut *Tensor) []*Tensor {
 	// However, if broadcasting occurred, we need to reduce gradients to original shapes
 	gradA, err := reduceGradientToShape(gradOut, op.inputs[0].Shape)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to reduce gradient for input A: %v", err))
+		return nil, fmt.Errorf("failed to reduce gradient for input A: %v", err)
 	}
 	
 	gradB, err := reduceGradientToShape(gradOut, op.inputs[1].Shape)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to reduce gradient for input B: %v", err))
+		return nil, fmt.Errorf("failed to reduce gradient for input B: %v", err)
 	}
 	
-	return []*Tensor{gradA, gradB}
+	return []*Tensor{gradA, gradB}, nil
 }
 
 // SubOp implements the Operation interface for tensor subtraction
@@ -256,9 +256,9 @@ type SubOp struct {
 	inputs []*Tensor
 }
 
-func (op *SubOp) Forward(inputs ...*Tensor) *Tensor {
+func (op *SubOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	if len(inputs) != 2 {
-		panic("SubOp requires exactly 2 inputs")
+		return nil, fmt.Errorf("SubOp requires exactly 2 inputs, got %d", len(inputs))
 	}
 	
 	a, b := inputs[0], inputs[1]
@@ -267,28 +267,28 @@ func (op *SubOp) Forward(inputs ...*Tensor) *Tensor {
 	// For now, only CPU subtraction is available
 	result, err := Sub(a, b)
 	if err != nil {
-		panic(fmt.Sprintf("Forward pass failed: %v", err))
+		return nil, fmt.Errorf("SubOp forward pass failed: %v", err)
 	}
 	
 	// Set autograd properties
 	result.creator = op
 	result.requiresGrad = a.requiresGrad || b.requiresGrad
 	
-	return result
+	return result, nil
 }
 
-func (op *SubOp) Backward(gradOut *Tensor) []*Tensor {
+func (op *SubOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 	// For subtraction: ∂(a - b)/∂a = 1, ∂(a - b)/∂b = -1
 	// But we need to handle broadcasting by reducing gradients to original shapes
 	gradA, err := reduceGradientToShape(gradOut, op.inputs[0].Shape)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to reduce gradient for input A: %v", err))
+		return nil, fmt.Errorf("failed to reduce gradient for input A: %v", err)
 	}
 	
 	// Create negative gradient for b
 	negGradOut, err := gradOut.Clone()
 	if err != nil {
-		panic(fmt.Sprintf("Failed to clone gradient for negation: %v", err))
+		return nil, fmt.Errorf("failed to clone gradient for negation: %v", err)
 	}
 	
 	switch negGradOut.DType {
@@ -306,10 +306,10 @@ func (op *SubOp) Backward(gradOut *Tensor) []*Tensor {
 	
 	gradB, err := reduceGradientToShape(negGradOut, op.inputs[1].Shape)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to reduce gradient for input B: %v", err))
+		return nil, fmt.Errorf("failed to reduce gradient for input B: %v", err)
 	}
 	
-	return []*Tensor{gradA, gradB}
+	return []*Tensor{gradA, gradB}, nil
 }
 
 // MulOp implements the Operation interface for tensor multiplication
@@ -317,9 +317,9 @@ type MulOp struct {
 	inputs []*Tensor
 }
 
-func (op *MulOp) Forward(inputs ...*Tensor) *Tensor {
+func (op *MulOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	if len(inputs) != 2 {
-		panic("MulOp requires exactly 2 inputs")
+		return nil, fmt.Errorf("MulOp requires exactly 2 inputs, got %d", len(inputs))
 	}
 	
 	a, b := inputs[0], inputs[1]
@@ -328,54 +328,58 @@ func (op *MulOp) Forward(inputs ...*Tensor) *Tensor {
 	// For now, only CPU multiplication is available
 	result, err := Mul(a, b)
 	if err != nil {
-		panic(fmt.Sprintf("Forward pass failed: %v", err))
+		return nil, fmt.Errorf("MulOp forward pass failed: %v", err)
 	}
 	
 	// Set autograd properties
 	result.creator = op
 	result.requiresGrad = a.requiresGrad || b.requiresGrad
 	
-	return result
+	return result, nil
 }
 
-func (op *MulOp) Backward(gradOut *Tensor) []*Tensor {
+func (op *MulOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
+	if len(op.inputs) != 2 {
+		return nil, fmt.Errorf("MulOp inputs not properly stored, expected 2 got %d", len(op.inputs))
+	}
+	
 	a, b := op.inputs[0], op.inputs[1]
 	
 	// For multiplication: ∂(a * b)/∂a = b, ∂(a * b)/∂b = a
 	// Need to broadcast b to gradOut shape first, then multiply
 	bBroadcast, err := BroadcastTensor(b, gradOut.Shape)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to broadcast b for gradA: %v", err))
+		return nil, fmt.Errorf("failed to broadcast b for gradA: %v", err)
 	}
 	
 	gradAFull, err := Mul(gradOut, bBroadcast)
 	if err != nil {
-		panic(fmt.Sprintf("Backward pass failed for gradA: %v", err))
+		return nil, fmt.Errorf("backward pass failed for gradA: %v", err)
 	}
 	
 	// Reduce to original shape of a
 	gradA, err := reduceGradientToShape(gradAFull, a.Shape)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to reduce gradient for input A: %v", err))
+		return nil, fmt.Errorf("failed to reduce gradient for input A: %v", err)
 	}
 	
 	// Same for gradB
 	aBroadcast, err := BroadcastTensor(a, gradOut.Shape)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to broadcast a for gradB: %v", err))
+		return nil, fmt.Errorf("failed to broadcast a for gradB: %v", err)
 	}
 	
 	gradBFull, err := Mul(gradOut, aBroadcast)
 	if err != nil {
-		panic(fmt.Sprintf("Backward pass failed for gradB: %v", err))
+		return nil, fmt.Errorf("backward pass failed for gradB: %v", err)
 	}
 	
 	gradB, err := reduceGradientToShape(gradBFull, b.Shape)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to reduce gradient for input B: %v", err))
+		return nil, fmt.Errorf("failed to reduce gradient for input B: %v", err)
 	}
 	
-	return []*Tensor{gradA, gradB}
+	return []*Tensor{gradA, gradB}, nil
 }
 
 // MatMulOp implements the Operation interface for matrix multiplication
@@ -383,9 +387,9 @@ type MatMulOp struct {
 	inputs []*Tensor
 }
 
-func (op *MatMulOp) Forward(inputs ...*Tensor) *Tensor {
+func (op *MatMulOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	if len(inputs) != 2 {
-		panic("MatMulOp requires exactly 2 inputs")
+		return nil, fmt.Errorf("MatMulOp requires exactly 2 inputs, got %d", len(inputs))
 	}
 	
 	a, b := inputs[0], inputs[1]
@@ -402,23 +406,27 @@ func (op *MatMulOp) Forward(inputs ...*Tensor) *Tensor {
 	}
 	
 	if err != nil {
-		panic(fmt.Sprintf("Forward pass failed: %v", err))
+		return nil, fmt.Errorf("MatMulOp forward pass failed: %v", err)
 	}
 	
 	// Set autograd properties
 	result.creator = op
 	result.requiresGrad = a.requiresGrad || b.requiresGrad
 	
-	return result
+	return result, nil
 }
 
-func (op *MatMulOp) Backward(gradOut *Tensor) []*Tensor {
+func (op *MatMulOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
+	if len(op.inputs) != 2 {
+		return nil, fmt.Errorf("MatMulOp inputs not properly stored, expected 2 got %d", len(op.inputs))
+	}
+	
 	a, b := op.inputs[0], op.inputs[1]
 	
 	// For matrix multiplication: ∂(A @ B)/∂A = gradOut @ B^T, ∂(A @ B)/∂B = A^T @ gradOut
 	bT, err := Transpose(b, 0, 1)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to transpose B: %v", err))
+		return nil, fmt.Errorf("failed to transpose B: %v", err)
 	}
 	
 	var gradA *Tensor
@@ -428,12 +436,12 @@ func (op *MatMulOp) Backward(gradOut *Tensor) []*Tensor {
 		gradA, err = MatMul(gradOut, bT)
 	}
 	if err != nil {
-		panic(fmt.Sprintf("Backward pass failed for gradA: %v", err))
+		return nil, fmt.Errorf("backward pass failed for gradA: %v", err)
 	}
 	
 	aT, err := Transpose(a, 0, 1)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to transpose A: %v", err))
+		return nil, fmt.Errorf("failed to transpose A: %v", err)
 	}
 	
 	var gradB *Tensor
@@ -443,10 +451,10 @@ func (op *MatMulOp) Backward(gradOut *Tensor) []*Tensor {
 		gradB, err = MatMul(aT, gradOut)
 	}
 	if err != nil {
-		panic(fmt.Sprintf("Backward pass failed for gradB: %v", err))
+		return nil, fmt.Errorf("backward pass failed for gradB: %v", err)
 	}
 	
-	return []*Tensor{gradA, gradB}
+	return []*Tensor{gradA, gradB}, nil
 }
 
 // ReLUOp implements the Operation interface for ReLU activation
@@ -454,9 +462,9 @@ type ReLUOp struct {
 	inputs []*Tensor
 }
 
-func (op *ReLUOp) Forward(inputs ...*Tensor) *Tensor {
+func (op *ReLUOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	if len(inputs) != 1 {
-		panic("ReLUOp requires exactly 1 input")
+		return nil, fmt.Errorf("ReLUOp requires exactly 1 input, got %d", len(inputs))
 	}
 	
 	a := inputs[0]
@@ -473,23 +481,27 @@ func (op *ReLUOp) Forward(inputs ...*Tensor) *Tensor {
 	}
 	
 	if err != nil {
-		panic(fmt.Sprintf("Forward pass failed: %v", err))
+		return nil, fmt.Errorf("ReLUOp forward pass failed: %v", err)
 	}
 	
 	// Set autograd properties
 	result.creator = op
 	result.requiresGrad = a.requiresGrad
 	
-	return result
+	return result, nil
 }
 
-func (op *ReLUOp) Backward(gradOut *Tensor) []*Tensor {
+func (op *ReLUOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
+	if len(op.inputs) != 1 {
+		return nil, fmt.Errorf("ReLUOp inputs not properly stored, expected 1 got %d", len(op.inputs))
+	}
+	
 	a := op.inputs[0]
 	
 	// For ReLU: ∂ReLU(x)/∂x = 1 if x > 0, else 0
 	grad, err := gradOut.Clone()
 	if err != nil {
-		panic(fmt.Sprintf("Failed to clone gradient: %v", err))
+		return nil, fmt.Errorf("failed to clone gradient: %v", err)
 	}
 	
 	switch a.DType {
@@ -511,7 +523,7 @@ func (op *ReLUOp) Backward(gradOut *Tensor) []*Tensor {
 		}
 	}
 	
-	return []*Tensor{grad}
+	return []*Tensor{grad}, nil
 }
 
 // SigmoidOp implements the Operation interface for Sigmoid activation
@@ -520,9 +532,9 @@ type SigmoidOp struct {
 	output *Tensor // Store output for backward pass
 }
 
-func (op *SigmoidOp) Forward(inputs ...*Tensor) *Tensor {
+func (op *SigmoidOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	if len(inputs) != 1 {
-		panic("SigmoidOp requires exactly 1 input")
+		return nil, fmt.Errorf("SigmoidOp requires exactly 1 input, got %d", len(inputs))
 	}
 	
 	a := inputs[0]
@@ -539,7 +551,7 @@ func (op *SigmoidOp) Forward(inputs ...*Tensor) *Tensor {
 	}
 	
 	if err != nil {
-		panic(fmt.Sprintf("Forward pass failed: %v", err))
+		return nil, fmt.Errorf("SigmoidOp forward pass failed: %v", err)
 	}
 	
 	// Store output for backward pass
@@ -549,12 +561,16 @@ func (op *SigmoidOp) Forward(inputs ...*Tensor) *Tensor {
 	result.creator = op
 	result.requiresGrad = a.requiresGrad
 	
-	return result
+	return result, nil
 }
 
-func (op *SigmoidOp) Backward(gradOut *Tensor) []*Tensor {
+func (op *SigmoidOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
+	if len(op.inputs) != 1 {
+		return nil, fmt.Errorf("SigmoidOp inputs not properly stored, expected 1 got %d", len(op.inputs))
+	}
+	
 	if op.output == nil {
-		panic("SigmoidOp: output not stored for backward pass")
+		return nil, fmt.Errorf("SigmoidOp: output not stored for backward pass")
 	}
 	
 	// For Sigmoid: ∂σ(x)/∂x = σ(x) * (1 - σ(x))
@@ -563,63 +579,63 @@ func (op *SigmoidOp) Backward(gradOut *Tensor) []*Tensor {
 	// First compute (1 - output)
 	ones, err := Ones(op.output.Shape, op.output.DType, op.output.Device)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to create ones tensor: %v", err))
+		return nil, fmt.Errorf("failed to create ones tensor: %v", err)
 	}
 	
 	oneMinusOutput, err := Sub(ones, op.output)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to compute (1 - output): %v", err))
+		return nil, fmt.Errorf("failed to compute (1 - output): %v", err)
 	}
 	
 	// output * (1 - output)
 	sigmoidGrad, err := Mul(op.output, oneMinusOutput)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to compute sigmoid gradient: %v", err))
+		return nil, fmt.Errorf("failed to compute sigmoid gradient: %v", err)
 	}
 	
 	// gradOut * sigmoidGrad
 	grad, err := Mul(gradOut, sigmoidGrad)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to apply chain rule: %v", err))
+		return nil, fmt.Errorf("failed to apply chain rule: %v", err)
 	}
 	
-	return []*Tensor{grad}
+	return []*Tensor{grad}, nil
 }
 
 // High-level autograd functions that create and execute operations
 
 // AddAutograd performs addition with automatic differentiation
-func AddAutograd(a, b *Tensor) *Tensor {
+func AddAutograd(a, b *Tensor) (*Tensor, error) {
 	op := &AddOp{}
 	return op.Forward(a, b)
 }
 
 // SubAutograd performs subtraction with automatic differentiation
-func SubAutograd(a, b *Tensor) *Tensor {
+func SubAutograd(a, b *Tensor) (*Tensor, error) {
 	op := &SubOp{}
 	return op.Forward(a, b)
 }
 
 // MulAutograd performs multiplication with automatic differentiation
-func MulAutograd(a, b *Tensor) *Tensor {
+func MulAutograd(a, b *Tensor) (*Tensor, error) {
 	op := &MulOp{}
 	return op.Forward(a, b)
 }
 
 // MatMulAutograd performs matrix multiplication with automatic differentiation
-func MatMulAutograd(a, b *Tensor) *Tensor {
+func MatMulAutograd(a, b *Tensor) (*Tensor, error) {
 	op := &MatMulOp{}
 	return op.Forward(a, b)
 }
 
 // ReLUAutograd performs ReLU activation with automatic differentiation
-func ReLUAutograd(a *Tensor) *Tensor {
+func ReLUAutograd(a *Tensor) (*Tensor, error) {
 	op := &ReLUOp{}
 	return op.Forward(a)
 }
 
 // SigmoidAutograd performs Sigmoid activation with automatic differentiation
-func SigmoidAutograd(a *Tensor) *Tensor {
+func SigmoidAutograd(a *Tensor) (*Tensor, error) {
 	op := &SigmoidOp{}
 	return op.Forward(a)
 }

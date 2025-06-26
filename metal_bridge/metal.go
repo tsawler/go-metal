@@ -37,6 +37,7 @@ var (
 // Wrapper struct for MTLDevice
 type Device struct {
 	c_device C.MTLDeviceRef
+	released int32 // atomic flag to prevent double-release
 }
 
 func CreateSystemDefaultDevice() *Device {
@@ -46,14 +47,25 @@ func CreateSystemDefaultDevice() *Device {
 	}
 	dev := &Device{c_device: c_dev}
 	runtime.SetFinalizer(dev, func(d *Device) {
-		C.ReleaseMetalObject(unsafe.Pointer(d.c_device))
+		d.safeRelease()
 	})
 	return dev
+}
+
+// safeRelease safely releases the Device using atomic operations
+func (d *Device) safeRelease() {
+	if atomic.CompareAndSwapInt32(&d.released, 0, 1) {
+		if d.c_device != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(d.c_device))
+			d.c_device = nil
+		}
+	}
 }
 
 // Wrapper struct for MTLCommandQueue
 type CommandQueue struct {
 	c_queue C.MTLCommandQueueRef
+	released int32 // atomic flag to prevent double-release
 }
 
 func (d *Device) NewCommandQueue() *CommandQueue {
@@ -63,9 +75,19 @@ func (d *Device) NewCommandQueue() *CommandQueue {
 	}
 	q := &CommandQueue{c_queue: c_q}
 	runtime.SetFinalizer(q, func(cq *CommandQueue) {
-		C.ReleaseMetalObject(unsafe.Pointer(cq.c_queue))
+		cq.safeRelease()
 	})
 	return q
+}
+
+// safeRelease safely releases the CommandQueue using atomic operations
+func (cq *CommandQueue) safeRelease() {
+	if atomic.CompareAndSwapInt32(&cq.released, 0, 1) {
+		if cq.c_queue != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(cq.c_queue))
+			cq.c_queue = nil
+		}
+	}
 }
 
 // Wrapper struct for MTLBuffer
@@ -75,6 +97,7 @@ type Buffer struct {
 	inUse     bool    // Whether buffer is currently in use
 	refCount  int32   // Reference count for lifetime management
 	allocator *BufferAllocator // Reference to allocator for release
+	released  int32   // atomic flag to prevent double-release
 }
 
 func (d *Device) CreateBufferWithBytes(data interface{}, options C.size_t) (*Buffer, error) {
@@ -207,12 +230,15 @@ func (b *Buffer) RefCount() int32 {
 
 // releaseNow immediately releases the Metal buffer without going through allocator
 func (b *Buffer) releaseNow() {
-	if b.c_buffer != nil {
-		C.ReleaseMetalObject(unsafe.Pointer(b.c_buffer))
-		b.c_buffer = nil
+	// Use atomic CAS to ensure we only release once
+	if atomic.CompareAndSwapInt32(&b.released, 0, 1) {
+		if b.c_buffer != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(b.c_buffer))
+			b.c_buffer = nil
+		}
+		b.inUse = false
+		atomic.StoreInt32(&b.refCount, 0)
 	}
-	b.inUse = false
-	atomic.StoreInt32(&b.refCount, 0)
 }
 
 // finalize is called by Go's finalizer when buffer is garbage collected
@@ -229,6 +255,7 @@ func (b *Buffer) finalize() {
 // Wrapper struct for MTLLibrary
 type Library struct {
 	c_library C.MTLLibraryRef
+	released  int32 // atomic flag to prevent double-release
 }
 
 func (d *Device) CreateLibraryWithSource(source string) (*Library, error) {
@@ -242,14 +269,25 @@ func (d *Device) CreateLibraryWithSource(source string) (*Library, error) {
 	C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_lib)))
 	lib := &Library{c_library: c_lib}
 	runtime.SetFinalizer(lib, func(l *Library) {
-		C.ReleaseMetalObject(unsafe.Pointer(l.c_library))
+		l.safeRelease()
 	})
 	return lib, nil
+}
+
+// safeRelease safely releases the Library using atomic operations
+func (l *Library) safeRelease() {
+	if atomic.CompareAndSwapInt32(&l.released, 0, 1) {
+		if l.c_library != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(l.c_library))
+			l.c_library = nil
+		}
+	}
 }
 
 // Wrapper struct for MTLFunction
 type Function struct {
 	c_function C.MTLFunctionRef
+	released   int32 // atomic flag to prevent double-release
 }
 
 func (l *Library) GetFunction(functionName string) (*Function, error) {
@@ -263,14 +301,25 @@ func (l *Library) GetFunction(functionName string) (*Function, error) {
 	C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_func)))
 	function := &Function{c_function: c_func}
 	runtime.SetFinalizer(function, func(f *Function) {
-		C.ReleaseMetalObject(unsafe.Pointer(f.c_function))
+		f.safeRelease()
 	})
 	return function, nil
+}
+
+// safeRelease safely releases the Function using atomic operations
+func (f *Function) safeRelease() {
+	if atomic.CompareAndSwapInt32(&f.released, 0, 1) {
+		if f.c_function != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(f.c_function))
+			f.c_function = nil
+		}
+	}
 }
 
 // Wrapper for MTLComputePipelineState
 type ComputePipelineState struct {
 	c_pipelineState C.MTLComputePipelineStateRef
+	released        int32 // atomic flag to prevent double-release
 }
 
 func (d *Device) NewComputePipelineStateWithFunction(function *Function) (*ComputePipelineState, error) {
@@ -281,9 +330,19 @@ func (d *Device) NewComputePipelineStateWithFunction(function *Function) (*Compu
 	C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_ps)))
 	ps := &ComputePipelineState{c_pipelineState: c_ps}
 	runtime.SetFinalizer(ps, func(p *ComputePipelineState) {
-		C.ReleaseMetalObject(unsafe.Pointer(p.c_pipelineState))
+		p.safeRelease()
 	})
 	return ps, nil
+}
+
+// safeRelease safely releases the ComputePipelineState using atomic operations
+func (ps *ComputePipelineState) safeRelease() {
+	if atomic.CompareAndSwapInt32(&ps.released, 0, 1) {
+		if ps.c_pipelineState != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(ps.c_pipelineState))
+			ps.c_pipelineState = nil
+		}
+	}
 }
 
 // Wrapper for MTLCommandBuffer
@@ -292,6 +351,7 @@ type CommandBuffer struct {
 	// Keep a reference to resources that must stay alive until completion,
 	// e.g., source Go slices for buffers, completion handler context.
 	retainedResources []interface{}
+	released          int32 // atomic flag to prevent double-release
 }
 
 func (q *CommandQueue) CommandBuffer() *CommandBuffer {
@@ -303,14 +363,25 @@ func (q *CommandQueue) CommandBuffer() *CommandBuffer {
 	C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_cb)))
 	cb := &CommandBuffer{c_commandBuffer: c_cb}
 	runtime.SetFinalizer(cb, func(b *CommandBuffer) {
-		C.ReleaseMetalObject(unsafe.Pointer(b.c_commandBuffer))
+		b.safeRelease()
 	})
 	return cb
+}
+
+// safeRelease safely releases the CommandBuffer using atomic operations
+func (cb *CommandBuffer) safeRelease() {
+	if atomic.CompareAndSwapInt32(&cb.released, 0, 1) {
+		if cb.c_commandBuffer != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(cb.c_commandBuffer))
+			cb.c_commandBuffer = nil
+		}
+	}
 }
 
 // Wrapper for MTLComputeCommandEncoder
 type ComputeCommandEncoder struct {
 	c_encoder C.MTLComputeCommandEncoderRef
+	released  int32 // atomic flag to prevent double-release
 }
 
 func (cb *CommandBuffer) ComputeCommandEncoder() *ComputeCommandEncoder {
@@ -323,7 +394,7 @@ func (cb *CommandBuffer) ComputeCommandEncoder() *ComputeCommandEncoder {
 	C.CFRetain((C.CFTypeRef)(unsafe.Pointer(c_encoder)))
 	encoder := &ComputeCommandEncoder{c_encoder: c_encoder}
 	runtime.SetFinalizer(encoder, func(e *ComputeCommandEncoder) {
-		C.ReleaseMetalObject(unsafe.Pointer(e.c_encoder))
+		e.safeRelease()
 	})
 	return encoder
 }
@@ -344,10 +415,19 @@ func (e *ComputeCommandEncoder) DispatchThreads(gridSize, threadgroupSize MTLSiz
 
 func (e *ComputeCommandEncoder) EndEncoding() {
 	C.EndEncoding(e.c_encoder)
-	// After EndEncoding, the encoder is no longer needed. Release it immediately.
-	// This assumes the encoder itself doesn't hold strong references to command buffer.
-	C.ReleaseMetalObject(unsafe.Pointer(e.c_encoder))
-	e.c_encoder = nil // Clear the C pointer
+	// Don't manually release here to avoid race with finalizer
+	// The encoder will be cleaned up when Go GC runs the finalizer
+}
+
+// safeRelease safely releases the encoder using atomic operations
+func (e *ComputeCommandEncoder) safeRelease() {
+	// Use atomic CAS to ensure we only release once
+	if atomic.CompareAndSwapInt32(&e.released, 0, 1) {
+		if e.c_encoder != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(e.c_encoder))
+			e.c_encoder = nil
+		}
+	}
 }
 
 func (cb *CommandBuffer) Commit() {
@@ -388,12 +468,14 @@ func (cb *CommandBuffer) AddCompletedHandler(handler func(status int)) {
 
 // Wrapper struct for MPSGraph  
 type Graph struct {
-	c_graph C.MPSGraphRef
+	c_graph  C.MPSGraphRef
+	released int32 // atomic flag to prevent double-release
 }
 
 // Wrapper struct for MPSGraphDevice
 type GraphDevice struct {
 	c_device C.MPSGraphDeviceRef
+	released int32 // atomic flag to prevent double-release
 }
 
 func NewGraph() *Graph {
@@ -403,9 +485,19 @@ func NewGraph() *Graph {
 	}
 	graph := &Graph{c_graph: c_graph}
 	runtime.SetFinalizer(graph, func(g *Graph) {
-		C.ReleaseMetalObject(unsafe.Pointer(g.c_graph))
+		g.safeRelease()
 	})
 	return graph
+}
+
+// safeRelease safely releases the Graph using atomic operations
+func (g *Graph) safeRelease() {
+	if atomic.CompareAndSwapInt32(&g.released, 0, 1) {
+		if g.c_graph != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(g.c_graph))
+			g.c_graph = nil
+		}
+	}
 }
 
 func NewGraphDevice(device *Device) *GraphDevice {
@@ -415,9 +507,19 @@ func NewGraphDevice(device *Device) *GraphDevice {
 	}
 	graphDevice := &GraphDevice{c_device: c_device}
 	runtime.SetFinalizer(graphDevice, func(gd *GraphDevice) {
-		C.ReleaseMetalObject(unsafe.Pointer(gd.c_device))
+		gd.safeRelease()
 	})
 	return graphDevice
+}
+
+// safeRelease safely releases the GraphDevice using atomic operations
+func (gd *GraphDevice) safeRelease() {
+	if atomic.CompareAndSwapInt32(&gd.released, 0, 1) {
+		if gd.c_device != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(gd.c_device))
+			gd.c_device = nil
+		}
+	}
 }
 
 // Wrapper struct for MPSGraphTensor
@@ -425,6 +527,7 @@ type GraphTensor struct {
 	c_tensor C.MPSGraphTensorRef
 	shape    []int
 	dataType int
+	released int32 // atomic flag to prevent double-release
 }
 
 func (g *Graph) PlaceholderTensor(shape []int, dataType int) *GraphTensor {
@@ -444,7 +547,7 @@ func (g *Graph) PlaceholderTensor(shape []int, dataType int) *GraphTensor {
 		dataType: dataType,
 	}
 	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return tensor
 }
@@ -466,9 +569,19 @@ func (g *Graph) ConstantTensor(value float64, shape []int, dataType int) *GraphT
 		dataType: dataType,
 	}
 	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return tensor
+}
+
+// safeRelease safely releases the GraphTensor using atomic operations
+func (gt *GraphTensor) safeRelease() {
+	if atomic.CompareAndSwapInt32(&gt.released, 0, 1) {
+		if gt.c_tensor != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(gt.c_tensor))
+			gt.c_tensor = nil
+		}
+	}
 }
 
 // MPSGraph operations
@@ -484,7 +597,7 @@ func (g *Graph) Addition(primaryTensor, secondaryTensor *GraphTensor) *GraphTens
 		dataType: primaryTensor.dataType,
 	}
 	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return tensor
 }
@@ -501,7 +614,7 @@ func (g *Graph) Subtraction(primaryTensor, secondaryTensor *GraphTensor) *GraphT
 		dataType: primaryTensor.dataType,
 	}
 	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return tensor
 }
@@ -518,7 +631,7 @@ func (g *Graph) Multiplication(primaryTensor, secondaryTensor *GraphTensor) *Gra
 		dataType: primaryTensor.dataType,
 	}
 	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return tensor
 }
@@ -535,7 +648,7 @@ func (g *Graph) Division(primaryTensor, secondaryTensor *GraphTensor) *GraphTens
 		dataType: primaryTensor.dataType,
 	}
 	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return tensor
 }
@@ -560,7 +673,7 @@ func (g *Graph) MatrixMultiplication(primaryTensor, secondaryTensor *GraphTensor
 		dataType: primaryTensor.dataType,
 	}
 	runtime.SetFinalizer(tensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return tensor
 }
@@ -577,7 +690,7 @@ func (g *Graph) ReLU(tensor *GraphTensor) *GraphTensor {
 		dataType: tensor.dataType,
 	}
 	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return resultTensor
 }
@@ -594,7 +707,7 @@ func (g *Graph) Sigmoid(tensor *GraphTensor) *GraphTensor {
 		dataType: tensor.dataType,
 	}
 	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return resultTensor
 }
@@ -611,7 +724,7 @@ func (g *Graph) Softmax(tensor *GraphTensor, axis int) *GraphTensor {
 		dataType: tensor.dataType,
 	}
 	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return resultTensor
 }
@@ -635,7 +748,7 @@ func (g *Graph) Transpose(tensor *GraphTensor, dimension, dimensionTwo int) *Gra
 		dataType: tensor.dataType,
 	}
 	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return resultTensor
 }
@@ -657,7 +770,7 @@ func (g *Graph) Reshape(tensor *GraphTensor, shape []int) *GraphTensor {
 		dataType: tensor.dataType,
 	}
 	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return resultTensor
 }
@@ -702,7 +815,7 @@ func (g *Graph) Conv2D(source, weights, bias *GraphTensor, strideX, strideY, dil
 		dataType: source.dataType,
 	}
 	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return resultTensor
 }
@@ -739,7 +852,7 @@ func (g *Graph) MaxPool2D(source *GraphTensor, kernelWidth, kernelHeight, stride
 		dataType: source.dataType,
 	}
 	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return resultTensor
 }
@@ -776,7 +889,7 @@ func (g *Graph) AvgPool2D(source *GraphTensor, kernelWidth, kernelHeight, stride
 		dataType: source.dataType,
 	}
 	runtime.SetFinalizer(resultTensor, func(t *GraphTensor) {
-		C.ReleaseMetalObject(unsafe.Pointer(t.c_tensor))
+		t.safeRelease()
 	})
 	return resultTensor
 }
@@ -784,14 +897,17 @@ func (g *Graph) AvgPool2D(source *GraphTensor, kernelWidth, kernelHeight, stride
 // Wrapper structs for MPSGraph execution
 type GraphExecutable struct {
 	c_executable C.MPSGraphExecutableRef
+	released     int32 // atomic flag to prevent double-release
 }
 
 type GraphExecutionDescriptor struct {
 	c_descriptor C.MPSGraphExecutionDescriptorRef
+	released     int32 // atomic flag to prevent double-release
 }
 
 type GraphCompilationDescriptor struct {
 	c_descriptor C.MPSGraphCompilationDescriptorRef
+	released     int32 // atomic flag to prevent double-release
 }
 
 func NewGraphExecutionDescriptor() *GraphExecutionDescriptor {
@@ -801,9 +917,19 @@ func NewGraphExecutionDescriptor() *GraphExecutionDescriptor {
 	}
 	descriptor := &GraphExecutionDescriptor{c_descriptor: c_descriptor}
 	runtime.SetFinalizer(descriptor, func(d *GraphExecutionDescriptor) {
-		C.ReleaseMetalObject(unsafe.Pointer(d.c_descriptor))
+		d.safeRelease()
 	})
 	return descriptor
+}
+
+// safeRelease safely releases the GraphExecutionDescriptor using atomic operations
+func (gd *GraphExecutionDescriptor) safeRelease() {
+	if atomic.CompareAndSwapInt32(&gd.released, 0, 1) {
+		if gd.c_descriptor != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(gd.c_descriptor))
+			gd.c_descriptor = nil
+		}
+	}
 }
 
 func NewGraphCompilationDescriptor() *GraphCompilationDescriptor {
@@ -813,9 +939,19 @@ func NewGraphCompilationDescriptor() *GraphCompilationDescriptor {
 	}
 	descriptor := &GraphCompilationDescriptor{c_descriptor: c_descriptor}
 	runtime.SetFinalizer(descriptor, func(d *GraphCompilationDescriptor) {
-		C.ReleaseMetalObject(unsafe.Pointer(d.c_descriptor))
+		d.safeRelease()
 	})
 	return descriptor
+}
+
+// safeRelease safely releases the GraphCompilationDescriptor using atomic operations
+func (gcd *GraphCompilationDescriptor) safeRelease() {
+	if atomic.CompareAndSwapInt32(&gcd.released, 0, 1) {
+		if gcd.c_descriptor != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(gcd.c_descriptor))
+			gcd.c_descriptor = nil
+		}
+	}
 }
 
 func (g *Graph) Compile(device *GraphDevice, inputTensors []*GraphTensor, targetTensors []*GraphTensor, compilationDescriptor *GraphCompilationDescriptor) *GraphExecutable {
@@ -848,9 +984,19 @@ func (g *Graph) Compile(device *GraphDevice, inputTensors []*GraphTensor, target
 	
 	executable := &GraphExecutable{c_executable: c_executable}
 	runtime.SetFinalizer(executable, func(e *GraphExecutable) {
-		C.ReleaseMetalObject(unsafe.Pointer(e.c_executable))
+		e.safeRelease()
 	})
 	return executable
+}
+
+// safeRelease safely releases the GraphExecutable using atomic operations
+func (ge *GraphExecutable) safeRelease() {
+	if atomic.CompareAndSwapInt32(&ge.released, 0, 1) {
+		if ge.c_executable != nil {
+			C.ReleaseMetalObject(unsafe.Pointer(ge.c_executable))
+			ge.c_executable = nil
+		}
+	}
 }
 
 func (e *GraphExecutable) Execute(commandQueue *CommandQueue, inputTensors []*GraphTensor, inputBuffers []*Buffer, resultTensors []*GraphTensor, resultBuffers []*Buffer, executionDescriptor *GraphExecutionDescriptor) {

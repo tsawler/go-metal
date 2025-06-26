@@ -111,7 +111,12 @@ void ReleaseMetalObject(void* obj) {
     // where explicit release isn't needed. However, when you 'own' the reference from Go,
     // you must release it. `CFRelease` is the safest way to release `id` from C.
     if (obj) {
-        CFRelease((__bridge CFTypeRef)obj); // Requires CoreFoundation
+        @try {
+            CFRelease((__bridge CFTypeRef)obj);
+        } @catch (NSException *exception) {
+            // Ignore exceptions during release - object may already be deallocated
+            NSLog(@"Warning: Exception during ReleaseMetalObject: %@", exception);
+        }
     }
 }
 
