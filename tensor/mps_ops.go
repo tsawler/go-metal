@@ -66,7 +66,11 @@ func GetMPSGraphEngine() (*MPSGraphEngine, error) {
 func generateCacheKey(opName string, tensors ...*Tensor) string {
 	key := opName
 	for _, t := range tensors {
-		key += fmt.Sprintf(":%s:%v", t.DType, t.Shape)
+		if t == nil {
+			key += ":nil"
+		} else {
+			key += fmt.Sprintf(":%s:%v", t.DType, t.Shape)
+		}
 	}
 	return key
 }
