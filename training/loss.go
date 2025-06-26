@@ -121,7 +121,19 @@ func (mse *MSELoss) sumAllElements(t *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("sumAllElements only supports Float32 tensors")
 	}
 	
-	data := t.Data.([]float32)
+	// Handle PersistentGPU tensors by converting to CPU first
+	var workingTensor *tensor.Tensor
+	var err error
+	if t.Device == tensor.PersistentGPU || (t.Device == tensor.GPU && t.Data == nil) {
+		workingTensor, err = t.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert tensor to CPU for sum: %v", err)
+		}
+	} else {
+		workingTensor = t
+	}
+	
+	data := workingTensor.Data.([]float32)
 	var sum float32
 	for _, val := range data {
 		sum += val
@@ -215,9 +227,31 @@ func (ce *CrossEntropyLoss) Backward(predicted, target *tensor.Tensor) (*tensor.
 		return nil, fmt.Errorf("gradient initialization failed: %v", err)
 	}
 	
+	// Handle PersistentGPU tensors by converting to CPU first
+	var workingGrad *tensor.Tensor
+	var workingTarget *tensor.Tensor
+	
+	if grad.Device == tensor.PersistentGPU || (grad.Device == tensor.GPU && grad.Data == nil) {
+		workingGrad, err = grad.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert grad to CPU for backward: %v", err)
+		}
+	} else {
+		workingGrad = grad
+	}
+	
+	if target.Device == tensor.PersistentGPU || (target.Device == tensor.GPU && target.Data == nil) {
+		workingTarget, err = target.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert target to CPU for backward: %v", err)
+		}
+	} else {
+		workingTarget = target
+	}
+	
 	// Subtract 1 from the true class probabilities
-	gradData := grad.Data.([]float32)
-	targetData := target.Data.([]int32)
+	gradData := workingGrad.Data.([]float32)
+	targetData := workingTarget.Data.([]int32)
 	
 	for i := 0; i < batchSize; i++ {
 		targetClass := targetData[i]
@@ -229,19 +263,31 @@ func (ce *CrossEntropyLoss) Backward(predicted, target *tensor.Tensor) (*tensor.
 		gradData[gradIdx] -= 1.0
 	}
 	
+	// If we had to convert to CPU, create a new tensor with the modified data
+	var finalGrad *tensor.Tensor
+	if workingGrad != grad {
+		// Create a new tensor with the modified data on the original device
+		finalGrad, err = tensor.NewTensor(grad.Shape, grad.DType, grad.Device, workingGrad.Data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create result gradient tensor: %v", err)
+		}
+	} else {
+		finalGrad = grad
+	}
+	
 	// Apply reduction scaling
 	if ce.reduction == "mean" {
 		n := float64(batchSize)
-		meanScale := tensor.FromScalar(1.0/n, grad.DType, grad.Device)
+		meanScale := tensor.FromScalar(1.0/n, finalGrad.DType, finalGrad.Device)
 		
-		grad, err = tensor.Mul(grad, meanScale)
+		finalGrad, err = tensor.Mul(finalGrad, meanScale)
 		
 		if err != nil {
 			return nil, fmt.Errorf("gradient mean computation failed: %v", err)
 		}
 	}
 	
-	return grad, nil
+	return finalGrad, nil
 }
 
 // softmax applies softmax activation to predicted logits
@@ -253,7 +299,19 @@ func (ce *CrossEntropyLoss) softmax(logits *tensor.Tensor) (*tensor.Tensor, erro
 	batchSize := logits.Shape[0]
 	numClasses := logits.Shape[1]
 	
-	data := logits.Data.([]float32)
+	// Handle PersistentGPU tensors by converting to CPU first
+	var workingTensor *tensor.Tensor
+	var err error
+	if logits.Device == tensor.PersistentGPU || (logits.Device == tensor.GPU && logits.Data == nil) {
+		workingTensor, err = logits.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert logits to CPU for softmax: %v", err)
+		}
+	} else {
+		workingTensor = logits
+	}
+	
+	data := workingTensor.Data.([]float32)
 	result := make([]float32, len(data))
 	
 	// Apply softmax row by row (for each sample in the batch)
@@ -287,8 +345,31 @@ func (ce *CrossEntropyLoss) softmax(logits *tensor.Tensor) (*tensor.Tensor, erro
 
 // negativeLogLikelihood computes the negative log likelihood
 func (ce *CrossEntropyLoss) negativeLogLikelihood(probs *tensor.Tensor, target *tensor.Tensor, batchSize, numClasses int) (*tensor.Tensor, error) {
-	probsData := probs.Data.([]float32)
-	targetData := target.Data.([]int32)
+	// Handle PersistentGPU tensors by converting to CPU first
+	var workingProbs *tensor.Tensor
+	var workingTarget *tensor.Tensor
+	var err error
+	
+	if probs.Device == tensor.PersistentGPU || (probs.Device == tensor.GPU && probs.Data == nil) {
+		workingProbs, err = probs.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert probs to CPU for NLL: %v", err)
+		}
+	} else {
+		workingProbs = probs
+	}
+	
+	if target.Device == tensor.PersistentGPU || (target.Device == tensor.GPU && target.Data == nil) {
+		workingTarget, err = target.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert target to CPU for NLL: %v", err)
+		}
+	} else {
+		workingTarget = target
+	}
+	
+	probsData := workingProbs.Data.([]float32)
+	targetData := workingTarget.Data.([]int32)
 	
 	var totalLoss float32
 	

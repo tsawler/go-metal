@@ -30,7 +30,8 @@ type DeviceType int
 
 const (
 	CPU DeviceType = iota
-	GPU
+	GPU           // Temporary GPU tensors - copy results back to CPU
+	PersistentGPU // Persistent GPU tensors - keep results on GPU across operations
 )
 
 func (d DeviceType) String() string {
@@ -39,6 +40,8 @@ func (d DeviceType) String() string {
 		return "CPU"
 	case GPU:
 		return "GPU"
+	case PersistentGPU:
+		return "PersistentGPU"
 	default:
 		return "Unknown"
 	}
@@ -256,7 +259,7 @@ func getSizeForDType(dtype DType) int {
 
 // Retain increments the reference count for GPU tensors
 func (t *Tensor) Retain() {
-	if t.Device == GPU && t.gpuBuffer != nil {
+	if (t.Device == GPU || t.Device == PersistentGPU) && t.gpuBuffer != nil {
 		atomic.AddInt32(&t.refCount, 1)
 		// Also retain the underlying buffer if it supports it
 		if buffer, ok := t.gpuBuffer.(interface{ Retain() }); ok {
@@ -267,7 +270,7 @@ func (t *Tensor) Retain() {
 
 // Release decrements the reference count and releases GPU buffer when count reaches zero
 func (t *Tensor) Release() {
-	if t.Device == GPU && t.gpuBuffer != nil {
+	if (t.Device == GPU || t.Device == PersistentGPU) && t.gpuBuffer != nil {
 		newCount := atomic.AddInt32(&t.refCount, -1)
 		
 		// Also release the underlying buffer if it supports it
@@ -285,7 +288,7 @@ func (t *Tensor) Release() {
 
 // RefCount returns the current reference count for GPU tensors
 func (t *Tensor) RefCount() int32 {
-	if t.Device == GPU {
+	if t.Device == GPU || t.Device == PersistentGPU {
 		return atomic.LoadInt32(&t.refCount)
 	}
 	return 0
@@ -293,15 +296,30 @@ func (t *Tensor) RefCount() int32 {
 
 // SetGPUBuffer sets the GPU buffer for this tensor and initializes reference counting
 func (t *Tensor) SetGPUBuffer(buffer interface{}) {
-	if t.Device == GPU {
+	if t.Device == GPU || t.Device == PersistentGPU {
 		t.gpuBuffer = buffer
 		atomic.StoreInt32(&t.refCount, 1)
 	}
 }
 
+// ToPersistentGPU converts a CPU tensor to persistent GPU tensor that stays on GPU
+func (t *Tensor) ToPersistentGPU() (*Tensor, error) {
+	return t.ToDevice(PersistentGPU)
+}
+
+// IsOnGPU returns true if tensor is on any GPU device
+func (t *Tensor) IsOnGPU() bool {
+	return t.Device == GPU || t.Device == PersistentGPU
+}
+
+// IsPersistent returns true if tensor stays on GPU across operations
+func (t *Tensor) IsPersistent() bool {
+	return t.Device == PersistentGPU
+}
+
 // GetGPUBuffer returns the GPU buffer for this tensor
 func (t *Tensor) GetGPUBuffer() interface{} {
-	if t.Device == GPU {
+	if t.Device == GPU || t.Device == PersistentGPU {
 		return t.gpuBuffer
 	}
 	return nil

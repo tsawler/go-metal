@@ -52,6 +52,15 @@ func NewTrainer(model Module, optimizer Optimizer, criterion Loss, config Traini
 func (t *Trainer) Train(trainLoader, validLoader *DataLoader) error {
 	fmt.Printf("Starting training for %d epochs on %s\n", t.config.Epochs, t.config.Device)
 	
+	// Move model parameters to PersistentGPU if using GPU training
+	if t.config.Device == tensor.PersistentGPU {
+		err := t.moveModelToPersistentGPU()
+		if err != nil {
+			return fmt.Errorf("failed to move model to persistent GPU: %v", err)
+		}
+		fmt.Println("Model parameters moved to persistent GPU for optimal training performance")
+	}
+	
 	bestValidLoss := float64(1e10)
 	patienceCounter := 0
 	
@@ -125,8 +134,14 @@ func (t *Trainer) trainEpoch(trainLoader *DataLoader, epoch int) (float64, float
 		// Zero gradients
 		t.optimizer.ZeroGrad()
 		
+		// Ensure input data is on the same device as model
+		input, err := t.ensureDeviceMatch(batch.Data)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("failed to match input device to model: %v", err)
+		}
+		
 		// Forward pass
-		output, err := t.model.Forward(batch.Data)
+		output, err := t.model.Forward(input)
 		if err != nil {
 			return 0, 0, 0, fmt.Errorf("forward pass failed: %v", err)
 		}
@@ -206,8 +221,14 @@ func (t *Trainer) validateEpoch(validLoader *DataLoader, epoch int) (float64, fl
 	var totalSamples int
 	
 	for batch := range validLoader.Iterator() {
+		// Ensure input data is on the same device as model
+		input, err := t.ensureDeviceMatch(batch.Data)
+		if err != nil {
+			return 0, 0, fmt.Errorf("failed to match input device to model: %v", err)
+		}
+		
 		// Forward pass (no gradients needed)
-		output, err := t.model.Forward(batch.Data)
+		output, err := t.model.Forward(input)
 		if err != nil {
 			return 0, 0, fmt.Errorf("validation forward pass failed: %v", err)
 		}
@@ -326,8 +347,14 @@ func (t *Trainer) Evaluate(dataLoader *DataLoader) (float64, float64, error) {
 	var totalSamples int
 	
 	for batch := range dataLoader.Iterator() {
+		// Ensure input data is on the same device as model
+		input, err := t.ensureDeviceMatch(batch.Data)
+		if err != nil {
+			return 0, 0, fmt.Errorf("failed to match input device to model: %v", err)
+		}
+		
 		// Forward pass
-		output, err := t.model.Forward(batch.Data)
+		output, err := t.model.Forward(input)
 		if err != nil {
 			return 0, 0, fmt.Errorf("evaluation forward pass failed: %v", err)
 		}
@@ -380,6 +407,13 @@ func (t *Trainer) Evaluate(dataLoader *DataLoader) (float64, float64, error) {
 // Predict runs inference on a single batch
 func (t *Trainer) Predict(input *tensor.Tensor) (*tensor.Tensor, error) {
 	t.model.Eval()
+	
+	// Ensure input data is on the same device as model
+	input, err := t.ensureDeviceMatch(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to match input device to model: %v", err)
+	}
+	
 	return t.model.Forward(input)
 }
 
@@ -395,4 +429,51 @@ func (t *Trainer) LoadCheckpoint(filepath string) error {
 	// This is a placeholder for model deserialization
 	// In a full implementation, this would load model parameters from disk
 	return fmt.Errorf("checkpoint loading not implemented yet")
+}
+
+// moveModelToPersistentGPU moves all model parameters to PersistentGPU
+func (t *Trainer) moveModelToPersistentGPU() error {
+	params := t.model.Parameters()
+	for i, param := range params {
+		if param.Device != tensor.PersistentGPU {
+			persistentParam, err := param.ToPersistentGPU()
+			if err != nil {
+				return fmt.Errorf("failed to move parameter %d to persistent GPU: %v", i, err)
+			}
+			// Update the parameter in place
+			*param = *persistentParam
+		}
+	}
+	return nil
+}
+
+// GetModelDevice returns the device type of the first model parameter
+func (t *Trainer) GetModelDevice() tensor.DeviceType {
+	params := t.model.Parameters()
+	if len(params) > 0 {
+		return params[0].Device
+	}
+	return tensor.CPU
+}
+
+// ensureDeviceMatch ensures input tensor is on the same device as the model
+func (t *Trainer) ensureDeviceMatch(input *tensor.Tensor) (*tensor.Tensor, error) {
+	modelDevice := t.GetModelDevice()
+	
+	// If input is already on the correct device, return as-is
+	if input.Device == modelDevice {
+		return input, nil
+	}
+	
+	// Transfer input to match model device
+	switch modelDevice {
+	case tensor.PersistentGPU:
+		return input.ToPersistentGPU()
+	case tensor.GPU:
+		return input.ToGPU()
+	case tensor.CPU:
+		return input.ToCPU()
+	default:
+		return input, nil
+	}
 }

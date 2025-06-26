@@ -169,6 +169,16 @@ func (dl *DataLoader) loadBatch(indices []int, batchSize int) (*Batch, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to transfer batch labels to GPU: %v", err)
 		}
+	} else if dl.device == tensor.PersistentGPU {
+		batchData, err = batchData.ToPersistentGPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to transfer batch data to persistent GPU: %v", err)
+		}
+		
+		batchLabels, err = batchLabels.ToPersistentGPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to transfer batch labels to persistent GPU: %v", err)
+		}
 	}
 	
 	return &Batch{

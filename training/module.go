@@ -35,10 +35,25 @@ func NewLinear(inputSize, outputSize int, bias bool, device tensor.DeviceType) (
 		weightData[i] = float32((rand.Float64()*2.0 - 1.0) * bound)
 	}
 	
-	weight, err := tensor.NewTensor([]int{outputSize, inputSize}, tensor.Float32, device, weightData)
+	// Create weight tensor on CPU first, then transfer to target device
+	weight, err := tensor.NewTensor([]int{outputSize, inputSize}, tensor.Float32, tensor.CPU, weightData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create weight tensor: %v", err)
 	}
+	
+	// Transfer to target device if needed
+	if device == tensor.PersistentGPU {
+		weight, err = weight.ToPersistentGPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to transfer weight to persistent GPU: %v", err)
+		}
+	} else if device == tensor.GPU {
+		weight, err = weight.ToGPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to transfer weight to GPU: %v", err)
+		}
+	}
+	
 	weight.SetRequiresGrad(true)
 	
 	linear := &Linear{
@@ -49,10 +64,24 @@ func NewLinear(inputSize, outputSize int, bias bool, device tensor.DeviceType) (
 	if bias {
 		// Initialize bias to zeros
 		biasData := make([]float32, outputSize)
-		biasT, err := tensor.NewTensor([]int{outputSize}, tensor.Float32, device, biasData)
+		biasT, err := tensor.NewTensor([]int{outputSize}, tensor.Float32, tensor.CPU, biasData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bias tensor: %v", err)
 		}
+		
+		// Transfer bias to target device if needed
+		if device == tensor.PersistentGPU {
+			biasT, err = biasT.ToPersistentGPU()
+			if err != nil {
+				return nil, fmt.Errorf("failed to transfer bias to persistent GPU: %v", err)
+			}
+		} else if device == tensor.GPU {
+			biasT, err = biasT.ToGPU()
+			if err != nil {
+				return nil, fmt.Errorf("failed to transfer bias to GPU: %v", err)
+			}
+		}
+		
 		biasT.SetRequiresGrad(true)
 		linear.bias = biasT
 	}
@@ -73,13 +102,22 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("input size mismatch: expected %d, got %d", l.weight.Shape[1], inputSize)
 	}
 	
-	// Compute xW^T
+	// Compute xW^T - use appropriate operation based on device
 	weightTransposed, err := l.weight.Transpose(0, 1)
 	if err != nil {
 		return nil, fmt.Errorf("weight transpose failed: %v", err)
 	}
 	
-	output, err := tensor.MatMul(input, weightTransposed)
+	// Choose operation based on input device type
+	var output *tensor.Tensor
+	if input.Device == tensor.GPU || input.Device == tensor.PersistentGPU ||
+		l.weight.Device == tensor.GPU || l.weight.Device == tensor.PersistentGPU {
+		// Use MPS for GPU operations
+		output, err = tensor.MatMulMPS(input, weightTransposed)
+	} else {
+		// Use CPU operations
+		output, err = tensor.MatMul(input, weightTransposed)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("matrix multiplication failed: %v", err)
 	}
@@ -92,7 +130,15 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 			return nil, fmt.Errorf("bias expansion failed: %v", err)
 		}
 		
-		output, err = tensor.Add(output, biasExpanded)
+		// Use appropriate addition operation based on device
+		if output.Device == tensor.GPU || output.Device == tensor.PersistentGPU ||
+			biasExpanded.Device == tensor.GPU || biasExpanded.Device == tensor.PersistentGPU {
+			// Use MPS for GPU operations
+			output, err = tensor.AddMPS(output, biasExpanded)
+		} else {
+			// Use CPU operations
+			output, err = tensor.Add(output, biasExpanded)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("bias addition failed: %v", err)
 		}
@@ -104,14 +150,39 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 // expandBias expands bias from [output_size] to [batch_size, output_size]
 func (l *Linear) expandBias(bias *tensor.Tensor, batchSize int) (*tensor.Tensor, error) {
 	outputSize := bias.Shape[0]
-	expandedData := make([]float32, batchSize*outputSize)
-	biasData := bias.Data.([]float32)
 	
+	// Get bias data - convert to CPU if needed for expansion
+	var biasData []float32
+	if bias.Device == tensor.GPU || bias.Device == tensor.PersistentGPU {
+		// Convert to CPU temporarily for bias expansion
+		cpuBias, err := bias.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert bias to CPU: %v", err)
+		}
+		biasData = cpuBias.Data.([]float32)
+	} else {
+		biasData = bias.Data.([]float32)
+	}
+	
+	expandedData := make([]float32, batchSize*outputSize)
 	for i := 0; i < batchSize; i++ {
 		copy(expandedData[i*outputSize:(i+1)*outputSize], biasData)
 	}
 	
-	return tensor.NewTensor([]int{batchSize, outputSize}, bias.DType, bias.Device, expandedData)
+	// Create expanded tensor and transfer to appropriate device
+	expanded, err := tensor.NewTensor([]int{batchSize, outputSize}, bias.DType, tensor.CPU, expandedData)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Transfer to same device as bias
+	if bias.Device == tensor.PersistentGPU {
+		return expanded.ToPersistentGPU()
+	} else if bias.Device == tensor.GPU {
+		return expanded.ToGPU()
+	}
+	
+	return expanded, nil
 }
 
 // Parameters returns the trainable parameters
@@ -150,7 +221,7 @@ func NewReLU() *ReLU {
 
 // Forward performs ReLU activation
 func (r *ReLU) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
-	if input.Device == tensor.GPU {
+	if input.Device == tensor.GPU || input.Device == tensor.PersistentGPU {
 		return tensor.ReLUMPS(input)
 	}
 	return tensor.ReLU(input)
@@ -200,10 +271,24 @@ func NewConv2D(inputChannels, outputChannels, kernelSize, stride, padding int, b
 	}
 	
 	// Weight shape: [output_channels, input_channels, kernel_height, kernel_width]
-	weight, err := tensor.NewTensor([]int{outputChannels, inputChannels, kernelSize, kernelSize}, tensor.Float32, device, weightData)
+	weight, err := tensor.NewTensor([]int{outputChannels, inputChannels, kernelSize, kernelSize}, tensor.Float32, tensor.CPU, weightData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create weight tensor: %v", err)
 	}
+	
+	// Transfer to target device if needed
+	if device == tensor.PersistentGPU {
+		weight, err = weight.ToPersistentGPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to transfer weight to persistent GPU: %v", err)
+		}
+	} else if device == tensor.GPU {
+		weight, err = weight.ToGPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to transfer weight to GPU: %v", err)
+		}
+	}
+	
 	weight.SetRequiresGrad(true)
 	
 	conv := &Conv2D{
@@ -216,10 +301,24 @@ func NewConv2D(inputChannels, outputChannels, kernelSize, stride, padding int, b
 	if bias {
 		// Initialize bias to zeros
 		biasData := make([]float32, outputChannels)
-		biasT, err := tensor.NewTensor([]int{outputChannels}, tensor.Float32, device, biasData)
+		biasT, err := tensor.NewTensor([]int{outputChannels}, tensor.Float32, tensor.CPU, biasData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bias tensor: %v", err)
 		}
+		
+		// Transfer bias to target device if needed
+		if device == tensor.PersistentGPU {
+			biasT, err = biasT.ToPersistentGPU()
+			if err != nil {
+				return nil, fmt.Errorf("failed to transfer bias to persistent GPU: %v", err)
+			}
+		} else if device == tensor.GPU {
+			biasT, err = biasT.ToGPU()
+			if err != nil {
+				return nil, fmt.Errorf("failed to transfer bias to GPU: %v", err)
+			}
+		}
+		
 		biasT.SetRequiresGrad(true)
 		conv.bias = biasT
 	}

@@ -41,6 +41,52 @@ func GetMPSGraphEngine() (*MPSGraphEngine, error) {
 	return mpsGraphEngine, nil
 }
 
+// determineResultDevice determines the device type for the result based on input tensors
+func determineResultDevice(tensors ...*Tensor) DeviceType {
+	// If any tensor is PersistentGPU, result should be PersistentGPU
+	for _, t := range tensors {
+		if t.Device == PersistentGPU {
+			return PersistentGPU
+		}
+	}
+	
+	// If any tensor is GPU, result should be GPU (temporary)
+	for _, t := range tensors {
+		if t.Device == GPU {
+			return GPU
+		}
+	}
+	
+	// Default to CPU
+	return CPU
+}
+
+// shouldKeepOnGPU returns true if the result tensor should stay on GPU
+func shouldKeepOnGPU(device DeviceType) bool {
+	return device == PersistentGPU
+}
+
+// handleMPSResult handles the result of an MPS operation, either keeping it on GPU or copying to CPU
+func handleMPSResult(result *Tensor, resultBuffer interface{}) error {
+	if shouldKeepOnGPU(result.Device) {
+		// Store the GPU buffer in the tensor for persistent GPU tensors
+		result.SetGPUBuffer(resultBuffer)
+		result.Data = nil // No CPU data for persistent GPU tensors
+	} else {
+		// Copy result data from Metal buffer to CPU slice for temporary GPU tensors
+		resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+		if err != nil {
+			return fmt.Errorf("failed to copy result from GPU buffer: %v", err)
+		}
+		result.Data = resultData
+		// Release the GPU buffer since we copied to CPU
+		if buffer, ok := resultBuffer.(interface{ Release() }); ok {
+			defer buffer.Release()
+		}
+	}
+	return nil
+}
+
 // isCompatibleForOp checks if two tensors are compatible for element-wise operations
 func isCompatibleForOp(a, b *Tensor) bool {
 	// Check data types
@@ -84,13 +130,64 @@ func createMPSBufferFromTensor(tensor *Tensor, allocator *metal_bridge.BufferAll
 		return nil, fmt.Errorf("failed to allocate buffer: %v", err)
 	}
 	
-	err = copyDataToGPUBuffer(tensor.Data, buffer, tensor.DType)
-	if err != nil {
-		buffer.Release() // Clean up on error
-		return nil, fmt.Errorf("failed to copy data to buffer: %v", err)
+	// Handle different tensor device types
+	if tensor.Device == PersistentGPU && tensor.gpuBuffer != nil {
+		// For PersistentGPU tensors, copy from existing GPU buffer
+		err = copyGPUBufferToGPUBuffer(tensor.gpuBuffer, buffer, tensor.DType, tensor.NumElems)
+		if err != nil {
+			buffer.Release() // Clean up on error
+			return nil, fmt.Errorf("failed to copy GPU buffer to buffer: %v", err)
+		}
+	} else if tensor.Data != nil {
+		// For CPU or temporary GPU tensors, copy from CPU data
+		err = copyDataToGPUBuffer(tensor.Data, buffer, tensor.DType)
+		if err != nil {
+			buffer.Release() // Clean up on error
+			return nil, fmt.Errorf("failed to copy data to buffer: %v", err)
+		}
+	} else {
+		// This shouldn't happen - tensor has neither CPU data nor GPU buffer
+		buffer.Release()
+		return nil, fmt.Errorf("tensor has no data to copy (neither CPU data nor GPU buffer)")
 	}
 	
 	return buffer, nil
+}
+
+// copyGPUBufferToGPUBuffer copies data from one GPU buffer to another
+func copyGPUBufferToGPUBuffer(srcBuffer, dstBuffer interface{}, dtype DType, numElems int) error {
+	// Type assert both buffers
+	srcMtlBuffer, ok := srcBuffer.(*metal_bridge.Buffer)
+	if !ok {
+		return fmt.Errorf("invalid source buffer type for GPU-to-GPU copy")
+	}
+	dstMtlBuffer, ok := dstBuffer.(*metal_bridge.Buffer)
+	if !ok {
+		return fmt.Errorf("invalid destination buffer type for GPU-to-GPU copy")
+	}
+	
+	// Get buffer contents pointers
+	srcPtr := srcMtlBuffer.Contents()
+	dstPtr := dstMtlBuffer.Contents()
+	
+	switch dtype {
+	case Float32:
+		// Copy float32 data
+		srcData := (*[1<<30]float32)(srcPtr)[:numElems]
+		dstData := (*[1<<30]float32)(dstPtr)[:numElems]
+		copy(dstData, srcData)
+		
+	case Int32:
+		// Copy int32 data
+		srcData := (*[1<<30]int32)(srcPtr)[:numElems]
+		dstData := (*[1<<30]int32)(dstPtr)[:numElems]
+		copy(dstData, srcData)
+		
+	default:
+		return fmt.Errorf("unsupported data type for GPU-to-GPU copy: %v", dtype)
+	}
+	
+	return nil
 }
 
 // createMPSResultBuffer creates a result buffer using the allocator
@@ -146,12 +243,15 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("failed to compile graph")
 	}
 	
+	// Determine result device based on input tensors
+	resultDevice := determineResultDevice(a, b)
+	
 	// Create output tensor
 	result := &Tensor{
 		Shape:    a.Shape,
 		Strides:  a.Strides,
 		DType:    a.DType,
-		Device:   GPU,
+		Device:   resultDevice,
 		NumElems: a.NumElems,
 	}
 	
@@ -191,12 +291,11 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
 	
-	// Copy result data from Metal buffer to CPU slice
-	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	// Handle result based on device type (persistent GPU or copy to CPU)
+	err = handleMPSResult(result, resultBuffer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
+		return nil, err
 	}
-	result.Data = resultData
 	
 	return result, nil
 }
@@ -257,7 +356,7 @@ func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 		Shape:    outputShape,
 		Strides:  calculateStrides(outputShape),
 		DType:    a.DType,
-		Device:   GPU,
+		Device:   determineResultDevice(a, b),
 		NumElems: outputShape[0] * outputShape[1],
 	}
 	
@@ -297,12 +396,11 @@ func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
 	
-	// Copy result data from Metal buffer to CPU slice
-	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	// Handle result based on device type (persistent GPU or copy to CPU)
+	err = handleMPSResult(result, resultBuffer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
+		return nil, err
 	}
-	result.Data = resultData
 	
 	return result, nil
 }
@@ -349,7 +447,7 @@ func ReLUMPS(a *Tensor) (*Tensor, error) {
 		Shape:    a.Shape,
 		Strides:  a.Strides,
 		DType:    a.DType,
-		Device:   GPU,
+		Device:   determineResultDevice(a),
 		NumElems: a.NumElems,
 	}
 	
@@ -382,12 +480,11 @@ func ReLUMPS(a *Tensor) (*Tensor, error) {
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
 	
-	// Copy result data from Metal buffer to CPU slice
-	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	// Handle result based on device type (persistent GPU or copy to CPU)
+	err = handleMPSResult(result, resultBuffer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
+		return nil, err
 	}
-	result.Data = resultData
 	
 	return result, nil
 }
@@ -434,7 +531,7 @@ func SigmoidMPS(a *Tensor) (*Tensor, error) {
 		Shape:    a.Shape,
 		Strides:  a.Strides,
 		DType:    a.DType,
-		Device:   GPU,
+		Device:   determineResultDevice(a),
 		NumElems: a.NumElems,
 	}
 	
@@ -467,12 +564,11 @@ func SigmoidMPS(a *Tensor) (*Tensor, error) {
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
 	
-	// Copy result data from Metal buffer to CPU slice
-	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	// Handle result based on device type (persistent GPU or copy to CPU)
+	err = handleMPSResult(result, resultBuffer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
+		return nil, err
 	}
-	result.Data = resultData
 	
 	return result, nil
 }
@@ -582,7 +678,7 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		Shape:    outputShape,
 		Strides:  calculateStrides(outputShape),
 		DType:    input.DType,
-		Device:   GPU,
+		Device:   determineResultDevice(input, weights),
 		NumElems: N * C_out * outputH * outputW,
 	}
 	
@@ -634,12 +730,11 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
 	
-	// Copy result data from Metal buffer to CPU slice
-	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	// Handle result based on device type (persistent GPU or copy to CPU)
+	err = handleMPSResult(result, resultBuffer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
+		return nil, err
 	}
-	result.Data = resultData
 	
 	return result, nil
 }
@@ -703,7 +798,7 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		Shape:    outputShape,
 		Strides:  calculateStrides(outputShape),
 		DType:    input.DType,
-		Device:   GPU,
+		Device:   determineResultDevice(input),
 		NumElems: N * C * outputH * outputW,
 	}
 	
@@ -737,12 +832,11 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
 	
-	// Copy result data from Metal buffer to CPU slice
-	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	// Handle result based on device type (persistent GPU or copy to CPU)
+	err = handleMPSResult(result, resultBuffer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
+		return nil, err
 	}
-	result.Data = resultData
 	
 	return result, nil
 }
@@ -806,7 +900,7 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		Shape:    outputShape,
 		Strides:  calculateStrides(outputShape),
 		DType:    input.DType,
-		Device:   GPU,
+		Device:   determineResultDevice(input),
 		NumElems: N * C * outputH * outputW,
 	}
 	
@@ -840,12 +934,11 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
 	
-	// Copy result data from Metal buffer to CPU slice
-	resultData, err := copyDataFromGPUBuffer(resultBuffer, result.DType, result.NumElems)
+	// Handle result based on device type (persistent GPU or copy to CPU)
+	err = handleMPSResult(result, resultBuffer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to copy result from GPU buffer: %v", err)
+		return nil, err
 	}
-	result.Data = resultData
 	
 	return result, nil
 }

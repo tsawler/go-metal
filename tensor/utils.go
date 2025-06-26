@@ -268,15 +268,34 @@ func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error) {
 		return t, nil
 	}
 
-	if device == GPU {
-		return nil, fmt.Errorf("GPU device transfer not implemented in Phase 1")
+	// Handle GPU device transfers
+	if device == GPU || device == PersistentGPU {
+		if t.Device == CPU {
+			// CPU -> GPU: Create GPU tensor
+			return NewTensor(t.Shape, t.DType, device, t.Data)
+		} else if t.Device == GPU || t.Device == PersistentGPU {
+			// GPU -> GPU: Convert through CPU if changing persistence mode
+			if t.Device != device {
+				cpuTensor, err := t.ToCPU()
+				if err != nil {
+					return nil, err
+				}
+				return cpuTensor.ToDevice(device)
+			}
+			return t, nil
+		}
 	}
 
+	// GPU -> CPU conversion
+	if (t.Device == GPU || t.Device == PersistentGPU) && device == CPU {
+		return t.ToCPU()
+	}
+
+	// CPU -> CPU (just clone)
 	result, err := t.Clone()
 	if err != nil {
 		return nil, err
 	}
-	
 	result.Device = device
 	return result, nil
 }
