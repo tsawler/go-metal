@@ -4,59 +4,50 @@ import (
 	"fmt"
 )
 
-// reduceGradientToShape reduces a gradient tensor to match the target shape
-// This is needed when broadcasting occurred during forward pass
 func reduceGradientToShape(grad *Tensor, targetShape []int) (*Tensor, error) {
-	// If shapes are already the same, just clone
+	// If shapes are already the same, no reduction needed.
 	if shapesEqual(grad.Shape, targetShape) {
 		return grad.Clone()
 	}
-	
-	// Handle scalar case (target shape is [1] or similar)
-	if len(targetShape) == 1 && targetShape[0] == 1 {
-		// Sum all elements to create scalar
-		return sumAllElements(grad)
-	}
-	
-	// General case: sum over broadcast dimensions
-	result := grad
-	var err error
-	
-	// Work backwards through dimensions
+
+	// Identify axes to be summed.
+	axesToSum := []int{}
 	gradDims := len(grad.Shape)
 	targetDims := len(targetShape)
-	
-	// If target has fewer dimensions, sum over leading dimensions
-	dimsToSum := gradDims - targetDims
-	for i := 0; i < dimsToSum; i++ {
-		result, err = sumOverDimension(result, 0) // Always sum over first dimension
+
+	// 1. Sum over dimensions that don't exist in the target shape (prepended dimensions).
+	if gradDims > targetDims {
+		for i := 0; i < gradDims-targetDims; i++ {
+			axesToSum = append(axesToSum, i)
+		}
+	}
+
+	// 2. Sum over dimensions that were broadcast from 1.
+	for i := 0; i < targetDims; i++ {
+		gradDimIndex := i + (gradDims - targetDims)
+		if targetShape[i] == 1 && grad.Shape[gradDimIndex] > 1 {
+			axesToSum = append(axesToSum, gradDimIndex)
+		}
+	}
+
+	// Sum over the identified axes, in reverse order to maintain correct indices.
+	result := grad
+	var err error
+	for i := len(axesToSum) - 1; i >= 0; i-- {
+		result, err = sumOverDimension(result, axesToSum[i])
 		if err != nil {
-			return nil, fmt.Errorf("failed to sum over dimension: %v", err)
+			return nil, fmt.Errorf("failed to sum over dimension %d: %v", axesToSum[i], err)
 		}
 	}
-	
-	// Now handle remaining dimensions that might have been broadcast from size 1
-	for i := 0; i < len(targetShape); i++ {
-		resultDim := i
-		if resultDim < len(result.Shape) && result.Shape[resultDim] != targetShape[i] {
-			if targetShape[i] == 1 && result.Shape[resultDim] > 1 {
-				// This dimension was broadcast from size 1, sum it
-				result, err = sumOverDimension(result, resultDim)
-				if err != nil {
-					return nil, fmt.Errorf("failed to sum over broadcast dimension: %v", err)
-				}
-			}
-		}
-	}
-	
-	// Reshape to exact target shape if needed
+
+	// Final reshape to add back any dimensions of size 1 that were removed by sumOverDimension.
 	if !shapesEqual(result.Shape, targetShape) {
 		result, err = Reshape(result, targetShape)
 		if err != nil {
-			return nil, fmt.Errorf("failed to reshape gradient: %v", err)
+			return nil, fmt.Errorf("failed to reshape gradient to final target shape: %v", err)
 		}
 	}
-	
+
 	return result, nil
 }
 

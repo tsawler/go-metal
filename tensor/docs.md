@@ -574,7 +574,7 @@ AddMPS performs tensor addition using a cached MPSGraph
 ```go
 func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, error)
 ```
-AvgPool2DMPS performs 2D average pooling using MPSGraph
+AvgPool2DMPS performs 2D average pooling using a cached MPSGraph
 
 #### func  BatchMatMul
 
@@ -596,7 +596,7 @@ BroadcastTensor expands a tensor to a target shape using broadcasting rules
 ```go
 func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, paddingRight, paddingTop, paddingBottom int) (*Tensor, error)
 ```
-Conv2DMPS performs 2D convolution using MPSGraph
+Conv2DMPS performs 2D convolution using a cached MPSGraph
 
 #### func  Div
 
@@ -703,7 +703,7 @@ MatMulMPS performs matrix multiplication using a cached MPSGraph
 ```go
 func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, error)
 ```
-MaxPool2DMPS performs 2D max pooling using MPSGraph
+MaxPool2DMPS performs 2D max pooling using a cached MPSGraph
 
 #### func  Mul
 
