@@ -547,7 +547,7 @@ func calculateTensorSize(shape []int, dtype DType) uintptr {
 	return uintptr(numElems * elemSize)
 }
 
-// Conv2DMPS performs 2D convolution using MPSGraph
+// Conv2DMPS performs 2D convolution using a cached MPSGraph
 func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, paddingRight, paddingTop, paddingBottom int) (*Tensor, error) {
 	// Validate input tensors
 	if len(input.Shape) != 4 {
@@ -562,75 +562,52 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 	if bias != nil && (bias.DType != input.DType || len(bias.Shape) != 1) {
 		return nil, fmt.Errorf("bias must be 1D and have the same data type as input")
 	}
-	
+
 	engine, err := GetMPSGraphEngine()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
-	
-	// Acquire exclusive access to graph operations
-	//if !engine.acquireGraphLock() {
-	//	return nil, fmt.Errorf("failed to acquire graph lock for Conv2D - timeout")
-	//}
-	//defer engine.releaseGraphLock()
-	
-	// Create fresh graph for this operation
-	graph := metal_bridge.NewGraph()
-	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph for Conv2D")
+
+	cacheKey := generateCacheKey("conv2d", input, weights, bias)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(input.DType)
+		placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
+		placeholderWeights := graph.PlaceholderTensor(weights.Shape, dataType)
+		var placeholderBias *metal_bridge.GraphTensor
+		var inputTensors []*metal_bridge.GraphTensor
+		if bias != nil {
+			placeholderBias = graph.PlaceholderTensor(bias.Shape, dataType)
+			inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights, placeholderBias}
+		} else {
+			inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights}
+		}
+		resultTensor := graph.Conv2D(placeholderInput, placeholderWeights, placeholderBias,
+			1, 1, // strideX, strideY (using 1,1 for simplicity, can be parameterized later)
+			1, 1, // dilationX, dilationY
+			paddingLeft, paddingRight, paddingTop, paddingBottom,
+			1) // groups
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, inputTensors, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, inputTensors, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
 	}
-	
-	// Create placeholders
-	dataType := convertDTypeToMPS(input.DType)
-	placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
-	placeholderWeights := graph.PlaceholderTensor(weights.Shape, dataType)
-	
-	var placeholderBias *metal_bridge.GraphTensor
-	var inputTensors []*metal_bridge.GraphTensor
-	if bias != nil {
-		placeholderBias = graph.PlaceholderTensor(bias.Shape, dataType)
-		inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights, placeholderBias}
-	} else {
-		inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights}
-	}
-	
-	if placeholderInput == nil || placeholderWeights == nil {
-		return nil, fmt.Errorf("failed to create placeholder tensors")
-	}
-	
-	// Create convolution operation
-	resultTensor := graph.Conv2D(placeholderInput, placeholderWeights, placeholderBias, 
-		1, 1, // strideX, strideY (using 1,1 for simplicity, can be parameterized later)
-		1, 1, // dilationX, dilationY
-		paddingLeft, paddingRight, paddingTop, paddingBottom,
-		1) // groups
-	if resultTensor == nil {
-		return nil, fmt.Errorf("failed to create convolution operation")
-	}
-	
-	// Compile graph
-	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
-	if compilationDescriptor == nil {
-		return nil, fmt.Errorf("failed to create compilation descriptor")
-	}
-	
-	executable := graph.Compile(engine.graphDevice, inputTensors, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
-	if executable == nil {
-		return nil, fmt.Errorf("failed to compile graph")
-	}
-	
+
 	// Calculate output shape
-	N := input.Shape[0]     // Batch size
-	C_out := weights.Shape[0] // Output channels
-	H := input.Shape[2]     // Input height
-	W := input.Shape[3]     // Input width
+	N := input.Shape[0]         // Batch size
+	C_out := weights.Shape[0]   // Output channels
+	H := input.Shape[2]         // Input height
+	W := input.Shape[3]         // Input width
 	kernelH := weights.Shape[2]
 	kernelW := weights.Shape[3]
-	
+
 	outputH := (H-kernelH+paddingTop+paddingBottom)/strideY + 1
 	outputW := (W-kernelW+paddingLeft+paddingRight)/strideX + 1
 	outputShape := []int{N, C_out, outputH, outputW}
-	
+
 	// Create output tensor
 	result := &Tensor{
 		Shape:    outputShape,
@@ -639,23 +616,21 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		Device:   determineResultDevice(input, weights),
 		NumElems: N * C_out * outputH * outputW,
 	}
-	
-	// Use BufferAllocator for efficient memory management
+
 	allocator := metal_bridge.GetGlobalAllocator()
-	
-	// Create input buffers
+
 	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
 	defer inputBuffer.Release()
-	
+
 	weightsBuffer, err := createMPSBufferFromTensor(weights, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for weights: %v", err)
 	}
 	defer weightsBuffer.Release()
-	
+
 	var inputBuffers []*metal_bridge.Buffer
 	if bias != nil {
 		biasBuffer, err := createMPSBufferFromTensor(bias, allocator)
@@ -667,96 +642,70 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 	} else {
 		inputBuffers = []*metal_bridge.Buffer{inputBuffer, weightsBuffer}
 	}
-	
-	// Create result buffer using allocator
+
 	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	// resultBuffer lifecycle is managed by handleMPSResult
-	
-	// Execute graph
+
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
 	if executionDescriptor == nil {
 		return nil, fmt.Errorf("failed to create execution descriptor")
 	}
-	
-	executable.Execute(engine.commandQueue,
-		inputTensors,
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
 		inputBuffers,
-		[]*metal_bridge.GraphTensor{resultTensor},
+		cached.resultTensors,
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
-	
-	// Handle result based on device type (persistent GPU or copy to CPU)
-	err = handleMPSResult(result, resultBuffer)
-	if err != nil {
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
 
-// MaxPool2DMPS performs 2D max pooling using MPSGraph
+// MaxPool2DMPS performs 2D max pooling using a cached MPSGraph
 func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, error) {
 	if len(input.Shape) != 4 {
 		return nil, fmt.Errorf("input tensor must be 4D (NCHW), got %d dimensions", len(input.Shape))
 	}
-	
+
 	engine, err := GetMPSGraphEngine()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
-	
-	// Acquire exclusive access to graph operations
-	//if !engine.acquireGraphLock() {
-	//	return nil, fmt.Errorf("failed to acquire graph lock for MaxPool2D - timeout")
-	//}
-	//defer engine.releaseGraphLock()
-	
-	// Create fresh graph for this operation
-	graph := metal_bridge.NewGraph()
-	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph for MaxPool2D")
+
+	cacheKey := generateCacheKey("maxpool2d", input)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(input.DType)
+		placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
+		resultTensor := graph.MaxPool2D(placeholderInput,
+			kernelSize, kernelSize, // kernelWidth, kernelHeight
+			stride, stride,         // strideX, strideY
+			padding, padding, padding, padding) // paddingLeft, paddingRight, paddingTop, paddingBottom
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
 	}
-	
-	// Create placeholder
-	dataType := convertDTypeToMPS(input.DType)
-	placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
-	if placeholderInput == nil {
-		return nil, fmt.Errorf("failed to create placeholder tensor")
-	}
-	
-	// Create max pooling operation
-	resultTensor := graph.MaxPool2D(placeholderInput, 
-		kernelSize, kernelSize, // kernelWidth, kernelHeight
-		stride, stride,         // strideX, strideY
-		padding, padding, padding, padding) // paddingLeft, paddingRight, paddingTop, paddingBottom
-	if resultTensor == nil {
-		return nil, fmt.Errorf("failed to create max pooling operation")
-	}
-	
-	// Compile graph
-	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
-	if compilationDescriptor == nil {
-		return nil, fmt.Errorf("failed to create compilation descriptor")
-	}
-	
-	executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
-	if executable == nil {
-		return nil, fmt.Errorf("failed to compile graph")
-	}
-	
+
 	// Calculate output shape
 	N := input.Shape[0] // Batch size
 	C := input.Shape[1] // Channels
 	H := input.Shape[2] // Input height
 	W := input.Shape[3] // Input width
-	
+
 	outputH := (H-kernelSize+2*padding)/stride + 1
 	outputW := (W-kernelSize+2*padding)/stride + 1
 	outputShape := []int{N, C, outputH, outputW}
-	
+
 	// Create output tensor
 	result := &Tensor{
 		Shape:    outputShape,
@@ -765,106 +714,78 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		Device:   determineResultDevice(input),
 		NumElems: N * C * outputH * outputW,
 	}
-	
-	// Use BufferAllocator for efficient memory management
+
 	allocator := metal_bridge.GetGlobalAllocator()
-	
-	// Create input buffer
+
 	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
 	defer inputBuffer.Release()
-	
-	// Create result buffer using allocator
+
 	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	// resultBuffer lifecycle is managed by handleMPSResult
-	
-	// Execute graph
+
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
 	if executionDescriptor == nil {
 		return nil, fmt.Errorf("failed to create execution descriptor")
 	}
-	
-	executable.Execute(engine.commandQueue,
-		[]*metal_bridge.GraphTensor{placeholderInput},
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
 		[]*metal_bridge.Buffer{inputBuffer},
-		[]*metal_bridge.GraphTensor{resultTensor},
+		cached.resultTensors,
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
-	
-	// Handle result based on device type (persistent GPU or copy to CPU)
-	err = handleMPSResult(result, resultBuffer)
-	if err != nil {
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
 
-// AvgPool2DMPS performs 2D average pooling using MPSGraph
+// AvgPool2DMPS performs 2D average pooling using a cached MPSGraph
 func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, error) {
 	if len(input.Shape) != 4 {
 		return nil, fmt.Errorf("input tensor must be 4D (NCHW), got %d dimensions", len(input.Shape))
 	}
-	
+
 	engine, err := GetMPSGraphEngine()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
-	
-	// Acquire exclusive access to graph operations
-	//if !engine.acquireGraphLock() {
-	//	return nil, fmt.Errorf("failed to acquire graph lock for AvgPool2D - timeout")
-	//}
-	//defer engine.releaseGraphLock()
-	
-	// Create fresh graph for this operation
-	graph := metal_bridge.NewGraph()
-	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph for AvgPool2D")
+
+	cacheKey := generateCacheKey("avgpool2d", input)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(input.DType)
+		placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
+		resultTensor := graph.AvgPool2D(placeholderInput,
+			kernelSize, kernelSize, // kernelWidth, kernelHeight
+			stride, stride,         // strideX, strideY
+			padding, padding, padding, padding) // paddingLeft, paddingRight, paddingTop, paddingBottom
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
 	}
-	
-	// Create placeholder
-	dataType := convertDTypeToMPS(input.DType)
-	placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
-	if placeholderInput == nil {
-		return nil, fmt.Errorf("failed to create placeholder tensor")
-	}
-	
-	// Create average pooling operation
-	resultTensor := graph.AvgPool2D(placeholderInput, 
-		kernelSize, kernelSize, // kernelWidth, kernelHeight
-		stride, stride,         // strideX, strideY
-		padding, padding, padding, padding) // paddingLeft, paddingRight, paddingTop, paddingBottom
-	if resultTensor == nil {
-		return nil, fmt.Errorf("failed to create average pooling operation")
-	}
-	
-	// Compile graph
-	compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
-	if compilationDescriptor == nil {
-		return nil, fmt.Errorf("failed to create compilation descriptor")
-	}
-	
-	executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
-	if executable == nil {
-		return nil, fmt.Errorf("failed to compile graph")
-	}
-	
+
 	// Calculate output shape (same as MaxPool2D)
 	N := input.Shape[0] // Batch size
 	C := input.Shape[1] // Channels
 	H := input.Shape[2] // Input height
 	W := input.Shape[3] // Input width
-	
+
 	outputH := (H-kernelSize+2*padding)/stride + 1
 	outputW := (W-kernelSize+2*padding)/stride + 1
 	outputShape := []int{N, C, outputH, outputW}
-	
+
 	// Create output tensor
 	result := &Tensor{
 		Shape:    outputShape,
@@ -873,42 +794,35 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		Device:   determineResultDevice(input),
 		NumElems: N * C * outputH * outputW,
 	}
-	
-	// Use BufferAllocator for efficient memory management
+
 	allocator := metal_bridge.GetGlobalAllocator()
-	
-	// Create input buffer
+
 	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
 	defer inputBuffer.Release()
-	
-	// Create result buffer using allocator
+
 	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	// resultBuffer lifecycle is managed by handleMPSResult
-	
-	// Execute graph
+
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
 	if executionDescriptor == nil {
 		return nil, fmt.Errorf("failed to create execution descriptor")
 	}
-	
-	executable.Execute(engine.commandQueue,
-		[]*metal_bridge.GraphTensor{placeholderInput},
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
 		[]*metal_bridge.Buffer{inputBuffer},
-		[]*metal_bridge.GraphTensor{resultTensor},
+		cached.resultTensors,
 		[]*metal_bridge.Buffer{resultBuffer},
 		executionDescriptor)
-	
-	// Handle result based on device type (persistent GPU or copy to CPU)
-	err = handleMPSResult(result, resultBuffer)
-	if err != nil {
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
