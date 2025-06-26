@@ -321,3 +321,4 @@ func (t *Tensor) SetData(data interface{}) error {
 func (t *Tensor) SetGrad(grad *Tensor) {
 	t.grad = grad
 }
+

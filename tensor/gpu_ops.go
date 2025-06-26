@@ -28,6 +28,69 @@ func getComputeEngine() (*metal_bridge.ComputeEngine, error) {
 	return globalComputeEngine, nil
 }
 
+// AddGPUAsync performs tensor addition on GPU asynchronously
+func AddGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error {
+	if err := checkCompatibility(t1, t2); err != nil {
+		completion(nil, err)
+		return err
+	}
+
+	outputShape, err := checkShapesCompatible(t1.Shape, t2.Shape)
+	if err != nil {
+		completion(nil, err)
+		return err
+	}
+
+	engine, err := getComputeEngine()
+	if err != nil {
+		completion(nil, err)
+		return err
+	}
+
+	switch t1.DType {
+	case Float32:
+		data1 := t1.Data.([]float32)
+		data2 := t2.Data.([]float32)
+
+		err := engine.AddArraysFloat32Async(data1, data2, func(result []float32, err error) {
+			if err != nil {
+				completion(nil, fmt.Errorf("GPU addition failed: %v", err))
+				return
+			}
+
+			// Create result tensor
+			resultTensor := &Tensor{
+				Shape:    outputShape,
+				Strides:  calculateStrides(outputShape),
+				DType:    t1.DType,
+				Device:   GPU,
+				Data:     result,
+				NumElems: calculateNumElements(outputShape),
+			}
+
+			completion(resultTensor, nil)
+		})
+		
+		if err != nil {
+			completion(nil, err)
+			return err
+		}
+
+	case Int32:
+		// Fall back to CPU for Int32 async operations for now
+		result, err := Add(t1, t2)
+		completion(result, err)
+		return err
+
+	default:
+		err := fmt.Errorf("unsupported dtype for GPU addition: %s", t1.DType)
+		completion(nil, err)
+		return err
+	}
+
+	return nil
+}
+
 // AddGPU performs tensor addition on GPU
 func AddGPU(t1, t2 *Tensor) (*Tensor, error) {
 	if err := checkCompatibility(t1, t2); err != nil {
@@ -115,6 +178,83 @@ func ReLUGPU(t *Tensor) (*Tensor, error) {
 }
 
 // MatMulGPU performs matrix multiplication on GPU
+func MatMulGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error {
+	if err := checkCompatibility(t1, t2); err != nil {
+		completion(nil, err)
+		return err
+	}
+
+	if len(t1.Shape) < 2 || len(t2.Shape) < 2 {
+		err := fmt.Errorf("matmul requires tensors with at least 2 dimensions")
+		completion(nil, err)
+		return err
+	}
+
+	rows1 := t1.Shape[len(t1.Shape)-2]
+	cols1 := t1.Shape[len(t1.Shape)-1]
+	rows2 := t2.Shape[len(t2.Shape)-2]
+	cols2 := t2.Shape[len(t2.Shape)-1]
+
+	if cols1 != rows2 {
+		err := fmt.Errorf("incompatible dimensions for matmul: (%d, %d) x (%d, %d)", rows1, cols1, rows2, cols2)
+		completion(nil, err)
+		return err
+	}
+
+	outputShape := make([]int, len(t1.Shape))
+	copy(outputShape, t1.Shape)
+	outputShape[len(outputShape)-1] = cols2
+
+	engine, err := getComputeEngine()
+	if err != nil {
+		completion(nil, err)
+		return err
+	}
+
+	switch t1.DType {
+	case Float32:
+		data1 := t1.Data.([]float32)
+		data2 := t2.Data.([]float32)
+
+		err := engine.MatMulFloat32Async(data1, data2, uint(rows1), uint(cols1), uint(cols2), func(result []float32, err error) {
+			if err != nil {
+				completion(nil, fmt.Errorf("GPU matmul failed: %v", err))
+				return
+			}
+
+			// Create result tensor
+			resultTensor := &Tensor{
+				Shape:    outputShape,
+				Strides:  calculateStrides(outputShape),
+				DType:    t1.DType,
+				Device:   GPU,
+				Data:     result,
+				NumElems: calculateNumElements(outputShape),
+			}
+
+			completion(resultTensor, nil)
+		})
+		
+		if err != nil {
+			completion(nil, err)
+			return err
+		}
+
+	case Int32:
+		// Fall back to CPU for Int32 async operations
+		result, err := MatMul(t1, t2)
+		completion(result, err)
+		return err
+
+	default:
+		err := fmt.Errorf("unsupported dtype for GPU matmul: %s", t1.DType)
+		completion(nil, err)
+		return err
+	}
+
+	return nil
+}
+
 func MatMulGPU(t1, t2 *Tensor) (*Tensor, error) {
 	if err := checkCompatibility(t1, t2); err != nil {
 		return nil, err
@@ -231,12 +371,20 @@ func copyDataToGPUBuffer(cpuData interface{}, buffer interface{}, dtype DType) e
 		return fmt.Errorf("invalid buffer type for GPU copy")
 	}
 	
+	// Check for nil data
+	if cpuData == nil {
+		return fmt.Errorf("CPU data is nil, cannot copy to GPU buffer")
+	}
+	
 	// Get buffer contents pointer
 	bufferPtr := mtlBuffer.Contents()
 	
 	switch dtype {
 	case Float32:
-		data := cpuData.([]float32)
+		data, ok := cpuData.([]float32)
+		if !ok {
+			return fmt.Errorf("expected []float32 for Float32 dtype, got %T", cpuData)
+		}
 		// Copy data from Go slice to Metal buffer
 		copy((*[1<<30]float32)(bufferPtr)[:len(data)], data)
 		

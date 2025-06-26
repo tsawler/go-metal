@@ -85,13 +85,29 @@ func (t *Tensor) Clone() (*Tensor, error) {
 	copy(clone.Shape, t.Shape)
 	copy(clone.Strides, t.Strides)
 
+	// Handle GPU tensors with nil Data differently
+	if t.Device == GPU && t.Data == nil {
+		// For pure GPU tensors, convert to CPU first then clone
+		cpuTensor, err := t.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert GPU tensor to CPU for cloning: %v", err)
+		}
+		return cpuTensor, nil
+	}
+	
 	switch t.DType {
 	case Float32:
+		if t.Data == nil {
+			return nil, fmt.Errorf("tensor has nil data")
+		}
 		data := t.Data.([]float32)
 		cloneData := make([]float32, len(data))
 		copy(cloneData, data)
 		clone.Data = cloneData
 	case Int32:
+		if t.Data == nil {
+			return nil, fmt.Errorf("tensor has nil data")
+		}
 		data := t.Data.([]int32)
 		cloneData := make([]int32, len(data))
 		copy(cloneData, data)

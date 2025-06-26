@@ -30,6 +30,25 @@ func MatMul(t1, t2 *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("matmul requires tensors with at least 2 dimensions")
 	}
 
+	// Device-aware routing: Use GPU operations when tensors are on GPU
+	if t1.Device == GPU || t2.Device == GPU {
+		// Prefer MPS operations when available
+		result, err := MatMulMPS(t1, t2)
+		if err == nil {
+			return result, nil
+		}
+		// If MPS fails, log the error and try GPU fallback
+		fmt.Printf("MPS MatMul failed: %v\n", err)
+		
+		// Fallback to basic GPU operations
+		result, err = MatMulGPU(t1, t2)
+		if err == nil {
+			return result, nil
+		}
+		// If GPU operations fail, log and continue with CPU implementation below
+		fmt.Printf("GPU MatMul failed: %v\n", err)
+	}
+
 	shape1 := t1.Shape
 	shape2 := t2.Shape
 	

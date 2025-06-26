@@ -118,11 +118,35 @@ void ReleaseMetalObject(void* obj) {
 // MPSGraph function implementations
 
 MPSGraph* CreateMPSGraph() {
-    return [[MPSGraph alloc] init];
+    @try {
+        MPSGraph* graph = [[MPSGraph alloc] init];
+        if (graph == nil) {
+            NSLog(@"Failed to allocate MPSGraph");
+            return nil;
+        }
+        return graph;
+    } @catch (NSException *exception) {
+        NSLog(@"Exception creating MPSGraph: %@", exception);
+        return nil;
+    }
 }
 
 MPSGraphDevice* CreateMPSGraphDevice(id<MTLDevice> metalDevice) {
-    return [MPSGraphDevice deviceWithMTLDevice:metalDevice];
+    @try {
+        if (metalDevice == nil) {
+            NSLog(@"Metal device is nil in CreateMPSGraphDevice");
+            return nil;
+        }
+        MPSGraphDevice* graphDevice = [MPSGraphDevice deviceWithMTLDevice:metalDevice];
+        if (graphDevice == nil) {
+            NSLog(@"Failed to create MPSGraphDevice");
+            return nil;
+        }
+        return graphDevice;
+    } @catch (NSException *exception) {
+        NSLog(@"Exception creating MPSGraphDevice: %@", exception);
+        return nil;
+    }
 }
 
 MPSGraphTensor* MPSGraphPlaceholderTensor(MPSGraph* graph, int* shape, size_t shapeCount, int dataType) {

@@ -27,6 +27,7 @@ tasks:
     cmds:
       - task: docs-tensor
       - task: docs-metal_bridge
+      - task: docs-training
 
   docs-tensor:
     dir: ./tensor
@@ -35,5 +36,10 @@ tasks:
 
   docs-metal_bridge:
     dir: ./metal_bridge
+    cmds:
+      - godocdown -output docs.md
+
+  docs-training:
+    dir: ./training
     cmds:
       - godocdown -output docs.md

@@ -324,6 +324,13 @@ func Exp(t *Tensor) (*Tensor, error)
 func Flatten(t *Tensor) (*Tensor, error)
 ```
 
+#### func  FromScalar
+
+```go
+func FromScalar(value float64, dtype DType, device DeviceType) *Tensor
+```
+FromScalar creates a scalar tensor from a float64 value
+
 #### func  Full
 
 ```go
@@ -459,6 +466,13 @@ SigmoidAutograd performs Sigmoid activation with automatic differentiation
 func SigmoidMPS(a *Tensor) (*Tensor, error)
 ```
 SigmoidMPS performs Sigmoid activation using MPSGraph
+
+#### func  Sqrt
+
+```go
+func Sqrt(t *Tensor) (*Tensor, error)
+```
+Sqrt computes the square root of a tensor element-wise
 
 #### func  Squeeze
 
@@ -610,6 +624,14 @@ reaches zero
 func (t *Tensor) RequiresGrad() bool
 ```
 
+#### func (*Tensor) Reshape
+
+```go
+func (t *Tensor) Reshape(newShape []int) (*Tensor, error)
+```
+Reshape returns a new tensor with the same data but different shape The new
+shape must have the same total number of elements
+
 #### func (*Tensor) Retain
 
 ```go
@@ -623,6 +645,13 @@ Retain increments the reference count for GPU tensors
 func (t *Tensor) SetAt(value interface{}, indices ...int) error
 ```
 
+#### func (*Tensor) SetData
+
+```go
+func (t *Tensor) SetData(data interface{}) error
+```
+SetData sets the data for this tensor (public version of setData)
+
 #### func (*Tensor) SetGPUBuffer
 
 ```go
@@ -630,6 +659,13 @@ func (t *Tensor) SetGPUBuffer(buffer interface{})
 ```
 SetGPUBuffer sets the GPU buffer for this tensor and initializes reference
 counting
+
+#### func (*Tensor) SetGrad
+
+```go
+func (t *Tensor) SetGrad(grad *Tensor)
+```
+SetGrad sets the gradient for this tensor
 
 #### func (*Tensor) SetRequiresGrad
 
@@ -668,6 +704,13 @@ func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error)
 func (t *Tensor) ToGPU() (*Tensor, error)
 ```
 ToGPU moves a tensor to GPU device using the BufferAllocator
+
+#### func (*Tensor) Transpose
+
+```go
+func (t *Tensor) Transpose(dim0, dim1 int) (*Tensor, error)
+```
+Transpose returns a transposed tensor
 
 #### func (*Tensor) ZeroGrad
 

@@ -368,7 +368,6 @@ func ReLUMPS(a *Tensor) (*Tensor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
@@ -454,7 +453,6 @@ func SigmoidMPS(a *Tensor) (*Tensor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
-	defer resultBuffer.Release()
 	
 	// Execute graph
 	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
