@@ -87,12 +87,30 @@ func (ctx *GPUTrainingContext) BatchOperationsAsync(ops []OperationDesc) ([]*Ten
 	for i, op := range optimizedOps {
 		var result *Tensor
 		
+		// Resolve nil placeholders with previous results
+		actualInputs := make([]*Tensor, len(op.Inputs))
+		copy(actualInputs, op.Inputs)
+		
+		for j, input := range actualInputs {
+			if input == nil && len(results) > 0 {
+				// Replace nil placeholder with the most recent result
+				actualInputs[j] = results[len(results)-1]
+			}
+		}
+		
+		// Update the operation with resolved inputs
+		resolvedOp := OperationDesc{
+			Type:   op.Type,
+			Inputs: actualInputs,
+			Params: op.Params,
+		}
+		
 		// Check if this is a fused operation
-		if IsFusedOperation(op.Type) {
+		if IsFusedOperation(resolvedOp.Type) {
 			// Execute fused operation directly
-			result, err = ExecuteFusedOperation(op)
+			result, err = ExecuteFusedOperation(resolvedOp)
 			if err != nil {
-				return nil, fmt.Errorf("failed to execute fused operation %d (%s): %v", i, op.Type, err)
+				return nil, fmt.Errorf("failed to execute fused operation %d (%s): %v", i, resolvedOp.Type, err)
 			}
 		} else {
 			// Execute through computation graph for regular operations
@@ -102,7 +120,7 @@ func (ctx *GPUTrainingContext) BatchOperationsAsync(ops []OperationDesc) ([]*Ten
 				// In the future, this could be optimized with better dependency tracking
 			}
 			
-			opID, err := ctx.graph.AddOperation(op.Type, op.Inputs, deps, op.Params)
+			opID, err := ctx.graph.AddOperation(resolvedOp.Type, resolvedOp.Inputs, deps, resolvedOp.Params)
 			if err != nil {
 				return nil, fmt.Errorf("failed to add operation %d: %v", i, err)
 			}

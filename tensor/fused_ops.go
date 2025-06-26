@@ -8,11 +8,16 @@ import (
 // These operations combine multiple GPU kernels into single calls for performance
 
 // LinearForward performs fused matrix multiplication + bias addition
-// Equivalent to: MatMul(input, weight) + bias, but in a single GPU kernel
+// Equivalent to: MatMul(input, weight^T) + bias, but in a single GPU kernel
+// Note: weight is expected to be [output_features, input_features] to match training.Linear convention
 func LinearForward(input, weight, bias *Tensor) (*Tensor, error) {
 	if input.Device != GPU && weight.Device != GPU {
 		// Fallback to separate operations for CPU tensors
-		matmul, err := MatMul(input, weight)
+		weightT, err := weight.Transpose(0, 1)
+		if err != nil {
+			return nil, err
+		}
+		matmul, err := MatMul(input, weightT)
 		if err != nil {
 			return nil, err
 		}
@@ -26,11 +31,11 @@ func LinearForward(input, weight, bias *Tensor) (*Tensor, error) {
 
 	batchSize := uint(input.Shape[0])
 	inputFeatures := uint(input.Shape[1])
-	outputFeatures := uint(weight.Shape[1])
+	outputFeatures := uint(weight.Shape[0])  // weight is [output_features, input_features]
 
-	if input.Shape[1] != weight.Shape[0] {
+	if input.Shape[1] != weight.Shape[1] {  // input_features must match weight.Shape[1]
 		return nil, fmt.Errorf("input features (%d) must match weight input features (%d)", 
-			input.Shape[1], weight.Shape[0])
+			input.Shape[1], weight.Shape[1])
 	}
 	if bias.Shape[0] != int(outputFeatures) {
 		return nil, fmt.Errorf("bias size (%d) must match output features (%d)", 
@@ -71,11 +76,16 @@ func LinearForward(input, weight, bias *Tensor) (*Tensor, error) {
 }
 
 // LinearReLU performs fused matrix multiplication + bias addition + ReLU activation
-// Equivalent to: ReLU(MatMul(input, weight) + bias), but in a single GPU kernel
+// Equivalent to: ReLU(MatMul(input, weight^T) + bias), but in a single GPU kernel
+// Note: weight is expected to be [output_features, input_features] to match training.Linear convention
 func LinearReLU(input, weight, bias *Tensor) (*Tensor, error) {
 	if input.Device != GPU && weight.Device != GPU {
 		// Fallback to separate operations for CPU tensors
-		matmul, err := MatMul(input, weight)
+		weightT, err := weight.Transpose(0, 1)
+		if err != nil {
+			return nil, err
+		}
+		matmul, err := MatMul(input, weightT)
 		if err != nil {
 			return nil, err
 		}
@@ -93,11 +103,11 @@ func LinearReLU(input, weight, bias *Tensor) (*Tensor, error) {
 
 	batchSize := uint(input.Shape[0])
 	inputFeatures := uint(input.Shape[1])
-	outputFeatures := uint(weight.Shape[1])
+	outputFeatures := uint(weight.Shape[0])  // weight is [output_features, input_features]
 
-	if input.Shape[1] != weight.Shape[0] {
+	if input.Shape[1] != weight.Shape[1] {  // input_features must match weight.Shape[1]
 		return nil, fmt.Errorf("input features (%d) must match weight input features (%d)", 
-			input.Shape[1], weight.Shape[0])
+			input.Shape[1], weight.Shape[1])
 	}
 	if bias.Shape[0] != int(outputFeatures) {
 		return nil, fmt.Errorf("bias size (%d) must match output features (%d)", 
@@ -138,11 +148,16 @@ func LinearReLU(input, weight, bias *Tensor) (*Tensor, error) {
 }
 
 // LinearSigmoid performs fused matrix multiplication + bias addition + Sigmoid activation
-// Equivalent to: Sigmoid(MatMul(input, weight) + bias), but in a single GPU kernel
+// Equivalent to: Sigmoid(MatMul(input, weight^T) + bias), but in a single GPU kernel
+// Note: weight is expected to be [output_features, input_features] to match training.Linear convention
 func LinearSigmoid(input, weight, bias *Tensor) (*Tensor, error) {
 	if input.Device != GPU && weight.Device != GPU {
 		// Fallback to separate operations for CPU tensors
-		matmul, err := MatMul(input, weight)
+		weightT, err := weight.Transpose(0, 1)
+		if err != nil {
+			return nil, err
+		}
+		matmul, err := MatMul(input, weightT)
 		if err != nil {
 			return nil, err
 		}
@@ -160,11 +175,11 @@ func LinearSigmoid(input, weight, bias *Tensor) (*Tensor, error) {
 
 	batchSize := uint(input.Shape[0])
 	inputFeatures := uint(input.Shape[1])
-	outputFeatures := uint(weight.Shape[1])
+	outputFeatures := uint(weight.Shape[0])  // weight is [output_features, input_features]
 
-	if input.Shape[1] != weight.Shape[0] {
+	if input.Shape[1] != weight.Shape[1] {  // input_features must match weight.Shape[1]
 		return nil, fmt.Errorf("input features (%d) must match weight input features (%d)", 
-			input.Shape[1], weight.Shape[0])
+			input.Shape[1], weight.Shape[1])
 	}
 	if bias.Shape[0] != int(outputFeatures) {
 		return nil, fmt.Errorf("bias size (%d) must match output features (%d)", 

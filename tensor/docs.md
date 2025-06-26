@@ -5,6 +5,13 @@
 
 ## Usage
 
+#### func  AddGPUAsync
+
+```go
+func AddGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error
+```
+AddGPUAsync performs tensor addition on GPU asynchronously
+
 #### func  AreBroadcastable
 
 ```go
@@ -38,12 +45,26 @@ func GPUInfo() (string, error)
 ```
 GPUInfo returns information about the GPU device
 
+#### func  IsFusedOperation
+
+```go
+func IsFusedOperation(opType string) bool
+```
+IsFusedOperation checks if an operation type is a fused operation
+
 #### func  IsGPUAvailable
 
 ```go
 func IsGPUAvailable() bool
 ```
 IsGPUAvailable checks if Metal GPU compute is available
+
+#### func  MatMulGPUAsync
+
+```go
+func MatMulGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error
+```
+MatMulGPU performs matrix multiplication on GPU
 
 #### func  ZeroGrad
 
@@ -102,8 +123,9 @@ type DeviceType int
 
 ```go
 const (
-	CPU DeviceType = iota
-	GPU
+	CPU           DeviceType = iota
+	GPU                      // Temporary GPU tensors - copy results back to CPU
+	PersistentGPU            // Persistent GPU tensors - keep results on GPU across operations
 )
 ```
 
@@ -112,6 +134,203 @@ const (
 ```go
 func (d DeviceType) String() string
 ```
+
+#### type FusedOperationDetector
+
+```go
+type FusedOperationDetector struct {
+}
+```
+
+FusedOperationDetector analyzes a sequence of operations to detect fusion
+opportunities
+
+#### func  NewFusedOperationDetector
+
+```go
+func NewFusedOperationDetector() *FusedOperationDetector
+```
+NewFusedOperationDetector creates a new operation fusion detector
+
+#### func (*FusedOperationDetector) AddOperation
+
+```go
+func (fod *FusedOperationDetector) AddOperation(opType string, inputs []*Tensor, params map[string]interface{})
+```
+AddOperation adds an operation to the sequence for analysis
+
+#### func (*FusedOperationDetector) DetectFusions
+
+```go
+func (fod *FusedOperationDetector) DetectFusions() ([]OperationDesc, error)
+```
+DetectFusions analyzes the operation sequence and returns optimized fused
+operations
+
+#### type GPUComputationGraph
+
+```go
+type GPUComputationGraph struct {
+}
+```
+
+GPUComputationGraph manages a graph of GPU operations with dependency tracking
+
+#### func  NewGPUComputationGraph
+
+```go
+func NewGPUComputationGraph() (*GPUComputationGraph, error)
+```
+NewGPUComputationGraph creates a new GPU computation graph
+
+#### func (*GPUComputationGraph) AddOperation
+
+```go
+func (g *GPUComputationGraph) AddOperation(opType string, inputs []*Tensor, dependencies []metal_bridge.OperationID, params map[string]interface{}) (metal_bridge.OperationID, error)
+```
+AddOperation adds an operation to the computation graph
+
+#### func (*GPUComputationGraph) ExecuteSequence
+
+```go
+func (g *GPUComputationGraph) ExecuteSequence(operations []OperationDesc) (*Tensor, error)
+```
+ExecuteSequence executes a sequence of operations and returns the final result
+
+#### func (*GPUComputationGraph) GetStats
+
+```go
+func (g *GPUComputationGraph) GetStats() (queued, executed int64, pending int)
+```
+GetStats returns statistics about the computation graph
+
+#### func (*GPUComputationGraph) Shutdown
+
+```go
+func (g *GPUComputationGraph) Shutdown()
+```
+Shutdown gracefully shuts down the computation graph
+
+#### func (*GPUComputationGraph) WaitForOperation
+
+```go
+func (g *GPUComputationGraph) WaitForOperation(opID metal_bridge.OperationID) (*Tensor, error)
+```
+WaitForOperation waits for a specific operation to complete
+
+#### type GPUTrainingContext
+
+```go
+type GPUTrainingContext struct {
+}
+```
+
+GPUTrainingContext manages GPU operations for neural network training
+
+#### func  GetGlobalGPUTrainingContext
+
+```go
+func GetGlobalGPUTrainingContext() (*GPUTrainingContext, error)
+```
+GetGlobalGPUTrainingContext returns the global GPU training context
+
+#### func  NewGPUTrainingContext
+
+```go
+func NewGPUTrainingContext() (*GPUTrainingContext, error)
+```
+NewGPUTrainingContext creates a new GPU training context
+
+#### func (*GPUTrainingContext) BatchOperationsAsync
+
+```go
+func (ctx *GPUTrainingContext) BatchOperationsAsync(ops []OperationDesc) ([]*Tensor, error)
+```
+BatchOperationsAsync batches multiple operations for efficient GPU execution
+This version includes automatic operation fusion optimization
+
+#### func (*GPUTrainingContext) ConvolutionForwardAsync
+
+```go
+func (ctx *GPUTrainingContext) ConvolutionForwardAsync(input, weights, bias *Tensor, stride, padding int) (*Tensor, error)
+```
+ConvolutionForwardAsync performs a convolution forward pass with dependency
+tracking
+
+#### func (*GPUTrainingContext) FlushBatch
+
+```go
+func (ctx *GPUTrainingContext) FlushBatch() error
+```
+FlushBatch executes any remaining operations in the batch
+
+#### func (*GPUTrainingContext) GetGPUStats
+
+```go
+func (ctx *GPUTrainingContext) GetGPUStats() (queued, executed int64, pending int, batchEfficiency float64)
+```
+GetGPUStats returns GPU operation statistics
+
+#### func (*GPUTrainingContext) LinearLayerForwardAsync
+
+```go
+func (ctx *GPUTrainingContext) LinearLayerForwardAsync(input, weight, bias *Tensor, activation string) (*Tensor, error)
+```
+LinearLayerForwardAsync performs a linear layer forward pass asynchronously This
+combines MatMul + Bias addition + optional activation in a dependency chain
+
+#### func (*GPUTrainingContext) OptimizedMatMulChain
+
+```go
+func (ctx *GPUTrainingContext) OptimizedMatMulChain(tensors []*Tensor) (*Tensor, error)
+```
+OptimizedMatMulChain performs a chain of matrix multiplications with minimal
+memory transfers
+
+#### func (*GPUTrainingContext) QueueOperation
+
+```go
+func (ctx *GPUTrainingContext) QueueOperation(op OperationDesc)
+```
+QueueOperation adds an operation to the batch queue
+
+#### func (*GPUTrainingContext) SetBatchSize
+
+```go
+func (ctx *GPUTrainingContext) SetBatchSize(size int)
+```
+SetBatchSize sets the operation batch size for GPU operations
+
+#### func (*GPUTrainingContext) Shutdown
+
+```go
+func (ctx *GPUTrainingContext) Shutdown()
+```
+Shutdown gracefully shuts down the training context
+
+#### func (*GPUTrainingContext) TrainingStepAsync
+
+```go
+func (ctx *GPUTrainingContext) TrainingStepAsync(forward, backward []OperationDesc) error
+```
+TrainingStepAsync performs a complete training step with batched operations
+
+#### type GraphOperation
+
+```go
+type GraphOperation struct {
+	ID           metal_bridge.OperationID
+	Type         string
+	InputTensors []*Tensor
+	OutputTensor *Tensor
+	Dependencies []metal_bridge.OperationID
+
+	// Operation-specific data
+	Params map[string]interface{}
+}
+```
+
+GraphOperation represents a single operation in the computation graph
 
 #### type MPSGraphEngine
 
@@ -180,6 +399,70 @@ type Operation interface {
 }
 ```
 
+
+#### type OperationDesc
+
+```go
+type OperationDesc struct {
+	Type   string
+	Inputs []*Tensor
+	Params map[string]interface{}
+}
+```
+
+OperationDesc describes an operation to be added to the graph
+
+#### func  NewAddOp
+
+```go
+func NewAddOp(a, b *Tensor) OperationDesc
+```
+
+#### func  NewBatchMatMulOp
+
+```go
+func NewBatchMatMulOp(a, b *Tensor) OperationDesc
+```
+
+#### func  NewLinearForwardOp
+
+```go
+func NewLinearForwardOp(input, weight, bias *Tensor) OperationDesc
+```
+Helper functions for creating fused operation descriptors
+
+#### func  NewLinearReLUOp
+
+```go
+func NewLinearReLUOp(input, weight, bias *Tensor) OperationDesc
+```
+
+#### func  NewLinearSigmoidOp
+
+```go
+func NewLinearSigmoidOp(input, weight, bias *Tensor) OperationDesc
+```
+
+#### func  NewMatMulOp
+
+```go
+func NewMatMulOp(a, b *Tensor) OperationDesc
+```
+Helper function for creating operation descriptors
+
+#### func  NewReLUOp
+
+```go
+func NewReLUOp(input *Tensor) OperationDesc
+```
+
+#### func  OptimizeOperationSequence
+
+```go
+func OptimizeOperationSequence(operations []OperationDesc) ([]OperationDesc, error)
+```
+OptimizeOperationSequence takes a sequence of operations and returns an
+optimized version with fusions
 
 #### type ReLUOp
 
@@ -292,6 +575,14 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 ```
 AvgPool2DMPS performs 2D average pooling using MPSGraph
 
+#### func  BatchMatMul
+
+```go
+func BatchMatMul(tensorA, tensorB *Tensor) (*Tensor, error)
+```
+BatchMatMul performs batched matrix multiplication Input tensors should be 3D:
+[batch_size, M, N] x [batch_size, N, P] -> [batch_size, M, P]
+
 #### func  BroadcastTensor
 
 ```go
@@ -311,6 +602,13 @@ Conv2DMPS performs 2D convolution using MPSGraph
 ```go
 func Div(t1, t2 *Tensor) (*Tensor, error)
 ```
+
+#### func  ExecuteFusedOperation
+
+```go
+func ExecuteFusedOperation(op OperationDesc) (*Tensor, error)
+```
+ExecuteFusedOperation executes a fused operation based on its type
 
 #### func  Exp
 
@@ -337,6 +635,32 @@ FromScalar creates a scalar tensor from a float64 value
 func Full(shape []int, value interface{}, dtype DType, device DeviceType) (*Tensor, error)
 ```
 
+#### func  LinearForward
+
+```go
+func LinearForward(input, weight, bias *Tensor) (*Tensor, error)
+```
+LinearForward performs fused matrix multiplication + bias addition Equivalent
+to: MatMul(input, weight) + bias, but in a single GPU kernel
+
+#### func  LinearReLU
+
+```go
+func LinearReLU(input, weight, bias *Tensor) (*Tensor, error)
+```
+LinearReLU performs fused matrix multiplication + bias addition + ReLU
+activation Equivalent to: ReLU(MatMul(input, weight) + bias), but in a single
+GPU kernel
+
+#### func  LinearSigmoid
+
+```go
+func LinearSigmoid(input, weight, bias *Tensor) (*Tensor, error)
+```
+LinearSigmoid performs fused matrix multiplication + bias addition + Sigmoid
+activation Equivalent to: Sigmoid(MatMul(input, weight) + bias), but in a single
+GPU kernel
+
 #### func  Log
 
 ```go
@@ -361,7 +685,6 @@ MatMulAutograd performs matrix multiplication with automatic differentiation
 ```go
 func MatMulGPU(t1, t2 *Tensor) (*Tensor, error)
 ```
-MatMulGPU performs matrix multiplication on GPU
 
 #### func  MatMulMPS
 
@@ -585,6 +908,20 @@ func (t *Tensor) GetInt32Data() ([]int32, error)
 func (t *Tensor) Grad() *Tensor
 ```
 
+#### func (*Tensor) IsOnGPU
+
+```go
+func (t *Tensor) IsOnGPU() bool
+```
+IsOnGPU returns true if tensor is on any GPU device
+
+#### func (*Tensor) IsPersistent
+
+```go
+func (t *Tensor) IsPersistent() bool
+```
+IsPersistent returns true if tensor stays on GPU across operations
+
 #### func (*Tensor) Item
 
 ```go
@@ -704,6 +1041,13 @@ func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error)
 func (t *Tensor) ToGPU() (*Tensor, error)
 ```
 ToGPU moves a tensor to GPU device using the BufferAllocator
+
+#### func (*Tensor) ToPersistentGPU
+
+```go
+func (t *Tensor) ToPersistentGPU() (*Tensor, error)
+```
+ToPersistentGPU converts a CPU tensor to persistent GPU tensor that stays on GPU
 
 #### func (*Tensor) Transpose
 

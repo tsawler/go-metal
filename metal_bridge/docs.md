@@ -83,6 +83,203 @@ kernel void matmul_float32(device const float* matrixA [[buffer(0)]],
     }
     result[row * P + col] = sum;
 }
+
+// ===== FUSED OPERATION KERNELS =====
+// These kernels combine multiple operations to reduce GPU kernel launch overhead
+
+// Fused Linear layer kernel: MatMul + Bias addition in one GPU call
+kernel void linear_forward_float32(device const float* input [[buffer(0)]],      // [batch_size, input_features]
+                                  device const float* weight [[buffer(1)]],     // [output_features, input_features]
+                                  device const float* bias [[buffer(2)]],       // [output_features]
+                                  device float* output [[buffer(3)]],            // [batch_size, output_features]
+                                  constant uint& batch_size [[buffer(4)]],
+                                  constant uint& input_features [[buffer(5)]],
+                                  constant uint& output_features [[buffer(6)]],
+                                  uint2 gid [[thread_position_in_grid]]) {
+    uint batch_idx = gid.y;
+    uint out_idx = gid.x;
+    
+    if (batch_idx >= batch_size || out_idx >= output_features) return;
+    
+    // Compute matrix multiplication for this output element
+    float sum = 0.0f;
+    for (uint in_idx = 0; in_idx < input_features; in_idx++) {
+        sum += input[batch_idx * input_features + in_idx] * weight[in_idx * output_features + out_idx];
+    }
+    
+    // Add bias
+    sum += bias[out_idx];
+    
+    // Store result
+    output[batch_idx * output_features + out_idx] = sum;
+}
+
+// Fused Linear + ReLU kernel: MatMul + Bias + ReLU activation in one GPU call
+kernel void linear_relu_float32(device const float* input [[buffer(0)]],
+                               device const float* weight [[buffer(1)]],
+                               device const float* bias [[buffer(2)]],
+                               device float* output [[buffer(3)]],
+                               constant uint& batch_size [[buffer(4)]],
+                               constant uint& input_features [[buffer(5)]],
+                               constant uint& output_features [[buffer(6)]],
+                               uint2 gid [[thread_position_in_grid]]) {
+    uint batch_idx = gid.y;
+    uint out_idx = gid.x;
+    
+    if (batch_idx >= batch_size || out_idx >= output_features) return;
+    
+    // Compute matrix multiplication
+    float sum = 0.0f;
+    for (uint in_idx = 0; in_idx < input_features; in_idx++) {
+        sum += input[batch_idx * input_features + in_idx] * weight[in_idx * output_features + out_idx];
+    }
+    
+    // Add bias and apply ReLU activation
+    sum = max(0.0f, sum + bias[out_idx]);
+    
+    // Store result
+    output[batch_idx * output_features + out_idx] = sum;
+}
+
+// Fused Linear + Sigmoid kernel: MatMul + Bias + Sigmoid activation in one GPU call
+kernel void linear_sigmoid_float32(device const float* input [[buffer(0)]],
+                                  device const float* weight [[buffer(1)]],
+                                  device const float* bias [[buffer(2)]],
+                                  device float* output [[buffer(3)]],
+                                  constant uint& batch_size [[buffer(4)]],
+                                  constant uint& input_features [[buffer(5)]],
+                                  constant uint& output_features [[buffer(6)]],
+                                  uint2 gid [[thread_position_in_grid]]) {
+    uint batch_idx = gid.y;
+    uint out_idx = gid.x;
+    
+    if (batch_idx >= batch_size || out_idx >= output_features) return;
+    
+    // Compute matrix multiplication
+    float sum = 0.0f;
+    for (uint in_idx = 0; in_idx < input_features; in_idx++) {
+        sum += input[batch_idx * input_features + in_idx] * weight[in_idx * output_features + out_idx];
+    }
+    
+    // Add bias and apply Sigmoid activation
+    sum = 1.0f / (1.0f + exp(-(sum + bias[out_idx])));
+    
+    // Store result
+    output[batch_idx * output_features + out_idx] = sum;
+}
+
+// Fused Batch MatMul kernel for processing multiple matrix multiplications in one call
+kernel void batch_matmul_float32(device const float* batchA [[buffer(0)]],
+                                device const float* batchB [[buffer(1)]],
+                                device float* batchResult [[buffer(2)]],
+                                constant uint& batch_size [[buffer(3)]],
+                                constant uint& M [[buffer(4)]],
+                                constant uint& N [[buffer(5)]],
+                                constant uint& P [[buffer(6)]],
+                                uint3 gid [[thread_position_in_grid]]) {
+    uint batch_idx = gid.z;
+    uint row = gid.y;
+    uint col = gid.x;
+    
+    if (batch_idx >= batch_size || row >= M || col >= P) return;
+    
+    uint batch_offset_a = batch_idx * M * N;
+    uint batch_offset_b = batch_idx * N * P;
+    uint batch_offset_result = batch_idx * M * P;
+    
+    float sum = 0.0f;
+    for (uint k = 0; k < N; k++) {
+        sum += batchA[batch_offset_a + row * N + k] * batchB[batch_offset_b + k * P + col];
+    }
+    
+    batchResult[batch_offset_result + row * P + col] = sum;
+}
+
+// Fused gradient accumulation kernel for optimizer updates
+kernel void adam_update_float32(device float* params [[buffer(0)]],
+                               device const float* gradients [[buffer(1)]],
+                               device float* m [[buffer(2)]],           // First moment estimate
+                               device float* v [[buffer(3)]],           // Second moment estimate
+                               constant float& lr [[buffer(4)]],        // Learning rate
+                               constant float& beta1 [[buffer(5)]],     // Beta1
+                               constant float& beta2 [[buffer(6)]],     // Beta2
+                               constant float& eps [[buffer(7)]],       // Epsilon
+                               constant uint& t [[buffer(8)]],          // Time step
+                               uint index [[thread_position_in_grid]]) {
+    // Update biased first moment estimate
+    m[index] = beta1 * m[index] + (1.0f - beta1) * gradients[index];
+    
+    // Update biased second moment estimate
+    v[index] = beta2 * v[index] + (1.0f - beta2) * gradients[index] * gradients[index];
+    
+    // Compute bias correction
+    float m_hat = m[index] / (1.0f - pow(beta1, float(t)));
+    float v_hat = v[index] / (1.0f - pow(beta2, float(t)));
+    
+    // Update parameters
+    params[index] -= lr * m_hat / (sqrt(v_hat) + eps);
+}
+
+// Fused SGD with momentum update kernel
+kernel void sgd_momentum_update_float32(device float* params [[buffer(0)]],
+                                       device const float* gradients [[buffer(1)]],
+                                       device float* velocity [[buffer(2)]],
+                                       constant float& lr [[buffer(3)]],
+                                       constant float& momentum [[buffer(4)]],
+                                       constant float& weight_decay [[buffer(5)]],
+                                       uint index [[thread_position_in_grid]]) {
+    // Apply weight decay
+    float grad = gradients[index] + weight_decay * params[index];
+    
+    // Update velocity with momentum
+    velocity[index] = momentum * velocity[index] + grad;
+    
+    // Update parameters
+    params[index] -= lr * velocity[index];
+}
+
+// Fused layer norm forward kernel
+kernel void layer_norm_float32(device const float* input [[buffer(0)]],
+                              device const float* gamma [[buffer(1)]],
+                              device const float* beta [[buffer(2)]],
+                              device float* output [[buffer(3)]],
+                              device float* mean_out [[buffer(4)]],
+                              device float* var_out [[buffer(5)]],
+                              constant uint& batch_size [[buffer(6)]],
+                              constant uint& features [[buffer(7)]],
+                              uint2 gid [[thread_position_in_grid]]) {
+    uint batch_idx = gid.y;
+    
+    if (batch_idx >= batch_size) return;
+    
+    uint offset = batch_idx * features;
+    
+    // Calculate mean
+    float mean = 0.0f;
+    for (uint i = 0; i < features; i++) {
+        mean += input[offset + i];
+    }
+    mean /= float(features);
+    mean_out[batch_idx] = mean;
+    
+    // Calculate variance
+    float var = 0.0f;
+    for (uint i = 0; i < features; i++) {
+        float diff = input[offset + i] - mean;
+        var += diff * diff;
+    }
+    var /= float(features);
+    var_out[batch_idx] = var;
+    
+    // Normalize and scale
+    float std_inv = rsqrt(var + 1e-5f);
+    
+    uint feature_idx = gid.x;
+    if (feature_idx < features) {
+        float normalized = (input[offset + feature_idx] - mean) * std_inv;
+        output[offset + feature_idx] = gamma[feature_idx] * normalized + beta[feature_idx];
+    }
+}
 `
 ```
 MSL source code for Metal compute kernels
@@ -278,6 +475,57 @@ func (cb *CommandBuffer) ComputeCommandEncoder() *ComputeCommandEncoder
 func (cb *CommandBuffer) WaitUntilCompleted()
 ```
 
+#### type CommandBufferManager
+
+```go
+type CommandBufferManager struct {
+}
+```
+
+CommandBufferManager manages command buffer queuing and dependency tracking
+
+#### func  NewCommandBufferManager
+
+```go
+func NewCommandBufferManager(device *Device, commandQueue *CommandQueue) *CommandBufferManager
+```
+NewCommandBufferManager creates a new command buffer manager
+
+#### func (*CommandBufferManager) GenerateOperationID
+
+```go
+func (m *CommandBufferManager) GenerateOperationID() OperationID
+```
+GenerateOperationID creates a unique operation ID
+
+#### func (*CommandBufferManager) GetStats
+
+```go
+func (m *CommandBufferManager) GetStats() (queued, executed int64, pending int)
+```
+GetStats returns operation statistics for monitoring
+
+#### func (*CommandBufferManager) QueueOperation
+
+```go
+func (m *CommandBufferManager) QueueOperation(op *PendingOperation) error
+```
+QueueOperation adds an operation to the queue with dependency tracking
+
+#### func (*CommandBufferManager) Shutdown
+
+```go
+func (m *CommandBufferManager) Shutdown()
+```
+Shutdown gracefully shuts down the command buffer manager
+
+#### func (*CommandBufferManager) WaitForOperation
+
+```go
+func (m *CommandBufferManager) WaitForOperation(opID OperationID) error
+```
+WaitForOperation blocks until a specific operation completes
+
 #### type CommandQueue
 
 ```go
@@ -349,12 +597,63 @@ func (e *ComputeEngine) AddArraysFloat32(inputA, inputB []float32) ([]float32, e
 ```
 AddArraysFloat32 performs element-wise addition of two float32 arrays on GPU
 
+#### func (*ComputeEngine) AddArraysFloat32Async
+
+```go
+func (e *ComputeEngine) AddArraysFloat32Async(inputA, inputB []float32, completion func([]float32, error)) error
+```
+AddArraysFloat32Async performs element-wise addition of two float32 arrays on
+GPU asynchronously
+
 #### func (*ComputeEngine) AddArraysInt32
 
 ```go
 func (e *ComputeEngine) AddArraysInt32(inputA, inputB []int32) ([]int32, error)
 ```
 AddArraysInt32 performs element-wise addition of two int32 arrays on GPU
+
+#### func (*ComputeEngine) BatchMatMulFloat32
+
+```go
+func (e *ComputeEngine) BatchMatMulFloat32(batchA, batchB []float32, batchSize, M, N, P uint) ([]float32, error)
+```
+BatchMatMulFloat32 performs batch matrix multiplication in one GPU call
+
+#### func (*ComputeEngine) GetCommandQueue
+
+```go
+func (e *ComputeEngine) GetCommandQueue() *CommandQueue
+```
+GetCommandQueue returns the command queue
+
+#### func (*ComputeEngine) GetDevice
+
+```go
+func (e *ComputeEngine) GetDevice() *Device
+```
+GetDevice returns the Metal device
+
+#### func (*ComputeEngine) LinearForwardFloat32
+
+```go
+func (e *ComputeEngine) LinearForwardFloat32(input, weight, bias []float32, batchSize, inputFeatures, outputFeatures uint) ([]float32, error)
+```
+LinearForwardFloat32 performs fused MatMul + Bias addition in one GPU call
+
+#### func (*ComputeEngine) LinearReLUFloat32
+
+```go
+func (e *ComputeEngine) LinearReLUFloat32(input, weight, bias []float32, batchSize, inputFeatures, outputFeatures uint) ([]float32, error)
+```
+LinearReLUFloat32 performs fused MatMul + Bias + ReLU activation in one GPU call
+
+#### func (*ComputeEngine) LinearSigmoidFloat32
+
+```go
+func (e *ComputeEngine) LinearSigmoidFloat32(input, weight, bias []float32, batchSize, inputFeatures, outputFeatures uint) ([]float32, error)
+```
+LinearSigmoidFloat32 performs fused MatMul + Bias + Sigmoid activation in one
+GPU call
 
 #### func (*ComputeEngine) LoadKernel
 
@@ -370,12 +669,26 @@ func (e *ComputeEngine) MatMulFloat32(matrixA, matrixB []float32, M, N, P uint) 
 ```
 MatMulFloat32 performs matrix multiplication on GPU
 
+#### func (*ComputeEngine) MatMulFloat32Async
+
+```go
+func (e *ComputeEngine) MatMulFloat32Async(matrixA, matrixB []float32, M, N, P uint, completion func([]float32, error)) error
+```
+MatMulFloat32Async performs matrix multiplication on GPU asynchronously
+
 #### func (*ComputeEngine) ReLUFloat32
 
 ```go
 func (e *ComputeEngine) ReLUFloat32(input []float32) ([]float32, error)
 ```
 ReLUFloat32 applies ReLU activation to float32 array on GPU
+
+#### func (*ComputeEngine) ReLUFloat32Async
+
+```go
+func (e *ComputeEngine) ReLUFloat32Async(input []float32, completion func([]float32, error)) error
+```
+ReLUFloat32Async applies ReLU activation to float32 array on GPU asynchronously
 
 #### type ComputePipelineState
 
@@ -663,3 +976,30 @@ type MemoryStats struct {
 ```
 
 MemoryStats holds memory usage statistics
+
+#### type OperationID
+
+```go
+type OperationID uint64
+```
+
+OperationID represents a unique identifier for GPU operations
+
+#### type PendingOperation
+
+```go
+type PendingOperation struct {
+	ID           OperationID
+	Dependencies []OperationID
+	Execute      func() error
+	Cleanup      func() error
+	OnComplete   func(error)
+
+	// Resource tracking for memory safety
+	InputBuffers  []*Buffer
+	OutputBuffers []*Buffer
+	TempBuffers   []*Buffer
+}
+```
+
+PendingOperation represents an operation waiting to be executed

@@ -2,6 +2,7 @@ package tensor
 
 import (
 	"fmt"
+	"time"
 	"github.com/tsawler/go-metal/metal_bridge"
 )
 
@@ -10,6 +11,9 @@ type MPSGraphEngine struct {
 	device      *metal_bridge.Device
 	graphDevice *metal_bridge.GraphDevice
 	commandQueue *metal_bridge.CommandQueue
+	
+	// Semaphore to limit concurrent graph creation
+	graphSemaphore chan struct{}
 }
 
 var mpsGraphEngine *MPSGraphEngine
@@ -36,9 +40,30 @@ func GetMPSGraphEngine() (*MPSGraphEngine, error) {
 			device:      device,
 			graphDevice: graphDevice,
 			commandQueue: commandQueue,
+			graphSemaphore: make(chan struct{}, 2), // Allow max 2 concurrent graph operations
 		}
 	}
 	return mpsGraphEngine, nil
+}
+
+// acquireGraphSlot acquires a slot for graph operation with timeout
+func (engine *MPSGraphEngine) acquireGraphSlot() bool {
+	select {
+	case engine.graphSemaphore <- struct{}{}:
+		return true
+	case <-time.After(5 * time.Second):
+		return false
+	}
+}
+
+// releaseGraphSlot releases the semaphore slot
+func (engine *MPSGraphEngine) releaseGraphSlot() {
+	select {
+	case <-engine.graphSemaphore:
+		// Successfully released semaphore
+	default:
+		// Semaphore already released or empty
+	}
 }
 
 // determineResultDevice determines the device type for the result based on input tensors
@@ -50,15 +75,9 @@ func determineResultDevice(tensors ...*Tensor) DeviceType {
 		}
 	}
 	
-	// If any tensor is GPU, result should be GPU (temporary)
-	for _, t := range tensors {
-		if t.Device == GPU {
-			return GPU
-		}
-	}
-	
-	// Default to CPU
-	return CPU
+	// For MPS operations, result should be GPU (temporary) since computation runs on GPU
+	// This applies even if input tensors are CPU (they get copied to GPU for computation)
+	return GPU
 }
 
 // shouldKeepOnGPU returns true if the result tensor should stay on GPU
@@ -211,10 +230,16 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
 	
+	// Acquire slot for graph operation
+	if !engine.acquireGraphSlot() {
+		return nil, fmt.Errorf("failed to acquire graph slot for addition - too many concurrent operations")
+	}
+	defer engine.releaseGraphSlot()
+	
 	// Create graph
 	graph := metal_bridge.NewGraph()
 	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph")
+		return nil, fmt.Errorf("failed to create MPSGraph for addition")
 	}
 	
 	// Create placeholders for inputs
@@ -318,10 +343,16 @@ func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
 	
+	// Acquire slot for graph operation
+	if !engine.acquireGraphSlot() {
+		return nil, fmt.Errorf("failed to acquire graph slot for matrix multiplication - too many concurrent operations")
+	}
+	defer engine.releaseGraphSlot()
+	
 	// Create graph
 	graph := metal_bridge.NewGraph()
 	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph")
+		return nil, fmt.Errorf("failed to create MPSGraph for matrix multiplication")
 	}
 	
 	// Create placeholders for inputs
@@ -412,10 +443,16 @@ func ReLUMPS(a *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
 	
+	// Acquire slot for graph operation
+	if !engine.acquireGraphSlot() {
+		return nil, fmt.Errorf("failed to acquire graph slot for ReLU - too many concurrent operations")
+	}
+	defer engine.releaseGraphSlot()
+	
 	// Create graph
 	graph := metal_bridge.NewGraph()
 	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph")
+		return nil, fmt.Errorf("failed to create MPSGraph for ReLU")
 	}
 	
 	// Create placeholder for input
@@ -496,10 +533,16 @@ func SigmoidMPS(a *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
 	
+	// Acquire slot for graph operation
+	if !engine.acquireGraphSlot() {
+		return nil, fmt.Errorf("failed to acquire graph slot for Sigmoid - too many concurrent operations")
+	}
+	defer engine.releaseGraphSlot()
+	
 	// Create graph
 	graph := metal_bridge.NewGraph()
 	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph")
+		return nil, fmt.Errorf("failed to create MPSGraph for Sigmoid")
 	}
 	
 	// Create placeholder for input
@@ -616,10 +659,16 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
 	
+	// Acquire slot for graph operation
+	if !engine.acquireGraphSlot() {
+		return nil, fmt.Errorf("failed to acquire graph slot for Conv2D - too many concurrent operations")
+	}
+	defer engine.releaseGraphSlot()
+	
 	// Create graph
 	graph := metal_bridge.NewGraph()
 	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph")
+		return nil, fmt.Errorf("failed to create MPSGraph for Conv2D")
 	}
 	
 	// Create placeholders
@@ -750,10 +799,16 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
 	
+	// Acquire slot for graph operation
+	if !engine.acquireGraphSlot() {
+		return nil, fmt.Errorf("failed to acquire graph slot for MaxPool2D - too many concurrent operations")
+	}
+	defer engine.releaseGraphSlot()
+	
 	// Create graph
 	graph := metal_bridge.NewGraph()
 	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph")
+		return nil, fmt.Errorf("failed to create MPSGraph for MaxPool2D")
 	}
 	
 	// Create placeholder
@@ -852,10 +907,16 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
 	
+	// Acquire slot for graph operation
+	if !engine.acquireGraphSlot() {
+		return nil, fmt.Errorf("failed to acquire graph slot for AvgPool2D - too many concurrent operations")
+	}
+	defer engine.releaseGraphSlot()
+	
 	// Create graph
 	graph := metal_bridge.NewGraph()
 	if graph == nil {
-		return nil, fmt.Errorf("failed to create MPSGraph")
+		return nil, fmt.Errorf("failed to create MPSGraph for AvgPool2D")
 	}
 	
 	// Create placeholder

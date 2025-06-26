@@ -53,7 +53,11 @@ func TestLinearForward(t *testing.T) {
 
 	// Compare with separate operations for verification
 	start = time.Now()
-	matmulResult, err := MatMul(input, weight)
+	weightTransposed, err := weight.Transpose(0, 1)
+	if err != nil {
+		t.Fatalf("Weight transpose failed: %v", err)
+	}
+	matmulResult, err := MatMul(input, weightTransposed)
 	if err != nil {
 		t.Fatalf("MatMul failed: %v", err)
 	}
@@ -288,7 +292,7 @@ func TestGPUTrainingContextWithFusion(t *testing.T) {
 		t.Fatalf("Failed to create input tensor: %v", err)
 	}
 
-	weight, err := NewTensor([]int{8, 16}, Float32, GPU, make([]float32, 128))
+	weight, err := NewTensor([]int{16, 8}, Float32, GPU, make([]float32, 128))
 	if err != nil {
 		t.Fatalf("Failed to create weight tensor: %v", err)
 	}

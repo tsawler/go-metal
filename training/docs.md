@@ -618,6 +618,13 @@ func (t *Trainer) GetMetrics() []TrainingMetrics
 ```
 GetMetrics returns all training metrics
 
+#### func (*Trainer) GetModelDevice
+
+```go
+func (t *Trainer) GetModelDevice() tensor.DeviceType
+```
+GetModelDevice returns the device type of the first model parameter
+
 #### func (*Trainer) LoadCheckpoint
 
 ```go

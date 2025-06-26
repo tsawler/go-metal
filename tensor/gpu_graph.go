@@ -74,10 +74,12 @@ func (g *GPUComputationGraph) AddOperation(opType string, inputs []*Tensor, depe
 		completionCh: make(chan struct{}),
 	}
 	
-	// Increment reference counts for input tensors
+	// Increment reference counts for input tensors (skip nil placeholders)
 	for _, tensor := range inputs {
-		g.tensorRefs[tensor]++
-		tensor.Retain() // Use the tensor's built-in reference counting
+		if tensor != nil {
+			g.tensorRefs[tensor]++
+			tensor.Retain() // Use the tensor's built-in reference counting
+		}
 	}
 	
 	g.operations[opID] = graphOp
@@ -85,10 +87,12 @@ func (g *GPUComputationGraph) AddOperation(opType string, inputs []*Tensor, depe
 	// Create the pending operation for the command buffer manager
 	pendingOp, err := g.createPendingOperation(graphOp)
 	if err != nil {
-		// Cleanup on error
+		// Cleanup on error (skip nil placeholders)
 		for _, tensor := range inputs {
-			g.tensorRefs[tensor]--
-			tensor.Release()
+			if tensor != nil {
+				g.tensorRefs[tensor]--
+				tensor.Release()
+			}
 		}
 		delete(g.operations, opID)
 		return 0, fmt.Errorf("failed to create pending operation: %v", err)
@@ -115,7 +119,7 @@ func (g *GPUComputationGraph) createPendingOperation(graphOp *GraphOperation) (*
 	
 	// Convert input tensors to buffers (this may need buffer creation)
 	for _, tensor := range graphOp.InputTensors {
-		if tensor.Device == GPU && tensor.GetGPUBuffer() != nil {
+		if tensor != nil && tensor.Device == GPU && tensor.GetGPUBuffer() != nil {
 			if buf, ok := tensor.GetGPUBuffer().(*metal_bridge.Buffer); ok {
 				inputBuffers = append(inputBuffers, buf)
 			}
@@ -173,6 +177,11 @@ func (g *GPUComputationGraph) createMatMulExecute(graphOp *GraphOperation) func(
 		
 		t1, t2 := graphOp.InputTensors[0], graphOp.InputTensors[1]
 		
+		// Check for nil tensors which indicate unresolved dependencies
+		if t1 == nil || t2 == nil {
+			return fmt.Errorf("MatMul operation has nil input tensors - dependency resolution not implemented for async execution")
+		}
+		
 		// Use synchronous MatMul for now to avoid hanging issues
 		// This can be optimized later once the basic infrastructure is stable
 		var result *Tensor
@@ -201,6 +210,11 @@ func (g *GPUComputationGraph) createAddExecute(graphOp *GraphOperation) func() e
 		}
 		
 		t1, t2 := graphOp.InputTensors[0], graphOp.InputTensors[1]
+		
+		// Check for nil tensors which indicate unresolved dependencies
+		if t1 == nil || t2 == nil {
+			return fmt.Errorf("Add operation has nil input tensors - dependency resolution not implemented for async execution")
+		}
 		
 		// Use synchronous Add for now to avoid hanging issues
 		var result *Tensor
@@ -260,14 +274,16 @@ func (g *GPUComputationGraph) cleanupOperation(graphOp *GraphOperation) error {
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
 	
-	// Decrement reference counts for input tensors
+	// Decrement reference counts for input tensors (skip nil placeholders)
 	for _, tensor := range graphOp.InputTensors {
-		g.tensorRefs[tensor]--
-		tensor.Release()
-		
-		// If reference count reaches zero, tensor can be garbage collected
-		if g.tensorRefs[tensor] <= 0 {
-			delete(g.tensorRefs, tensor)
+		if tensor != nil {
+			g.tensorRefs[tensor]--
+			tensor.Release()
+			
+			// If reference count reaches zero, tensor can be garbage collected
+			if g.tensorRefs[tensor] <= 0 {
+				delete(g.tensorRefs, tensor)
+			}
 		}
 	}
 	
@@ -310,24 +326,42 @@ func (g *GPUComputationGraph) WaitForOperation(opID metal_bridge.OperationID) (*
 func (g *GPUComputationGraph) ExecuteSequence(operations []OperationDesc) (*Tensor, error) {
 	var lastOpID metal_bridge.OperationID
 	var dependencies []metal_bridge.OperationID
+	var lastResult *Tensor
 	
 	for i, opDesc := range operations {
+		// Resolve nil placeholders with previous result
+		actualInputs := make([]*Tensor, len(opDesc.Inputs))
+		copy(actualInputs, opDesc.Inputs)
+		
+		for j, input := range actualInputs {
+			if input == nil && lastResult != nil {
+				// Replace nil placeholder with the previous result
+				actualInputs[j] = lastResult
+			}
+		}
+		
 		if i > 0 {
 			dependencies = []metal_bridge.OperationID{lastOpID}
 		} else {
 			dependencies = nil
 		}
 		
-		opID, err := g.AddOperation(opDesc.Type, opDesc.Inputs, dependencies, opDesc.Params)
+		opID, err := g.AddOperation(opDesc.Type, actualInputs, dependencies, opDesc.Params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add operation %d: %v", i, err)
 		}
 		
 		lastOpID = opID
+		
+		// Get the result to use for the next operation's nil placeholder resolution
+		lastResult, err = g.WaitForOperation(opID)
+		if err != nil {
+			return nil, fmt.Errorf("operation %d failed: %v", i, err)
+		}
 	}
 	
-	// Wait for the final operation to complete
-	return g.WaitForOperation(lastOpID)
+	// Return the final result
+	return lastResult, nil
 }
 
 // OperationDesc describes an operation to be added to the graph

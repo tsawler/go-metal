@@ -392,12 +392,30 @@ func TestToDevice(t *testing.T) {
 		}
 	})
 
-	t.Run("GPU transfer not implemented", func(t *testing.T) {
+	t.Run("CPU to GPU transfer", func(t *testing.T) {
 		tensor, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 2, 3, 4})
 		
-		_, err := tensor.ToDevice(GPU)
-		if err == nil {
-			t.Error("Expected error for GPU transfer in Phase 1")
+		result, err := tensor.ToDevice(GPU)
+		if err != nil {
+			t.Fatalf("Unexpected error for GPU transfer: %v", err)
+		}
+		
+		if result.Device != GPU {
+			t.Errorf("Expected GPU device, got %v", result.Device)
+		}
+		
+		// Verify data integrity
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert back to CPU: %v", err)
+		}
+		
+		expected := []float32{1, 2, 3, 4}
+		resultData := cpuResult.Data.([]float32)
+		for i, v := range expected {
+			if resultData[i] != v {
+				t.Errorf("Data mismatch at index %d: got %v, expected %v", i, resultData[i], v)
+			}
 		}
 	})
 }
