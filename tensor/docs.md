@@ -641,7 +641,9 @@ func Full(shape []int, value interface{}, dtype DType, device DeviceType) (*Tens
 func LinearForward(input, weight, bias *Tensor) (*Tensor, error)
 ```
 LinearForward performs fused matrix multiplication + bias addition Equivalent
-to: MatMul(input, weight) + bias, but in a single GPU kernel
+to: MatMul(input, weight^T) + bias, but in a single GPU kernel Note: weight is
+expected to be [output_features, input_features] to match training.Linear
+convention
 
 #### func  LinearReLU
 
@@ -649,8 +651,9 @@ to: MatMul(input, weight) + bias, but in a single GPU kernel
 func LinearReLU(input, weight, bias *Tensor) (*Tensor, error)
 ```
 LinearReLU performs fused matrix multiplication + bias addition + ReLU
-activation Equivalent to: ReLU(MatMul(input, weight) + bias), but in a single
-GPU kernel
+activation Equivalent to: ReLU(MatMul(input, weight^T) + bias), but in a single
+GPU kernel Note: weight is expected to be [output_features, input_features] to
+match training.Linear convention
 
 #### func  LinearSigmoid
 
@@ -658,8 +661,9 @@ GPU kernel
 func LinearSigmoid(input, weight, bias *Tensor) (*Tensor, error)
 ```
 LinearSigmoid performs fused matrix multiplication + bias addition + Sigmoid
-activation Equivalent to: Sigmoid(MatMul(input, weight) + bias), but in a single
-GPU kernel
+activation Equivalent to: Sigmoid(MatMul(input, weight^T) + bias), but in a
+single GPU kernel Note: weight is expected to be [output_features,
+input_features] to match training.Linear convention
 
 #### func  Log
 
