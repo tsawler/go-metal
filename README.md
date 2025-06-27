@@ -6,6 +6,9 @@ This document outlines a detailed, phased approach to building a machine learnin
 
 Developing a high-performance machine learning library from scratch is a significant undertaking. By breaking it down into logical, manageable phases, we can ensure a solid foundation, incremental progress, and robust error handling. The core idea is to combine Go's concurrency and tooling with Apple's highly optimized GPU acceleration frameworks.
 
+### Import Path
+The library uses the import path `github.com/tsawler/go-metal` throughout the codebase. Ensure your go.mod file is configured accordingly when using this library.
+
 ## Phase 0: Project Setup and Prerequisites
 
 Before writing any code, ensure your development environment is correctly configured and you have a fundamental understanding of the technologies involved.
@@ -142,13 +145,14 @@ This phase establishes the fundamental data structure for tensors and implements
 - **Test Coverage**: Full test suite with benchmarks and edge case validation
 
 **Files Implemented:**
-- `tensor/tensor.go` - Core tensor structure and types
+- `tensor/tensor.go` - Core tensor structure and types with CPU/GPU/PersistentGPU device support
 - `tensor/creation.go` - Tensor creation functions  
-- `tensor/operations.go` - Element-wise operations
+- `tensor/operations.go` - Element-wise operations with broadcasting support
 - `tensor/matrix.go` - Matrix and tensor operations
 - `tensor/utils.go` - Utility functions and memory management
-- `tensor/*_test.go` - Comprehensive test suite (5 test files)
-- `app/phase1-demo/` - Working demonstration application
+- `tensor/broadcasting.go` - NumPy-style broadcasting implementation
+- `tensor/*_test.go` - Comprehensive test suite (15+ test files)
+- `/app/phase1-demo/main.go` - Working demonstration application
 
 ## Phase 2: Objective-C/Metal Bridge and Raw MTLBuffer Operations
 
@@ -727,8 +731,8 @@ This asynchronous flow, combined with careful management of `MTLBuffer` lifecycl
 - `metal_bridge/kernels.go` - MSL kernel source constants
 - `metal_bridge/compute.go` - High-level compute engine interface
 - `tensor/gpu_ops.go` - GPU tensor operations integration
-- `tensor/*_test.go` - Comprehensive GPU functionality tests
-- `app/phase2-demo/` - Working demonstration with performance comparisons
+- `tensor/gpu_ops_test.go` - Comprehensive GPU functionality tests
+- `/app/phase2-demo/main.go` - Working demonstration with performance comparisons
 
 **Memory Safety Achievements:**
 - Explicit Metal object lifetime management through Go finalizers
@@ -852,9 +856,9 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 - `metal_bridge/metal_bridge.h` - Extended with MPSGraph type declarations and function prototypes including Conv2D and Pooling operations
 - `metal_bridge/metal_bridge.m` - MPSGraph function implementations with proper API usage and descriptor configuration
 - `metal_bridge/metal.go` - Updated with MPSGraph Go wrapper structs and compilation support for all operations
-- `tensor/mps_ops.go` - High-level MPSGraph operations (AddMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS)
+- `tensor/mps_ops.go` - High-level MPSGraph operations with thread-safe graph caching (AddMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS)
 - `tensor/mps_ops_test.go` - Comprehensive test suite for all MPSGraph operations including CNN operations
-- `app/phase3-demo/` - Working demonstration application showcasing CNN operations and performance
+- `/app/phase3-demo/main.go` - Working demonstration application showcasing CNN operations and performance
 - **Core Operations**: Element-wise addition, matrix multiplication, ReLU, sigmoid with GPU acceleration
 - **CNN Operations**: Conv2D with bias support, MaxPool2D, AvgPool2D with proper shape calculation
 - **Additional Operations**: Subtraction, multiplication, division, softmax, transpose, reshape operations available
@@ -963,7 +967,8 @@ This phase introduces the ability to automatically compute gradients, which is f
 - `tensor/autograd.go` - Complete automatic differentiation implementation with operation structs
 - `tensor/tensor.go` - Extended with Backward(), ZeroGrad(), gradient accumulation methods
 - `tensor/autograd_test.go` - Comprehensive test suite covering all autograd functionality
-- `app/phase4-demo/` - Working demonstration application showcasing automatic differentiation
+- `tensor/autograd_broadcasting_test.go` - Tests for autograd with broadcasting operations
+- `/app/phase4-demo/main.go` - Working demonstration application showcasing automatic differentiation
 
 **Mathematical Operations Supported:**
 - **Element-wise**: Addition, Subtraction, Multiplication with proper gradients
@@ -1107,9 +1112,9 @@ Efficient memory management is vital for deep learning. PyTorch uses a caching a
 - `metal_bridge/allocator.go` - Complete caching allocator implementation with size-based pooling
 - `metal_bridge/allocator_test.go` - Comprehensive test suite including long-running memory tests
 - `tensor/tensor.go` - Extended with GPU buffer management and reference counting methods
-- `tensor/gpu_ops.go` - Updated ToGPU/ToCPU operations to use BufferAllocator
+- `tensor/gpu_ops.go` - Updated ToGPU/ToCPU/ToPersistentGPU operations to use BufferAllocator
 - `tensor/gpu_memory_test.go` - Tensor-level memory management testing and leak detection
-- `app/phase5-demo/` - Working demonstration showcasing all GPU memory management features
+- `/app/phase5-demo/main.go` - Working demonstration showcasing all GPU memory management features
 
 **Memory Management Features:**
 - **Buffer Pooling**: Automatic reuse of MTLBuffers reducing Metal allocation overhead
@@ -1316,7 +1321,7 @@ IsTraining() bool // Returns true if in training mode
 * **Comprehensive Testing**: All components thoroughly tested with extensive test coverage
 * **Demo Application**: Complete working examples showcasing binary classification, multi-class classification, regression, and optimizer comparison
 
-**Demo Location**: `/examples/phase6_demo.go` - *Fully functional training pipeline demonstrations*
+**Demo Location**: `/app/phase6-demo/main.go` - *Fully functional training pipeline demonstrations*
 
 ### ✅ **Performance Issues RESOLVED:**
 
@@ -1344,7 +1349,7 @@ IsTraining() bool // Returns true if in training mode
 - ✅ **Stability**: Provides a robust and production-ready foundation for all MPS-based operations.
 
 **Files Modified**:
-- `tensor/mps_ops.go`: Re-architected to use the new caching layer.
+- `tensor/mps_ops.go`: Re-architected to use the new caching layer with thread-safe graph cache (`cachedGraph` struct and `graphCache` map).
 
 
 
@@ -1429,7 +1434,7 @@ commandBuffer.WaitUntilCompleted()  // Blocks CPU until GPU finishes
 1. **CommandBufferManager** (`metal_bridge/command_queue_manager.go`):
    - Operation queuing with buffered channels (100 operation buffer)
    - Dependency graph tracking with automatic resolution
-   - Resource lifecycle management per README sections 615-701
+   - Resource lifecycle management following asynchronous execution patterns
    - Reference counting for tensor lifetime management
    - Thread-safe concurrent operation support
    - Graceful shutdown with pending operation completion
@@ -1449,6 +1454,12 @@ commandBuffer.WaitUntilCompleted()  // Blocks CPU until GPU finishes
    - Configurable batch sizes for GPU utilization
    - Performance metrics tracking
    - Global context for easy integration
+
+4. **Fused Operations** (`tensor/fused_ops.go`):
+   - LinearForward, LinearReLU, LinearSigmoid fused kernels
+   - BatchMatMul for efficient batch processing
+   - FusedOperationDetector for automatic fusion pattern recognition
+   - Complete Metal kernel implementations for all fused operations
 
 **Memory Safety Features** (Conforming to README Requirements):
 - ✅ **Tensor lifetime management**: Reference counting prevents premature GC
@@ -1616,12 +1627,20 @@ The library successfully implements **PyTorch-like** functionality in Go with:
 
 ### **📈 Demonstrated Use Cases**
 
-The included **phase6-demo** application showcases:
-- ✅ **Binary/Multi-class Classification**: Complete training pipelines
-- ✅ **GPU Performance Comparison**: Automatic CPU vs GPU benchmarking  
-- ✅ **Operation Fusion**: Real-world fusion performance demonstrations
-- ✅ **Persistent GPU Tensors**: Memory transfer optimization validation
-- ✅ **Training Stability**: Reliable deep learning workflows
+The included demo applications showcase:
+- ✅ **Phase 1 Demo** (`/app/phase1-demo/`): CPU tensor operations and comprehensive API usage
+- ✅ **Phase 2 Demo** (`/app/phase2-demo/`): GPU acceleration with Metal compute kernels  
+- ✅ **Phase 3 Demo** (`/app/phase3-demo/`): MPSGraph CNN operations and performance
+- ✅ **Phase 4 Demo** (`/app/phase4-demo/`): Automatic differentiation and gradient computation
+- ✅ **Phase 5 Demo** (`/app/phase5-demo/`): GPU memory management and buffer pooling
+- ✅ **Phase 6 Demo** (`/app/phase6-demo/`): Complete training pipeline with:
+  - Binary/Multi-class Classification
+  - GPU Performance Comparison
+  - Operation Fusion demonstrations
+  - Persistent GPU Tensors validation
+  - Training Stability showcase
+- ✅ **Async GPU Demo** (`/app/demo-async-gpu/`): Asynchronous GPU execution patterns
+- 📁 **Cats vs Dogs Dataset** (`/app/cats-dogs/data/`): Sample image dataset for CNN demonstrations
 
 ### **🎯 Mission Accomplished**
 
