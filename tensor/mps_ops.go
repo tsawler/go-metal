@@ -146,18 +146,9 @@ func isCompatibleForOp(a, b *Tensor) bool {
 		return false
 	}
 	
-	// Check shapes
-	if len(a.Shape) != len(b.Shape) {
-		return false
-	}
-	
-	for i, dim := range a.Shape {
-		if dim != b.Shape[i] {
-			return false
-		}
-	}
-	
-	return true
+	// Check if shapes are broadcastable (let MPS handle the actual broadcasting)
+	_, err := BroadcastShapes(a.Shape, b.Shape)
+	return err == nil
 }
 
 // convertDTypeToMPS converts Go tensor DType to MPSGraph data type
@@ -280,13 +271,256 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 		return nil, err
 	}
 
+	// Determine broadcast result shape
+	broadcastShape, err := BroadcastShapes(a.Shape, b.Shape)
+	if err != nil {
+		return nil, fmt.Errorf("cannot broadcast tensors for addition: %v", err)
+	}
+	
 	resultDevice := determineResultDevice(a, b)
 	result := &Tensor{
-		Shape:    a.Shape,
-		Strides:  a.Strides,
+		Shape:    broadcastShape,
+		Strides:  calculateStrides(broadcastShape),
 		DType:    a.DType,
 		Device:   resultDevice,
-		NumElems: a.NumElems,
+		NumElems: calculateNumElements(broadcastShape),
+	}
+
+	allocator := metal_bridge.GetGlobalAllocator()
+	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
+	}
+	defer aBuffer.Release()
+
+	bBuffer, err := createMPSBufferFromTensor(b, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
+	}
+	defer bBuffer.Release()
+
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result buffer: %v", err)
+	}
+
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
+		[]*metal_bridge.Buffer{aBuffer, bBuffer},
+		cached.resultTensors,
+		[]*metal_bridge.Buffer{resultBuffer},
+		executionDescriptor)
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// SubMPS performs tensor subtraction using a cached MPSGraph
+func SubMPS(a, b *Tensor) (*Tensor, error) {
+	if !isCompatibleForOp(a, b) {
+		return nil, fmt.Errorf("tensors are not compatible for subtraction")
+	}
+
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+
+	cacheKey := generateCacheKey("sub", a, b)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(a.DType)
+		placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
+		placeholderB := graph.PlaceholderTensor(b.Shape, dataType)
+		resultTensor := graph.Subtraction(placeholderA, placeholderB)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Determine broadcast result shape
+	broadcastShape, err := BroadcastShapes(a.Shape, b.Shape)
+	if err != nil {
+		return nil, fmt.Errorf("cannot broadcast tensors for subtraction: %v", err)
+	}
+	
+	resultDevice := determineResultDevice(a, b)
+	result := &Tensor{
+		Shape:    broadcastShape,
+		Strides:  calculateStrides(broadcastShape),
+		DType:    a.DType,
+		Device:   resultDevice,
+		NumElems: calculateNumElements(broadcastShape),
+	}
+
+	allocator := metal_bridge.GetGlobalAllocator()
+	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
+	}
+	defer aBuffer.Release()
+
+	bBuffer, err := createMPSBufferFromTensor(b, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
+	}
+	defer bBuffer.Release()
+
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result buffer: %v", err)
+	}
+
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
+		[]*metal_bridge.Buffer{aBuffer, bBuffer},
+		cached.resultTensors,
+		[]*metal_bridge.Buffer{resultBuffer},
+		executionDescriptor)
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// MulMPS performs tensor multiplication using a cached MPSGraph
+func MulMPS(a, b *Tensor) (*Tensor, error) {
+	if !isCompatibleForOp(a, b) {
+		return nil, fmt.Errorf("tensors are not compatible for multiplication")
+	}
+
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+
+	cacheKey := generateCacheKey("mul", a, b)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(a.DType)
+		placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
+		placeholderB := graph.PlaceholderTensor(b.Shape, dataType)
+		resultTensor := graph.Multiplication(placeholderA, placeholderB)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Determine broadcast result shape
+	broadcastShape, err := BroadcastShapes(a.Shape, b.Shape)
+	if err != nil {
+		return nil, fmt.Errorf("cannot broadcast tensors for multiplication: %v", err)
+	}
+	
+	resultDevice := determineResultDevice(a, b)
+	result := &Tensor{
+		Shape:    broadcastShape,
+		Strides:  calculateStrides(broadcastShape),
+		DType:    a.DType,
+		Device:   resultDevice,
+		NumElems: calculateNumElements(broadcastShape),
+	}
+
+	allocator := metal_bridge.GetGlobalAllocator()
+	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
+	}
+	defer aBuffer.Release()
+
+	bBuffer, err := createMPSBufferFromTensor(b, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
+	}
+	defer bBuffer.Release()
+
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result buffer: %v", err)
+	}
+
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
+		[]*metal_bridge.Buffer{aBuffer, bBuffer},
+		cached.resultTensors,
+		[]*metal_bridge.Buffer{resultBuffer},
+		executionDescriptor)
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// DivMPS performs tensor division using a cached MPSGraph
+func DivMPS(a, b *Tensor) (*Tensor, error) {
+	if !isCompatibleForOp(a, b) {
+		return nil, fmt.Errorf("tensors are not compatible for division")
+	}
+
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+
+	cacheKey := generateCacheKey("div", a, b)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(a.DType)
+		placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
+		placeholderB := graph.PlaceholderTensor(b.Shape, dataType)
+		resultTensor := graph.Division(placeholderA, placeholderB)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Determine broadcast result shape
+	broadcastShape, err := BroadcastShapes(a.Shape, b.Shape)
+	if err != nil {
+		return nil, fmt.Errorf("cannot broadcast tensors for division: %v", err)
+	}
+	
+	resultDevice := determineResultDevice(a, b)
+	result := &Tensor{
+		Shape:    broadcastShape,
+		Strides:  calculateStrides(broadcastShape),
+		DType:    a.DType,
+		Device:   resultDevice,
+		NumElems: calculateNumElements(broadcastShape),
 	}
 
 	allocator := metal_bridge.GetGlobalAllocator()

@@ -668,6 +668,13 @@ Conv2DMPS performs 2D convolution using a cached MPSGraph
 func Div(t1, t2 *Tensor) (*Tensor, error)
 ```
 
+#### func  DivMPS
+
+```go
+func DivMPS(a, b *Tensor) (*Tensor, error)
+```
+DivMPS performs tensor division using a cached MPSGraph
+
 #### func  ExecuteFusedOperation
 
 ```go
@@ -782,6 +789,13 @@ func MulAutograd(a, b *Tensor) (*Tensor, error)
 ```
 MulAutograd performs multiplication with automatic differentiation
 
+#### func  MulMPS
+
+```go
+func MulMPS(a, b *Tensor) (*Tensor, error)
+```
+MulMPS performs tensor multiplication using a cached MPSGraph
+
 #### func  NewTensor
 
 ```go
@@ -884,6 +898,13 @@ func Sub(t1, t2 *Tensor) (*Tensor, error)
 func SubAutograd(a, b *Tensor) (*Tensor, error)
 ```
 SubAutograd performs subtraction with automatic differentiation
+
+#### func  SubMPS
+
+```go
+func SubMPS(a, b *Tensor) (*Tensor, error)
+```
+SubMPS performs tensor subtraction using a cached MPSGraph
 
 #### func  Sum
 

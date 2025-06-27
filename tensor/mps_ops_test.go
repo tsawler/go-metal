@@ -1,6 +1,7 @@
 package tensor
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
@@ -26,6 +27,349 @@ func TestGetMPSGraphEngine(t *testing.T) {
 	if engine.commandQueue == nil {
 		t.Error("Engine command queue is nil")
 	}
+}
+
+func TestSubMPS(t *testing.T) {
+	_, err := GetMPSGraphEngine()
+	if err != nil {
+		t.Skipf("MPSGraph not available on this system: %v", err)
+	}
+
+	t.Run("Float32 subtraction", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{5.0, 6.0, 7.0, 8.0})
+		b, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1.0, 2.0, 3.0, 4.0})
+
+		result, err := SubMPS(a, b)
+		if err != nil {
+			t.Fatalf("SubMPS failed: %v", err)
+		}
+
+		if result.Device != GPU {
+			t.Errorf("Result device = %v, expected %v", result.Device, GPU)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{4.0, 4.0, 4.0, 4.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("SubMPS result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Broadcasting - scalar from tensor", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{5, 6, 7, 8})
+		b, _ := NewTensor([]int{1}, Float32, CPU, []float32{3})
+
+		result, err := SubMPS(a, b)
+		if err != nil {
+			t.Fatalf("SubMPS broadcasting failed: %v", err)
+		}
+
+		expectedShape := []int{2, 2}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{2.0, 3.0, 4.0, 5.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("SubMPS broadcast result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Broadcasting - vector from matrix", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 3}, Float32, CPU, []float32{10, 20, 30, 40, 50, 60})
+		b, _ := NewTensor([]int{3}, Float32, CPU, []float32{1, 2, 3})
+
+		result, err := SubMPS(a, b)
+		if err != nil {
+			t.Fatalf("SubMPS broadcasting failed: %v", err)
+		}
+
+		expectedShape := []int{2, 3}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{9.0, 18.0, 27.0, 39.0, 48.0, 57.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("SubMPS broadcast result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Incompatible tensors", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 2, 3, 4})
+		b, _ := NewTensor([]int{2, 2}, Int32, CPU, []int32{5, 6, 7, 8})
+
+		_, err := SubMPS(a, b)
+		if err == nil {
+			t.Error("Expected error for incompatible tensors")
+		}
+	})
+
+	t.Run("Non-broadcastable shapes", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 3}, Float32, CPU, []float32{1, 2, 3, 4, 5, 6})
+		b, _ := NewTensor([]int{2}, Float32, CPU, []float32{10, 20})
+
+		_, err := SubMPS(a, b)
+		if err == nil {
+			t.Error("Expected error for non-broadcastable shapes")
+		}
+	})
+}
+
+func TestMulMPS(t *testing.T) {
+	_, err := GetMPSGraphEngine()
+	if err != nil {
+		t.Skipf("MPSGraph not available on this system: %v", err)
+	}
+
+	t.Run("Float32 multiplication", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{2.0, 3.0, 4.0, 5.0})
+		b, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1.0, 2.0, 3.0, 4.0})
+
+		result, err := MulMPS(a, b)
+		if err != nil {
+			t.Fatalf("MulMPS failed: %v", err)
+		}
+
+		if result.Device != GPU {
+			t.Errorf("Result device = %v, expected %v", result.Device, GPU)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{2.0, 6.0, 12.0, 20.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("MulMPS result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Broadcasting - scalar to tensor", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 2, 3, 4})
+		b, _ := NewTensor([]int{1}, Float32, CPU, []float32{3})
+
+		result, err := MulMPS(a, b)
+		if err != nil {
+			t.Fatalf("MulMPS broadcasting failed: %v", err)
+		}
+
+		expectedShape := []int{2, 2}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{3.0, 6.0, 9.0, 12.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("MulMPS broadcast result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Broadcasting - vector to matrix", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 3}, Float32, CPU, []float32{1, 2, 3, 4, 5, 6})
+		b, _ := NewTensor([]int{3}, Float32, CPU, []float32{2, 3, 4})
+
+		result, err := MulMPS(a, b)
+		if err != nil {
+			t.Fatalf("MulMPS broadcasting failed: %v", err)
+		}
+
+		expectedShape := []int{2, 3}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{2.0, 6.0, 12.0, 8.0, 15.0, 24.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("MulMPS broadcast result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Incompatible tensors", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 2, 3, 4})
+		b, _ := NewTensor([]int{2, 2}, Int32, CPU, []int32{5, 6, 7, 8})
+
+		_, err := MulMPS(a, b)
+		if err == nil {
+			t.Error("Expected error for incompatible tensors")
+		}
+	})
+
+	t.Run("Non-broadcastable shapes", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 3}, Float32, CPU, []float32{1, 2, 3, 4, 5, 6})
+		b, _ := NewTensor([]int{2}, Float32, CPU, []float32{10, 20})
+
+		_, err := MulMPS(a, b)
+		if err == nil {
+			t.Error("Expected error for non-broadcastable shapes")
+		}
+	})
+}
+
+func TestDivMPS(t *testing.T) {
+	_, err := GetMPSGraphEngine()
+	if err != nil {
+		t.Skipf("MPSGraph not available on this system: %v", err)
+	}
+
+	t.Run("Float32 division", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{8.0, 12.0, 16.0, 20.0})
+		b, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{2.0, 3.0, 4.0, 5.0})
+
+		result, err := DivMPS(a, b)
+		if err != nil {
+			t.Fatalf("DivMPS failed: %v", err)
+		}
+
+		if result.Device != GPU {
+			t.Errorf("Result device = %v, expected %v", result.Device, GPU)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{4.0, 4.0, 4.0, 4.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("DivMPS result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Broadcasting - scalar division", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{6, 9, 12, 15})
+		b, _ := NewTensor([]int{1}, Float32, CPU, []float32{3})
+
+		result, err := DivMPS(a, b)
+		if err != nil {
+			t.Fatalf("DivMPS broadcasting failed: %v", err)
+		}
+
+		expectedShape := []int{2, 2}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{2.0, 3.0, 4.0, 5.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("DivMPS broadcast result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Broadcasting - vector division", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 3}, Float32, CPU, []float32{6, 12, 18, 8, 15, 24})
+		b, _ := NewTensor([]int{3}, Float32, CPU, []float32{2, 3, 6})
+
+		result, err := DivMPS(a, b)
+		if err != nil {
+			t.Fatalf("DivMPS broadcasting failed: %v", err)
+		}
+
+		expectedShape := []int{2, 3}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{3.0, 4.0, 3.0, 4.0, 5.0, 4.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("DivMPS broadcast result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Division by zero handling", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 2, 3, 4})
+		b, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 0, 3, 4})
+
+		result, err := DivMPS(a, b)
+		if err != nil {
+			t.Fatalf("DivMPS failed: %v", err)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		resultData := cpuResult.Data.([]float32)
+		// Check that division by zero produces infinity, not an error
+		if !math.IsInf(float64(resultData[1]), 1) {
+			t.Errorf("Division by zero should produce +Inf, got %v", resultData[1])
+		}
+	})
+
+	t.Run("Incompatible tensors", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 2, 3, 4})
+		b, _ := NewTensor([]int{2, 2}, Int32, CPU, []int32{5, 6, 7, 8})
+
+		_, err := DivMPS(a, b)
+		if err == nil {
+			t.Error("Expected error for incompatible tensors")
+		}
+	})
+
+	t.Run("Non-broadcastable shapes", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 3}, Float32, CPU, []float32{1, 2, 3, 4, 5, 6})
+		b, _ := NewTensor([]int{2}, Float32, CPU, []float32{10, 20})
+
+		_, err := DivMPS(a, b)
+		if err == nil {
+			t.Error("Expected error for non-broadcastable shapes")
+		}
+	})
 }
 
 func TestAddMPS(t *testing.T) {
@@ -60,6 +404,60 @@ func TestAddMPS(t *testing.T) {
 		}
 	})
 
+	t.Run("Broadcasting - scalar to tensor", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 2, 3, 4})
+		b, _ := NewTensor([]int{1}, Float32, CPU, []float32{5})
+
+		result, err := AddMPS(a, b)
+		if err != nil {
+			t.Fatalf("AddMPS broadcasting failed: %v", err)
+		}
+
+		expectedShape := []int{2, 2}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{6.0, 7.0, 8.0, 9.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("AddMPS broadcast result = %v, expected %v", resultData, expected)
+		}
+	})
+
+	t.Run("Broadcasting - vector to matrix", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 3}, Float32, CPU, []float32{1, 2, 3, 4, 5, 6})
+		b, _ := NewTensor([]int{3}, Float32, CPU, []float32{10, 20, 30})
+
+		result, err := AddMPS(a, b)
+		if err != nil {
+			t.Fatalf("AddMPS broadcasting failed: %v", err)
+		}
+
+		expectedShape := []int{2, 3}
+		if !reflect.DeepEqual(result.Shape, expectedShape) {
+			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
+		}
+
+		// Convert result back to CPU for verification
+		cpuResult, err := result.ToCPU()
+		if err != nil {
+			t.Fatalf("Failed to convert result to CPU: %v", err)
+		}
+
+		expected := []float32{11.0, 22.0, 33.0, 14.0, 25.0, 36.0}
+		resultData := cpuResult.Data.([]float32)
+		if !reflect.DeepEqual(resultData, expected) {
+			t.Errorf("AddMPS broadcast result = %v, expected %v", resultData, expected)
+		}
+	})
+
 	t.Run("Incompatible tensors", func(t *testing.T) {
 		a, _ := NewTensor([]int{2, 2}, Float32, CPU, []float32{1, 2, 3, 4})
 		b, _ := NewTensor([]int{2, 2}, Int32, CPU, []int32{5, 6, 7, 8})
@@ -67,6 +465,16 @@ func TestAddMPS(t *testing.T) {
 		_, err := AddMPS(a, b)
 		if err == nil {
 			t.Error("Expected error for incompatible tensors")
+		}
+	})
+
+	t.Run("Non-broadcastable shapes", func(t *testing.T) {
+		a, _ := NewTensor([]int{2, 3}, Float32, CPU, []float32{1, 2, 3, 4, 5, 6})
+		b, _ := NewTensor([]int{2}, Float32, CPU, []float32{10, 20})
+
+		_, err := AddMPS(a, b)
+		if err == nil {
+			t.Error("Expected error for non-broadcastable shapes")
 		}
 	})
 }

@@ -349,6 +349,14 @@ void AddCommandBufferCompletedHandler(id<MTLCommandBuffer> commandBuffer, void* 
 
 ## MPSGraph Integration
 
+The library provides complete coverage of element-wise operations through MPSGraph:
+- **AddMPS**: Addition using `MPSGraphAddition`
+- **SubMPS**: Subtraction using `MPSGraphSubtraction`
+- **MulMPS**: Multiplication using `MPSGraphMultiplication`
+- **DivMPS**: Division using `MPSGraphDivision`
+
+All operations follow the same memory management and lifecycle patterns described below.
+
 ### Graph Object Lifecycle
 
 MPSGraph objects follow the same pattern but with additional complexity due to compilation and execution phases:
@@ -435,6 +443,7 @@ func (g *GPUComputationGraph) AddOperation(opType string, inputs []*Tensor, ...)
     }
     
     // ... create and queue operation ...
+    // Supports all element-wise operations: Add, Sub, Mul, Div, MatMul, ReLU, etc.
 }
 
 func (g *GPUComputationGraph) cleanupOperation(graphOp *GraphOperation) error {

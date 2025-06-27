@@ -797,7 +797,11 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 
   * [x] **Matrix Multiplication (`MatMulMPS`):** Implemented using `MPSGraphMatrixMultiplication`. This is a cornerstone of ML.
 
-  * [x] **Element-wise Addition (`AddMPS`):** Implemented using `MPSGraphAddition`.
+  * [x] **Element-wise Operations:** 
+    * [x] `AddMPS` using `MPSGraphAddition`
+    * [x] `SubMPS` using `MPSGraphSubtraction`
+    * [x] `MulMPS` using `MPSGraphMultiplication`
+    * [x] `DivMPS` using `MPSGraphDivision`
 
   * [x] **Activation Functions:** 
     * [x] `ReLUMPS` using `MPSGraphReLU`
@@ -807,7 +811,7 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 
   * [x] **Pooling Operations (`MaxPool`, `AvgPool`):** Implemented using `MPSGraphPooling2dOpDescriptor`. **(COMPLETED)**
 
-  * [x] **Additional Operations Implemented:** Subtraction, Multiplication, Division, Softmax, Transpose, Reshape
+  * [x] **Additional Operations Implemented:** Softmax, Transpose, Reshape
 
 * [x] **Graph Compilation and Execution:**
 
@@ -845,7 +849,7 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 
 **Key Technical Achievements:**
 - **MPSGraph Framework Integration**: Complete cgo bindings for MPSGraph classes with proper Objective-C bridge
-- **High-Level ML Operations**: AddMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS operations using Apple's optimized kernels
+- **High-Level ML Operations**: AddMPS, SubMPS, MulMPS, DivMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS operations using Apple's optimized kernels
 - **Graph Engine**: MPSGraphEngine singleton managing Metal device, graph device, and command queue resources
 - **Memory Management**: Direct Metal buffer creation from tensor data with safe CPU↔GPU data transfer
 - **Graph Compilation**: Proper feeds dictionary setup with placeholder tensors and their shapes/types
@@ -856,12 +860,12 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 - `metal_bridge/metal_bridge.h` - Extended with MPSGraph type declarations and function prototypes including Conv2D and Pooling operations
 - `metal_bridge/metal_bridge.m` - MPSGraph function implementations with proper API usage and descriptor configuration
 - `metal_bridge/metal.go` - Updated with MPSGraph Go wrapper structs and compilation support for all operations
-- `tensor/mps_ops.go` - High-level MPSGraph operations with thread-safe graph caching (AddMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS)
+- `tensor/mps_ops.go` - High-level MPSGraph operations with thread-safe graph caching (AddMPS, SubMPS, MulMPS, DivMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS)
 - `tensor/mps_ops_test.go` - Comprehensive test suite for all MPSGraph operations including CNN operations
 - `/app/phase3-demo/main.go` - Working demonstration application showcasing CNN operations and performance
-- **Core Operations**: Element-wise addition, matrix multiplication, ReLU, sigmoid with GPU acceleration
+- **Core Operations**: Element-wise operations (addition, subtraction, multiplication, division), matrix multiplication, ReLU, sigmoid with GPU acceleration
 - **CNN Operations**: Conv2D with bias support, MaxPool2D, AvgPool2D with proper shape calculation
-- **Additional Operations**: Subtraction, multiplication, division, softmax, transpose, reshape operations available
+- **Additional Operations**: Softmax, transpose, reshape operations available
 
 **Critical Fixes Applied:**
 - **Compilation Issues**: Fixed feeds dictionary setup for proper MPSGraph compilation with placeholder tensors
@@ -1568,7 +1572,7 @@ Based on comprehensive optimization and measurement:
 #### **✅ Advanced GPU Features**
 - **Persistent GPU Tensors**: Model parameters stay on GPU throughout training
 - **Smart Device Placement**: Automatic tensor device management
-- **MPS Integration**: 7 core MPS operations (Add, MatMul, ReLU, Sigmoid, Conv2D, MaxPool2D, AvgPool2D)
+- **MPS Integration**: 10 core MPS operations (Add, Sub, Mul, Div, MatMul, ReLU, Sigmoid, Conv2D, MaxPool2D, AvgPool2D)
 - **Memory Optimization**: GPU-to-GPU buffer copying eliminates CPU roundtrips
 - **Training Compatibility**: All loss functions work seamlessly with GPU tensors
 
@@ -1605,6 +1609,12 @@ tensor.PersistentGPU  // GPU-resident tensors (stay on GPU)
 result, _ := tensor.MatMulMPS(a, b)  // Result device determined by input devices
 // PersistentGPU + PersistentGPU → PersistentGPU (stays on GPU)
 // CPU + GPU → GPU (temporary, copies to CPU)
+
+// Complete element-wise operation coverage
+sum, _ := tensor.AddMPS(a, b)      // Addition
+diff, _ := tensor.SubMPS(a, b)     // Subtraction
+prod, _ := tensor.MulMPS(a, b)     // Multiplication
+quot, _ := tensor.DivMPS(a, b)     // Division
 ```
 
 #### **Training Integration**
