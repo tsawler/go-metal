@@ -10,8 +10,16 @@ import "C"
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"unsafe"
+)
+
+// Global map to store completion handlers
+var (
+	completionHandlers = make(map[int]func(status int))
+	handlerMutex       sync.Mutex
+	nextHandlerID      int = 1 // Start from 1 to avoid nil pointer issue
 )
 
 
@@ -441,27 +449,40 @@ func (cb *CommandBuffer) WaitUntilCompleted() {
 // The Go function called by Objective-C completion handler
 //export goCommandBufferCompleted
 func goCommandBufferCompleted(userData unsafe.Pointer, statusCode C.long) {
-	// Recover the context or resources from userData if needed
-	// For example, if userData points to a struct containing Go slices to be released.
-	// This is where you'd signal to the Go allocator that resources can be reclaimed.
-	fmt.Printf("Command buffer completed with status: %d\n", statusCode)
-	// IMPORTANT: If 'userData' was a Go pointer created with C.CBytes or similar,
-	// or contained references to Go objects that needed to be kept alive,
-	// this is the place to signal their release or decref their reference count.
-	// For now, it just prints.
-	// Example: If a map of `id` to Go channels was passed via userData
-	// you could signal completion here.
+	// If userData contains a handler ID, look up and execute the handler
+	if userData != nil {
+		// Convert userData back to handler ID
+		handlerID := int(uintptr(userData))
+		
+		handlerMutex.Lock()
+		handler, exists := completionHandlers[handlerID]
+		if exists {
+			delete(completionHandlers, handlerID) // Clean up after execution
+		}
+		handlerMutex.Unlock()
+		
+		if exists {
+			// Execute the handler in a goroutine to avoid blocking the Metal callback
+			go handler(int(statusCode))
+		}
+	}
 }
 
 // AddCompletedHandler allows registering a Go callback for command buffer completion.
 // It passes a userData pointer which can be used to pass context to the Go function.
 func (cb *CommandBuffer) AddCompletedHandler(handler func(status int)) {
-	// Create a goroutine-safe way to manage handler context if necessary.
-	// For a simple callback, we can pass a unique ID or a channel.
-	// For more complex resource management, userData might point to a Go struct
-	// that gets cleaned up when this handler fires.
-	cb.retainedResources = append(cb.retainedResources, handler) // Retain handler to prevent GC
-	C.AddCommandBufferCompletedHandler(cb.c_commandBuffer, nil, (C.CompletionHandlerFunc)(C.goCommandBufferCompleted))
+	// Generate unique handler ID and store the handler
+	handlerMutex.Lock()
+	handlerID := nextHandlerID
+	nextHandlerID++
+	completionHandlers[handlerID] = handler
+	handlerMutex.Unlock()
+	
+	// Convert handler ID to userData pointer
+	userData := unsafe.Pointer(uintptr(handlerID))
+	
+	// Register the completion handler with the command buffer
+	C.AddCommandBufferCompletedHandler(cb.c_commandBuffer, userData, (C.CompletionHandlerFunc)(C.goCommandBufferCompleted))
 }
 
 // MPSGraph wrapper structs and functions

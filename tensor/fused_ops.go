@@ -11,67 +11,44 @@ import (
 // Equivalent to: MatMul(input, weight^T) + bias, but in a single GPU kernel
 // Note: weight is expected to be [output_features, input_features] to match training.Linear convention
 func LinearForward(input, weight, bias *Tensor) (*Tensor, error) {
-	if input.Device != GPU && weight.Device != GPU {
-		// Fallback to separate operations for CPU tensors
-		weightT, err := weight.Transpose(0, 1)
-		if err != nil {
-			return nil, err
-		}
-		matmul, err := MatMul(input, weightT)
-		if err != nil {
-			return nil, err
-		}
-		return Add(matmul, bias)
-	}
-
 	// Validate input shapes
 	if len(input.Shape) != 2 || len(weight.Shape) != 2 || len(bias.Shape) != 1 {
 		return nil, fmt.Errorf("LinearForward requires 2D input/weight and 1D bias tensors")
 	}
-
-	batchSize := uint(input.Shape[0])
-	inputFeatures := uint(input.Shape[1])
-	outputFeatures := uint(weight.Shape[0])  // weight is [output_features, input_features]
-
-	if input.Shape[1] != weight.Shape[1] {  // input_features must match weight.Shape[1]
+	
+	if input.Shape[1] != weight.Shape[1] {
 		return nil, fmt.Errorf("input features (%d) must match weight input features (%d)", 
 			input.Shape[1], weight.Shape[1])
 	}
-	if bias.Shape[0] != int(outputFeatures) {
-		return nil, fmt.Errorf("bias size (%d) must match output features (%d)", 
-			bias.Shape[0], outputFeatures)
+	
+	if bias.Shape[0] != weight.Shape[0] {
+		return nil, fmt.Errorf("bias size (%d) must match weight output features (%d)", 
+			bias.Shape[0], weight.Shape[0])
 	}
-
-	// Only support Float32 for now
-	if input.DType != Float32 || weight.DType != Float32 || bias.DType != Float32 {
-		return nil, fmt.Errorf("LinearForward only supports Float32 tensors")
-	}
-
-	// Get compute engine
-	engine, err := getComputeEngine()
+	
+	// Use explicit operations to ensure mathematical correctness
+	// This matches the standard linear layer operation: input @ weight^T + bias
+	weightT, err := weight.Transpose(0, 1)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get compute engine: %v", err)
+		return nil, fmt.Errorf("failed to transpose weight matrix: %v", err)
 	}
-
-	// Extract float32 data
-	inputData := input.Data.([]float32)
-	weightData := weight.Data.([]float32)
-	biasData := bias.Data.([]float32)
-
-	// Execute fused linear forward kernel
-	resultData, err := engine.LinearForwardFloat32(inputData, weightData, biasData, 
-		batchSize, inputFeatures, outputFeatures)
+	
+	var matmul *Tensor
+	if input.Device == GPU || weightT.Device == GPU {
+		matmul, err = MatMulMPS(input, weightT)
+	} else {
+		matmul, err = MatMul(input, weightT)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute fused linear forward: %v", err)
+		return nil, fmt.Errorf("failed to perform matrix multiplication: %v", err)
 	}
-
-	// Create result tensor
-	resultShape := []int{int(batchSize), int(outputFeatures)}
-	result, err := NewTensor(resultShape, Float32, GPU, resultData)
+	
+	// Use broadcasting-aware addition for bias
+	result, err := Add(matmul, bias)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create result tensor: %v", err)
+		return nil, fmt.Errorf("failed to add bias: %v", err)
 	}
-
+	
 	return result, nil
 }
 
@@ -79,71 +56,50 @@ func LinearForward(input, weight, bias *Tensor) (*Tensor, error) {
 // Equivalent to: ReLU(MatMul(input, weight^T) + bias), but in a single GPU kernel
 // Note: weight is expected to be [output_features, input_features] to match training.Linear convention
 func LinearReLU(input, weight, bias *Tensor) (*Tensor, error) {
-	if input.Device != GPU && weight.Device != GPU {
-		// Fallback to separate operations for CPU tensors
-		weightT, err := weight.Transpose(0, 1)
-		if err != nil {
-			return nil, err
-		}
-		matmul, err := MatMul(input, weightT)
-		if err != nil {
-			return nil, err
-		}
-		added, err := Add(matmul, bias)
-		if err != nil {
-			return nil, err
-		}
-		return ReLU(added)
-	}
-
 	// Validate input shapes
 	if len(input.Shape) != 2 || len(weight.Shape) != 2 || len(bias.Shape) != 1 {
 		return nil, fmt.Errorf("LinearReLU requires 2D input/weight and 1D bias tensors")
 	}
-
-	batchSize := uint(input.Shape[0])
-	inputFeatures := uint(input.Shape[1])
-	outputFeatures := uint(weight.Shape[0])  // weight is [output_features, input_features]
-
-	if input.Shape[1] != weight.Shape[1] {  // input_features must match weight.Shape[1]
+	
+	if input.Shape[1] != weight.Shape[1] {
 		return nil, fmt.Errorf("input features (%d) must match weight input features (%d)", 
 			input.Shape[1], weight.Shape[1])
 	}
-	if bias.Shape[0] != int(outputFeatures) {
-		return nil, fmt.Errorf("bias size (%d) must match output features (%d)", 
-			bias.Shape[0], outputFeatures)
+	
+	if bias.Shape[0] != weight.Shape[0] {
+		return nil, fmt.Errorf("bias size (%d) must match weight output features (%d)", 
+			bias.Shape[0], weight.Shape[0])
 	}
-
-	// Only support Float32 for now
-	if input.DType != Float32 || weight.DType != Float32 || bias.DType != Float32 {
-		return nil, fmt.Errorf("LinearReLU only supports Float32 tensors")
-	}
-
-	// Get compute engine
-	engine, err := getComputeEngine()
+	
+	// Use explicit operations to ensure mathematical correctness
+	// This matches the standard linear layer operation: ReLU(input @ weight^T + bias)
+	weightT, err := weight.Transpose(0, 1)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get compute engine: %v", err)
+		return nil, fmt.Errorf("failed to transpose weight matrix: %v", err)
 	}
-
-	// Extract float32 data
-	inputData := input.Data.([]float32)
-	weightData := weight.Data.([]float32)
-	biasData := bias.Data.([]float32)
-
-	// Execute fused linear + ReLU kernel
-	resultData, err := engine.LinearReLUFloat32(inputData, weightData, biasData, 
-		batchSize, inputFeatures, outputFeatures)
+	
+	var matmul *Tensor
+	if input.Device == GPU || weightT.Device == GPU {
+		matmul, err = MatMulMPS(input, weightT)
+	} else {
+		matmul, err = MatMul(input, weightT)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute fused linear ReLU: %v", err)
+		return nil, fmt.Errorf("failed to perform matrix multiplication: %v", err)
 	}
-
-	// Create result tensor
-	resultShape := []int{int(batchSize), int(outputFeatures)}
-	result, err := NewTensor(resultShape, Float32, GPU, resultData)
+	
+	// Use broadcasting-aware addition for bias
+	added, err := Add(matmul, bias)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create result tensor: %v", err)
+		return nil, fmt.Errorf("failed to add bias: %v", err)
 	}
-
+	
+	// Apply ReLU activation
+	result, err := ReLU(added)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply ReLU activation: %v", err)
+	}
+	
 	return result, nil
 }
 

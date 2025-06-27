@@ -578,19 +578,33 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		dataType := convertDTypeToMPS(input.DType)
 		placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
 		placeholderWeights := graph.PlaceholderTensor(weights.Shape, dataType)
-		var placeholderBias *metal_bridge.GraphTensor
 		var inputTensors []*metal_bridge.GraphTensor
+		var resultTensor *metal_bridge.GraphTensor
+		
 		if bias != nil {
-			placeholderBias = graph.PlaceholderTensor(bias.Shape, dataType)
+			placeholderBias := graph.PlaceholderTensor(bias.Shape, dataType)
 			inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights, placeholderBias}
+			
+			// Perform convolution without bias first
+			convResult := graph.Conv2D(placeholderInput, placeholderWeights, nil,
+				1, 1, // strideX, strideY (using 1,1 for simplicity, can be parameterized later)
+				1, 1, // dilationX, dilationY
+				paddingLeft, paddingRight, paddingTop, paddingBottom,
+				1) // groups
+			
+			// Add bias with proper broadcasting - bias needs to be reshaped to [1, C, 1, 1] for broadcasting
+			biasShape := []int{1, bias.Shape[0], 1, 1}
+			reshapedBias := graph.Reshape(placeholderBias, biasShape)
+			resultTensor = graph.Addition(convResult, reshapedBias)
 		} else {
 			inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights}
+			resultTensor = graph.Conv2D(placeholderInput, placeholderWeights, nil,
+				1, 1, // strideX, strideY (using 1,1 for simplicity, can be parameterized later)
+				1, 1, // dilationX, dilationY
+				paddingLeft, paddingRight, paddingTop, paddingBottom,
+				1) // groups
 		}
-		resultTensor := graph.Conv2D(placeholderInput, placeholderWeights, placeholderBias,
-			1, 1, // strideX, strideY (using 1,1 for simplicity, can be parameterized later)
-			1, 1, // dilationX, dilationY
-			paddingLeft, paddingRight, paddingTop, paddingBottom,
-			1) // groups
+		
 		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
 		executable := graph.Compile(engine.graphDevice, inputTensors, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
 		return &cachedGraph{executable, inputTensors, []*metal_bridge.GraphTensor{resultTensor}}

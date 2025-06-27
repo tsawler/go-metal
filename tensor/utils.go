@@ -268,6 +268,11 @@ func (t *Tensor) Equal(other *Tensor) (bool, error) {
 }
 
 func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error) {
+	// Validate device type first
+	if device != CPU && device != GPU && device != PersistentGPU {
+		return nil, fmt.Errorf("invalid device type: %v (valid types: CPU, GPU, PersistentGPU)", device)
+	}
+	
 	if t.Device == device {
 		return t, nil
 	}
@@ -296,12 +301,17 @@ func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error) {
 	}
 
 	// CPU -> CPU (just clone)
-	result, err := t.Clone()
-	if err != nil {
-		return nil, err
+	if device == CPU {
+		result, err := t.Clone()
+		if err != nil {
+			return nil, err
+		}
+		result.Device = device
+		return result, nil
 	}
-	result.Device = device
-	return result, nil
+
+	// Should never reach here due to validation above
+	return nil, fmt.Errorf("unsupported device conversion from %v to %v", t.Device, device)
 }
 
 func (t *Tensor) PrintData(maxElements int) string {
@@ -404,9 +414,11 @@ func Sqrt(t *Tensor) (*Tensor, error) {
 	
 	for i, val := range data {
 		if val < 0 {
-			return nil, fmt.Errorf("sqrt of negative number at index %d", i)
+			// Produce NaN for negative values instead of returning an error
+			result[i] = float32(math.NaN())
+		} else {
+			result[i] = float32(math.Sqrt(float64(val)))
 		}
-		result[i] = float32(math.Sqrt(float64(val)))
 	}
 	
 	return NewTensor(t.Shape, t.DType, t.Device, result)

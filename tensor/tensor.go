@@ -50,6 +50,7 @@ func (d DeviceType) String() string {
 type Operation interface {
 	Forward(...*Tensor) (*Tensor, error)
 	Backward(gradOut *Tensor) ([]*Tensor, error)
+	GetInputs() []*Tensor
 }
 
 type Tensor struct {
@@ -251,30 +252,12 @@ func (t *Tensor) accumulateGradient(grad *Tensor) error {
 }
 
 // getCreatorInputs extracts input tensors from the operation that created this tensor
-// This is a simplified implementation - in practice, operations should store their inputs
 func (t *Tensor) getCreatorInputs() []*Tensor {
 	if t.creator == nil {
 		return nil
 	}
 	
-	// For now, we'll use type assertions to get inputs from specific operation types
-	// In a more robust implementation, operations would store their inputs
-	switch op := t.creator.(type) {
-	case *AddOp:
-		return op.inputs
-	case *SubOp:
-		return op.inputs
-	case *MulOp:
-		return op.inputs
-	case *MatMulOp:
-		return op.inputs
-	case *ReLUOp:
-		return op.inputs
-	case *SigmoidOp:
-		return op.inputs
-	default:
-		return nil
-	}
+	return t.creator.GetInputs()
 }
 
 func calculateStrides(shape []int) []int {

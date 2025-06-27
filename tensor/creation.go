@@ -32,6 +32,12 @@ func NewTensor(shape []int, dtype DType, device DeviceType, data interface{}) (*
 }
 
 func (t *Tensor) setData(data interface{}) error {
+	// Handle nil data case
+	if data == nil {
+		t.Data = nil
+		return nil
+	}
+	
 	switch t.DType {
 	case Float32:
 		switch d := data.(type) {

@@ -93,6 +93,12 @@ func (op *AddOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 func (op *AddOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
+#### func (*AddOp) GetInputs
+
+```go
+func (op *AddOp) GetInputs() []*Tensor
+```
+
 #### type DType
 
 ```go
@@ -370,6 +376,12 @@ func (op *MatMulOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 func (op *MatMulOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
+#### func (*MatMulOp) GetInputs
+
+```go
+func (op *MatMulOp) GetInputs() []*Tensor
+```
+
 #### type MulOp
 
 ```go
@@ -391,12 +403,19 @@ func (op *MulOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 func (op *MulOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
+#### func (*MulOp) GetInputs
+
+```go
+func (op *MulOp) GetInputs() []*Tensor
+```
+
 #### type Operation
 
 ```go
 type Operation interface {
 	Forward(...*Tensor) (*Tensor, error)
 	Backward(gradOut *Tensor) ([]*Tensor, error)
+	GetInputs() []*Tensor
 }
 ```
 
@@ -486,6 +505,12 @@ func (op *ReLUOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 func (op *ReLUOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
+#### func (*ReLUOp) GetInputs
+
+```go
+func (op *ReLUOp) GetInputs() []*Tensor
+```
+
 #### type SigmoidOp
 
 ```go
@@ -507,6 +532,12 @@ func (op *SigmoidOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 func (op *SigmoidOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```
 
+#### func (*SigmoidOp) GetInputs
+
+```go
+func (op *SigmoidOp) GetInputs() []*Tensor
+```
+
 #### type SubOp
 
 ```go
@@ -526,6 +557,39 @@ func (op *SubOp) Backward(gradOut *Tensor) ([]*Tensor, error)
 
 ```go
 func (op *SubOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+
+#### func (*SubOp) GetInputs
+
+```go
+func (op *SubOp) GetInputs() []*Tensor
+```
+
+#### type SumOp
+
+```go
+type SumOp struct {
+}
+```
+
+SumOp implements the Operation interface for summing all elements
+
+#### func (*SumOp) Backward
+
+```go
+func (op *SumOp) Backward(gradOut *Tensor) ([]*Tensor, error)
+```
+
+#### func (*SumOp) Forward
+
+```go
+func (op *SumOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+
+#### func (*SumOp) GetInputs
+
+```go
+func (op *SumOp) GetInputs() []*Tensor
 ```
 
 #### type Tensor
@@ -826,6 +890,13 @@ SubAutograd performs subtraction with automatic differentiation
 ```go
 func Sum(t *Tensor, dim int, keepDim bool) (*Tensor, error)
 ```
+
+#### func  SumAutograd
+
+```go
+func SumAutograd(t *Tensor) (*Tensor, error)
+```
+SumAutograd performs sum of all elements with automatic differentiation
 
 #### func  Tanh
 

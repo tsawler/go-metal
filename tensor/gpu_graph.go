@@ -163,6 +163,10 @@ func (g *GPUComputationGraph) createExecuteFunction(graphOp *GraphOperation) (fu
 		return g.createAddExecute(graphOp), nil
 	case "ReLU":
 		return g.createReLUExecute(graphOp), nil
+	case "LinearForward":
+		return g.createLinearForwardExecute(graphOp), nil
+	case "Transpose":
+		return g.createTransposeExecute(graphOp), nil
 	default:
 		return nil, fmt.Errorf("unsupported operation type: %s", graphOp.Type)
 	}
@@ -266,6 +270,63 @@ func (g *GPUComputationGraph) createReLUExecute(graphOp *GraphOperation) func() 
 		case err := <-errorCh:
 			return err
 		}
+	}
+}
+
+// createLinearForwardExecute creates the execution function for linear layer forward pass
+func (g *GPUComputationGraph) createLinearForwardExecute(graphOp *GraphOperation) func() error {
+	return func() error {
+		if len(graphOp.InputTensors) != 3 {
+			return fmt.Errorf("LinearForward requires exactly 3 input tensors: input, weight, bias")
+		}
+		
+		input, weight, bias := graphOp.InputTensors[0], graphOp.InputTensors[1], graphOp.InputTensors[2]
+		
+		// Check for nil tensors
+		if input == nil || weight == nil || bias == nil {
+			return fmt.Errorf("LinearForward operation has nil input tensors")
+		}
+		
+		// Use the corrected LinearForward function which handles transpose correctly
+		result, err := LinearForward(input, weight, bias)
+		if err != nil {
+			return err
+		}
+		
+		graphOp.result = result
+		return nil
+	}
+}
+
+// createTransposeExecute creates the execution function for matrix transpose
+func (g *GPUComputationGraph) createTransposeExecute(graphOp *GraphOperation) func() error {
+	return func() error {
+		if len(graphOp.InputTensors) != 1 {
+			return fmt.Errorf("Transpose requires exactly 1 input tensor")
+		}
+		
+		input := graphOp.InputTensors[0]
+		
+		// Check for nil tensors
+		if input == nil {
+			return fmt.Errorf("Transpose operation has nil input tensor")
+		}
+		
+		// Extract transpose dimensions from params
+		dim0, ok0 := graphOp.Params["dim0"].(int)
+		dim1, ok1 := graphOp.Params["dim1"].(int)
+		if !ok0 || !ok1 {
+			return fmt.Errorf("Transpose requires dim0 and dim1 parameters")
+		}
+		
+		// Use the Transpose function
+		result, err := input.Transpose(dim0, dim1)
+		if err != nil {
+			return err
+		}
+		
+		graphOp.result = result
+		return nil
 	}
 }
 

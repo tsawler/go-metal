@@ -192,6 +192,10 @@ type AddOp struct {
 	inputs []*Tensor
 }
 
+func (op *AddOp) GetInputs() []*Tensor {
+	return op.inputs
+}
+
 func (op *AddOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	if len(inputs) != 2 {
 		return nil, fmt.Errorf("AddOp requires exactly 2 inputs, got %d", len(inputs))
@@ -245,6 +249,10 @@ func (op *AddOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 // SubOp implements the Operation interface for tensor subtraction
 type SubOp struct {
 	inputs []*Tensor
+}
+
+func (op *SubOp) GetInputs() []*Tensor {
+	return op.inputs
 }
 
 func (op *SubOp) Forward(inputs ...*Tensor) (*Tensor, error) {
@@ -306,6 +314,10 @@ func (op *SubOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 // MulOp implements the Operation interface for tensor multiplication
 type MulOp struct {
 	inputs []*Tensor
+}
+
+func (op *MulOp) GetInputs() []*Tensor {
+	return op.inputs
 }
 
 func (op *MulOp) Forward(inputs ...*Tensor) (*Tensor, error) {
@@ -376,6 +388,10 @@ func (op *MulOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 // MatMulOp implements the Operation interface for matrix multiplication
 type MatMulOp struct {
 	inputs []*Tensor
+}
+
+func (op *MatMulOp) GetInputs() []*Tensor {
+	return op.inputs
 }
 
 func (op *MatMulOp) Forward(inputs ...*Tensor) (*Tensor, error) {
@@ -453,6 +469,10 @@ type ReLUOp struct {
 	inputs []*Tensor
 }
 
+func (op *ReLUOp) GetInputs() []*Tensor {
+	return op.inputs
+}
+
 func (op *ReLUOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	if len(inputs) != 1 {
 		return nil, fmt.Errorf("ReLUOp requires exactly 1 input, got %d", len(inputs))
@@ -521,6 +541,10 @@ func (op *ReLUOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 type SigmoidOp struct {
 	inputs []*Tensor
 	output *Tensor // Store output for backward pass
+}
+
+func (op *SigmoidOp) GetInputs() []*Tensor {
+	return op.inputs
 }
 
 func (op *SigmoidOp) Forward(inputs ...*Tensor) (*Tensor, error) {
@@ -593,7 +617,96 @@ func (op *SigmoidOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 	return []*Tensor{grad}, nil
 }
 
+// SumOp implements the Operation interface for summing all elements
+type SumOp struct {
+	inputs []*Tensor
+}
+
+func (op *SumOp) GetInputs() []*Tensor {
+	return op.inputs
+}
+
+func (op *SumOp) Forward(inputs ...*Tensor) (*Tensor, error) {
+	if len(inputs) != 1 {
+		return nil, fmt.Errorf("SumOp requires exactly 1 input, got %d", len(inputs))
+	}
+	
+	t := inputs[0]
+	op.inputs = inputs
+	
+	var result *Tensor
+	var err error
+	
+	switch t.DType {
+	case Float32:
+		data := t.Data.([]float32)
+		sum := float32(0)
+		for _, val := range data {
+			sum += val
+		}
+		result, err = NewTensor([]int{1}, t.DType, t.Device, []float32{sum})
+	case Int32:
+		data := t.Data.([]int32)
+		sum := int32(0)
+		for _, val := range data {
+			sum += val
+		}
+		result, err = NewTensor([]int{1}, t.DType, t.Device, []int32{sum})
+	default:
+		return nil, fmt.Errorf("unsupported data type for sum: %v", t.DType)
+	}
+	
+	if err != nil {
+		return nil, fmt.Errorf("SumOp forward pass failed: %v", err)
+	}
+	
+	// Set autograd properties
+	result.creator = op
+	result.requiresGrad = t.requiresGrad
+	
+	return result, nil
+}
+
+func (op *SumOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
+	if len(op.inputs) != 1 {
+		return nil, fmt.Errorf("SumOp inputs not properly stored, expected 1 got %d", len(op.inputs))
+	}
+	
+	input := op.inputs[0]
+	
+	// For sum: ∂(sum(x))/∂x = ones with same shape as input
+	// The gradient from the scalar sum flows to all elements equally
+	gradInput, err := Ones(input.Shape, input.DType, input.Device)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ones tensor for sum gradient: %v", err)
+	}
+	
+	// Scale by the output gradient (usually 1 for a scalar loss)
+	switch gradOut.DType {
+	case Float32:
+		outputGrad := gradOut.Data.([]float32)[0]
+		inputData := gradInput.Data.([]float32)
+		for i := range inputData {
+			inputData[i] *= outputGrad
+		}
+	case Int32:
+		outputGrad := gradOut.Data.([]int32)[0]
+		inputData := gradInput.Data.([]int32)
+		for i := range inputData {
+			inputData[i] *= outputGrad
+		}
+	}
+	
+	return []*Tensor{gradInput}, nil
+}
+
 // High-level autograd functions that create and execute operations
+
+// SumAutograd performs sum of all elements with automatic differentiation
+func SumAutograd(t *Tensor) (*Tensor, error) {
+	op := &SumOp{}
+	return op.Forward(t)
+}
 
 // AddAutograd performs addition with automatic differentiation
 func AddAutograd(a, b *Tensor) (*Tensor, error) {

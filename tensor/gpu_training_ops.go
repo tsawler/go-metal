@@ -38,26 +38,37 @@ func NewGPUTrainingContext() (*GPUTrainingContext, error) {
 // LinearLayerForwardAsync performs a linear layer forward pass asynchronously
 // This combines MatMul + Bias addition + optional activation in a dependency chain
 func (ctx *GPUTrainingContext) LinearLayerForwardAsync(input, weight, bias *Tensor, activation string) (*Tensor, error) {
-	// Create operation sequence with dependencies
-	operations := []OperationDesc{
-		{
-			Type:   "MatMul",
-			Inputs: []*Tensor{input, weight},
-			Params: nil,
-		},
-	}
+	// For linear layers, we need to perform input @ weight^T + bias
+	// Use the fused LinearForward operation which handles the transpose correctly
+	var operations []OperationDesc
 	
-	// Add bias if provided
 	if bias != nil {
-		operations = append(operations, OperationDesc{
-			Type:   "Add", 
-			Inputs: []*Tensor{nil, bias}, // nil will be replaced with previous result
-			Params: nil,
-		})
+		// Use LinearForward which correctly implements input @ weight^T + bias
+		operations = []OperationDesc{
+			{
+				Type:   "LinearForward",
+				Inputs: []*Tensor{input, weight, bias},
+				Params: nil,
+			},
+		}
+	} else {
+		// Need to add transpose before MatMul for correct linear layer math
+		operations = []OperationDesc{
+			{
+				Type:   "Transpose",
+				Inputs: []*Tensor{weight},
+				Params: map[string]interface{}{"dim0": 0, "dim1": 1},
+			},
+			{
+				Type:   "MatMul",
+				Inputs: []*Tensor{input, nil}, // nil will be replaced with transposed weight
+				Params: nil,
+			},
+		}
 	}
 	
 	// Add activation if specified
-	if activation != "" {
+	if activation != "" && activation != "none" {
 		operations = append(operations, OperationDesc{
 			Type:   activation,
 			Inputs: []*Tensor{nil}, // nil will be replaced with previous result
