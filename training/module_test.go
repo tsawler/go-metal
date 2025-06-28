@@ -83,10 +83,10 @@ func TestLinearModule(t *testing.T) {
 			t.Fatalf("Expected 2 parameters (weight and bias), got %d", len(params))
 		}
 		
-		// Check weight shape: [output_features, input_features] = [2, 3]
+		// Check weight shape: [input_features, output_features] = [3, 2]
 		weight := params[0]
-		if len(weight.Shape) != 2 || weight.Shape[0] != 2 || weight.Shape[1] != 3 {
-			t.Errorf("Expected weight shape [2, 3], got %v", weight.Shape)
+		if len(weight.Shape) != 2 || weight.Shape[0] != 3 || weight.Shape[1] != 2 {
+			t.Errorf("Expected weight shape [3, 2], got %v", weight.Shape)
 		}
 		
 		// Check bias shape: [output_features] = [2]

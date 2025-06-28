@@ -276,7 +276,7 @@ func calculateStrides(shape []int) []int {
 
 func calculateNumElements(shape []int) int {
 	if len(shape) == 0 {
-		return 0
+		return 1  // Scalar has 1 element
 	}
 	
 	elements := 1

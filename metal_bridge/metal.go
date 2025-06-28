@@ -568,7 +568,13 @@ func (g *Graph) PlaceholderTensor(shape []int, dataType int) *GraphTensor {
 		cShape[i] = C.int(dim)
 	}
 	
-	c_tensor := C.MPSGraphPlaceholderTensor(g.c_graph, &cShape[0], C.size_t(len(shape)), C.int(dataType))
+	var c_tensor C.MPSGraphTensorRef
+	if len(shape) == 0 {
+		// Handle scalar tensors - pass nil for shape and 0 for dimensions
+		c_tensor = C.MPSGraphPlaceholderTensor(g.c_graph, nil, C.size_t(0), C.int(dataType))
+	} else {
+		c_tensor = C.MPSGraphPlaceholderTensor(g.c_graph, &cShape[0], C.size_t(len(shape)), C.int(dataType))
+	}
 	if c_tensor == nil {
 		return nil
 	}

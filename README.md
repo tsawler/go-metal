@@ -1309,6 +1309,40 @@ IsTraining() bool // Returns true if in training mode
 
 **Location**: `/training/dataloader.go:19-315`
 
+### Limiting Dataset Samples
+
+To train on a subset of your data or to limit the number of samples processed by the `DataLoader`, you can use the `SubsetDataset` wrapper. This allows you to easily control the size of your training or validation sets without modifying your original `Dataset` implementation.
+
+```go
+import (
+    "github.com/tsawler/go-metal/tensor"
+    "github.com/tsawler/go-metal/training"
+)
+
+// Assume originalDataset is an instance of your Dataset implementation (e.g., SimpleDataset, RandomDataset)
+// originalDataset := training.NewSimpleDataset(...)
+
+// Define the desired limit for your dataset samples
+limitedSamples := 100 // Train or validate on only 100 samples
+
+// Create a SubsetDataset that wraps your original dataset
+subsetDataset, err := training.NewSubsetDataset(originalDataset, limitedSamples)
+if err != nil {
+    // Handle error, e.g., log.Fatalf("Failed to create subset dataset: %v", err)
+}
+
+// Now, create your DataLoader using the subsetDataset
+batchSize := 32
+shuffle := true
+numWorkers := 4
+device := tensor.PersistentGPU // Or tensor.CPU, tensor.GPU
+
+dataLoader := training.NewDataLoader(subsetDataset, batchSize, shuffle, numWorkers, device)
+
+// You can now use this dataLoader in your training or evaluation loop.
+// It will only yield batches up to the 'limitedSamples' count.
+```
+
 * [x] **Develop User-Friendly API:** ✅ **Complete with comprehensive features**
 
 * ✅ Design clean, intuitive functions for creating tensors, defining models, and running training.

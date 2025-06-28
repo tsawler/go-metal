@@ -46,20 +46,21 @@ func (mse *MSELoss) Forward(predicted, target *tensor.Tensor) (*tensor.Tensor, e
 	var diff *tensor.Tensor
 	var err error
 	
-	// Use CPU operations for now - we'll implement SubMPS later if needed
-	diff, err = tensor.Sub(predicted, target)
+	// Use autograd operations to build computational graph
+	diff, err = tensor.SubAutograd(predicted, target)
 	if err != nil {
 		return nil, fmt.Errorf("subtraction failed: %v", err)
 	}
 	
-	// Compute squared differences
-	squared, err := tensor.Mul(diff, diff)
+	// Compute squared differences: (x-y)^2
+	// Use a separate tensor for the square to avoid gradient accumulation issues
+	squared, err := tensor.SquareAutograd(diff)
 	if err != nil {
-		return nil, fmt.Errorf("multiplication failed: %v", err)
+		return nil, fmt.Errorf("square computation failed: %v", err)
 	}
 	
-	// Sum all elements
-	loss, err := mse.sumAllElements(squared)
+	// Sum all elements using autograd
+	loss, err := tensor.SumAutograd(squared)
 	if err != nil {
 		return nil, fmt.Errorf("sum computation failed: %v", err)
 	}
@@ -69,7 +70,7 @@ func (mse *MSELoss) Forward(predicted, target *tensor.Tensor) (*tensor.Tensor, e
 		n := float64(predicted.NumElems)
 		meanScale := tensor.FromScalar(1.0/n, loss.DType, loss.Device)
 		
-		loss, err = tensor.Mul(loss, meanScale)
+		loss, err = tensor.MulAutograd(loss, meanScale)
 		
 		if err != nil {
 			return nil, fmt.Errorf("mean computation failed: %v", err)
@@ -139,7 +140,7 @@ func (mse *MSELoss) sumAllElements(t *tensor.Tensor) (*tensor.Tensor, error) {
 		sum += val
 	}
 	
-	return tensor.NewTensor([]int{1}, t.DType, t.Device, []float32{sum})
+	return tensor.NewTensor([]int{}, t.DType, t.Device, []float32{sum})
 }
 
 // CrossEntropyLoss implements Cross Entropy loss function for classification
@@ -155,7 +156,7 @@ func NewCrossEntropyLoss(reduction string) *CrossEntropyLoss {
 	return &CrossEntropyLoss{reduction: reduction}
 }
 
-// Forward computes the Cross Entropy loss
+// Forward computes the Cross Entropy loss using autograd operations
 // predicted: [batch_size, num_classes] logits
 // target: [batch_size] class indices
 func (ce *CrossEntropyLoss) Forward(predicted, target *tensor.Tensor) (*tensor.Tensor, error) {
@@ -172,22 +173,39 @@ func (ce *CrossEntropyLoss) Forward(predicted, target *tensor.Tensor) (*tensor.T
 	}
 	
 	batchSize := predicted.Shape[0]
-	numClasses := predicted.Shape[1]
 	
 	if target.Shape[0] != batchSize {
 		return nil, fmt.Errorf("batch size mismatch: predicted %d, target %d", batchSize, target.Shape[0])
 	}
 	
-	// Apply softmax to get probabilities
-	softmaxProbs, err := ce.softmax(predicted)
+	// Apply softmax to get probabilities using autograd
+	softmaxProbs, err := tensor.SoftmaxAutograd(predicted, 1)
 	if err != nil {
 		return nil, fmt.Errorf("softmax computation failed: %v", err)
 	}
 	
-	// Compute negative log likelihood
-	loss, err := ce.negativeLogLikelihood(softmaxProbs, target, batchSize, numClasses)
+	// Compute negative log likelihood using autograd operations
+	logProbs, err := tensor.LogAutograd(softmaxProbs)
 	if err != nil {
-		return nil, fmt.Errorf("negative log likelihood computation failed: %v", err)
+		return nil, fmt.Errorf("log computation failed: %v", err)
+	}
+	
+	// Extract relevant log probabilities for each target class using autograd
+	selectedLogProbs, err := tensor.SelectAutograd(logProbs, target)
+	if err != nil {
+		return nil, fmt.Errorf("target log prob selection failed: %v", err)
+	}
+	
+	// Compute negative sum
+	negLogProbs, err := tensor.MulAutograd(selectedLogProbs, tensor.FromScalar(-1.0, selectedLogProbs.DType, selectedLogProbs.Device))
+	if err != nil {
+		return nil, fmt.Errorf("negation failed: %v", err)
+	}
+	
+	// Sum all negative log probabilities
+	loss, err := tensor.SumAutograd(negLogProbs)
+	if err != nil {
+		return nil, fmt.Errorf("sum computation failed: %v", err)
 	}
 	
 	// Apply reduction
@@ -195,15 +213,53 @@ func (ce *CrossEntropyLoss) Forward(predicted, target *tensor.Tensor) (*tensor.T
 		n := float64(batchSize)
 		meanScale := tensor.FromScalar(1.0/n, loss.DType, loss.Device)
 		
-		meanLoss, err := tensor.Mul(loss, meanScale)
-		
+		loss, err = tensor.MulAutograd(loss, meanScale)
 		if err != nil {
 			return nil, fmt.Errorf("mean computation failed: %v", err)
 		}
-		loss = meanLoss
 	}
 	
 	return loss, nil
+}
+
+// selectTargetLogProbs extracts the log probabilities corresponding to target classes
+func (ce *CrossEntropyLoss) selectTargetLogProbs(logProbs, target *tensor.Tensor, batchSize, numClasses int) (*tensor.Tensor, error) {
+	// Convert to CPU for indexing operations
+	workingLogProbs := logProbs
+	workingTarget := target
+	
+	if logProbs.Device != tensor.CPU {
+		var err error
+		workingLogProbs, err = logProbs.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert logProbs to CPU: %v", err)
+		}
+	}
+	
+	if target.Device != tensor.CPU {
+		var err error
+		workingTarget, err = target.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert target to CPU: %v", err)
+		}
+	}
+	
+	logProbsData := workingLogProbs.Data.([]float32)
+	targetData := workingTarget.Data.([]int32)
+	
+	selectedData := make([]float32, batchSize)
+	
+	for i := 0; i < batchSize; i++ {
+		targetClass := targetData[i]
+		if targetClass < 0 || int(targetClass) >= numClasses {
+			return nil, fmt.Errorf("target class %d out of range [0, %d)", targetClass, numClasses)
+		}
+		
+		logProbIdx := i*numClasses + int(targetClass)
+		selectedData[i] = logProbsData[logProbIdx]
+	}
+	
+	return tensor.NewTensor([]int{batchSize}, tensor.Float32, logProbs.Device, selectedData)
 }
 
 // Backward computes the gradient of Cross Entropy loss
@@ -390,6 +446,6 @@ func (ce *CrossEntropyLoss) negativeLogLikelihood(probs *tensor.Tensor, target *
 		totalLoss += -float32(math.Log(float64(prob)))
 	}
 	
-	return tensor.NewTensor([]int{1}, tensor.Float32, probs.Device, []float32{totalLoss})
+	return tensor.NewTensor([]int{}, tensor.Float32, probs.Device, []float32{totalLoss})
 }
 

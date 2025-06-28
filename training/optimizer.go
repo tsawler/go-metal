@@ -107,10 +107,20 @@ func (sgd *SGD) Step() error {
 				return fmt.Errorf("velocity update failed: %v", err)
 			}
 			
-			// Update velocity in-place
-			err = velocity.SetData(newVelocity.Data)
-			if err != nil {
-				return fmt.Errorf("velocity data update failed: %v", err)
+			// Update velocity - handle device-specific updates properly
+			if velocity.Device == tensor.CPU {
+				err = velocity.SetData(newVelocity.Data)
+				if err != nil {
+					return fmt.Errorf("velocity data update failed: %v", err)
+				}
+			} else {
+				// GPU tensor: transfer updated data to GPU
+				updatedVelocity, err := newVelocity.ToDevice(velocity.Device)
+				if err != nil {
+					return fmt.Errorf("velocity device transfer failed: %v", err)
+				}
+				velocity.Data = updatedVelocity.Data
+				velocity.SetGPUBuffer(updatedVelocity.GetGPUBuffer())
 			}
 			
 			// Use velocity as gradient for Nesterov momentum
@@ -140,10 +150,22 @@ func (sgd *SGD) Step() error {
 			return fmt.Errorf("parameter update failed: %v", err)
 		}
 		
-		// Update parameter data in-place
-		err = param.SetData(newData.Data)
-		if err != nil {
-			return fmt.Errorf("parameter data update failed: %v", err)
+		// Update parameter data - handle device-specific updates properly
+		if param.Device == tensor.CPU {
+			// CPU tensor: direct data update
+			err = param.SetData(newData.Data)
+			if err != nil {
+				return fmt.Errorf("parameter data update failed: %v", err)
+			}
+		} else {
+			// GPU tensor: need to transfer updated data to GPU
+			updatedParam, err := newData.ToDevice(param.Device)
+			if err != nil {
+				return fmt.Errorf("parameter device transfer failed: %v", err)
+			}
+			// Copy the updated data and GPU buffer to the original parameter
+			param.Data = updatedParam.Data
+			param.SetGPUBuffer(updatedParam.GetGPUBuffer())
 		}
 	}
 	
@@ -297,15 +319,33 @@ func (adam *Adam) Step() error {
 			return fmt.Errorf("second moment update failed: %v", err)
 		}
 		
-		// Update moment estimates in-place
-		err = m.SetData(newM.Data)
-		if err != nil {
-			return fmt.Errorf("first moment data update failed: %v", err)
+		// Update moment estimates - handle device-specific updates properly
+		if m.Device == tensor.CPU {
+			err = m.SetData(newM.Data)
+			if err != nil {
+				return fmt.Errorf("first moment data update failed: %v", err)
+			}
+		} else {
+			updatedM, err := newM.ToDevice(m.Device)
+			if err != nil {
+				return fmt.Errorf("first moment device transfer failed: %v", err)
+			}
+			m.Data = updatedM.Data
+			m.SetGPUBuffer(updatedM.GetGPUBuffer())
 		}
 		
-		err = v.SetData(newV.Data)
-		if err != nil {
-			return fmt.Errorf("second moment data update failed: %v", err)
+		if v.Device == tensor.CPU {
+			err = v.SetData(newV.Data)
+			if err != nil {
+				return fmt.Errorf("second moment data update failed: %v", err)
+			}
+		} else {
+			updatedV, err := newV.ToDevice(v.Device)
+			if err != nil {
+				return fmt.Errorf("second moment device transfer failed: %v", err)
+			}
+			v.Data = updatedV.Data
+			v.SetGPUBuffer(updatedV.GetGPUBuffer())
 		}
 		
 		// Bias-corrected estimates
@@ -346,10 +386,22 @@ func (adam *Adam) Step() error {
 			return fmt.Errorf("parameter update failed: %v", err)
 		}
 		
-		// Update parameter data in-place
-		err = param.SetData(newData.Data)
-		if err != nil {
-			return fmt.Errorf("parameter data update failed: %v", err)
+		// Update parameter data - handle device-specific updates properly
+		if param.Device == tensor.CPU {
+			// CPU tensor: direct data update
+			err = param.SetData(newData.Data)
+			if err != nil {
+				return fmt.Errorf("parameter data update failed: %v", err)
+			}
+		} else {
+			// GPU tensor: need to transfer updated data to GPU
+			updatedParam, err := newData.ToDevice(param.Device)
+			if err != nil {
+				return fmt.Errorf("parameter device transfer failed: %v", err)
+			}
+			// Copy the updated data and GPU buffer to the original parameter
+			param.Data = updatedParam.Data
+			param.SetGPUBuffer(updatedParam.GetGPUBuffer())
 		}
 	}
 	

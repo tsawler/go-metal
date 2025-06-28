@@ -5,6 +5,14 @@
 
 ## Usage
 
+#### func  SetRandomSeed
+
+```go
+func SetRandomSeed(seed int64)
+```
+SetRandomSeed sets the global random seed for deterministic weight
+initialization
+
 #### type Adam
 
 ```go
@@ -190,8 +198,8 @@ Backward computes the gradient of Cross Entropy loss
 ```go
 func (ce *CrossEntropyLoss) Forward(predicted, target *tensor.Tensor) (*tensor.Tensor, error)
 ```
-Forward computes the Cross Entropy loss predicted: [batch_size, num_classes]
-logits target: [batch_size] class indices
+Forward computes the Cross Entropy loss using autograd operations predicted:
+[batch_size, num_classes] logits target: [batch_size] class indices
 
 #### type DataLoader
 
@@ -254,6 +262,57 @@ type Dataset interface {
 ```
 
 Dataset interface defines methods that all datasets must implement
+
+#### type Flatten
+
+```go
+type Flatten struct {
+}
+```
+
+Flatten reshapes input tensor to [batch_size, -1]
+
+#### func  NewFlatten
+
+```go
+func NewFlatten() *Flatten
+```
+NewFlatten creates a new Flatten layer
+
+#### func (*Flatten) Eval
+
+```go
+func (f *Flatten) Eval()
+```
+Eval sets the module to evaluation mode
+
+#### func (*Flatten) Forward
+
+```go
+func (f *Flatten) Forward(input *tensor.Tensor) (*tensor.Tensor, error)
+```
+Forward flattens the input tensor to [batch_size, -1]
+
+#### func (*Flatten) IsTraining
+
+```go
+func (f *Flatten) IsTraining() bool
+```
+IsTraining returns true if in training mode
+
+#### func (*Flatten) Parameters
+
+```go
+func (f *Flatten) Parameters() []*tensor.Tensor
+```
+Parameters returns empty slice (Flatten has no parameters)
+
+#### func (*Flatten) Train
+
+```go
+func (f *Flatten) Train()
+```
+Train sets the module to training mode
 
 #### type Linear
 
@@ -346,6 +405,57 @@ Backward computes the gradient of MSE loss
 func (mse *MSELoss) Forward(predicted, target *tensor.Tensor) (*tensor.Tensor, error)
 ```
 Forward computes the MSE loss: L = (1/N) * sum((y_pred - y_true)^2)
+
+#### type MaxPool2D
+
+```go
+type MaxPool2D struct {
+}
+```
+
+MaxPool2D implements a 2D max pooling layer
+
+#### func  NewMaxPool2D
+
+```go
+func NewMaxPool2D(kernelSize, stride, padding int) *MaxPool2D
+```
+NewMaxPool2D creates a new MaxPool2D layer
+
+#### func (*MaxPool2D) Eval
+
+```go
+func (m *MaxPool2D) Eval()
+```
+Eval sets the module to evaluation mode
+
+#### func (*MaxPool2D) Forward
+
+```go
+func (m *MaxPool2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error)
+```
+Forward performs 2D max pooling
+
+#### func (*MaxPool2D) IsTraining
+
+```go
+func (m *MaxPool2D) IsTraining() bool
+```
+IsTraining returns true if in training mode
+
+#### func (*MaxPool2D) Parameters
+
+```go
+func (m *MaxPool2D) Parameters() []*tensor.Tensor
+```
+Parameters returns empty slice (MaxPool2D has no parameters)
+
+#### func (*MaxPool2D) Train
+
+```go
+func (m *MaxPool2D) Train()
+```
+Train sets the module to training mode
 
 #### type Module
 
@@ -587,6 +697,39 @@ Get returns a sample at the given index
 func (ds *SimpleDataset) Len() int
 ```
 Len returns the number of samples in the dataset
+
+#### type SubsetDataset
+
+```go
+type SubsetDataset struct {
+}
+```
+
+SubsetDataset allows training on a limited number of samples from an underlying dataset.
+
+#### func  NewSubsetDataset
+
+```go
+func NewSubsetDataset(original Dataset, limit int) (*SubsetDataset, error)
+```
+NewSubsetDataset creates a new SubsetDataset that wraps an existing dataset
+and limits the number of samples it exposes.
+
+#### func (*SubsetDataset) Get
+
+```go
+func (sd *SubsetDataset) Get(idx int) (data *tensor.Tensor, label *tensor.Tensor, err error)
+```
+Get returns a sample at the given index from the original dataset.
+It assumes the index is within the bounds of the subset.
+
+#### func (*SubsetDataset) Len
+
+```go
+func (sd *SubsetDataset) Len() int
+```
+Len returns the number of samples in the subset, which is the minimum
+of the original dataset's length and the specified limit.
 
 #### type Trainer
 

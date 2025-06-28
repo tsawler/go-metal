@@ -297,8 +297,8 @@ func TestReduceGradientEdgeCases(t *testing.T) {
 				t.Fatalf("sumAllElements failed: %v", err)
 			}
 			
-			if result.Shape[0] != 1 || len(result.Shape) != 1 {
-				t.Errorf("sumAllElements should return shape [1], got %v", result.Shape)
+			if len(result.Shape) != 0 {
+				t.Errorf("sumAllElements should return scalar shape [], got %v", result.Shape)
 			}
 
 			resultData, err := result.GetFloat32Data()

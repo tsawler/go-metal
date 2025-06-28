@@ -8,6 +8,14 @@ import (
 	"github.com/tsawler/go-metal/tensor"
 )
 
+// Global random source for deterministic initialization
+var globalRng *rand.Rand = rand.New(rand.NewSource(1))
+
+// SetRandomSeed sets the global random seed for deterministic weight initialization
+func SetRandomSeed(seed int64) {
+	globalRng = rand.New(rand.NewSource(seed))
+}
+
 // Module interface defines methods that all neural network layers must implement
 type Module interface {
 	Forward(input *tensor.Tensor) (*tensor.Tensor, error)
@@ -30,13 +38,13 @@ func NewLinear(inputSize, outputSize int, bias bool, device tensor.DeviceType) (
 	// W ~ U(-sqrt(6/(fan_in + fan_out)), sqrt(6/(fan_in + fan_out)))
 	bound := math.Sqrt(6.0 / float64(inputSize+outputSize))
 	
-	weightData := make([]float32, outputSize*inputSize)
+	weightData := make([]float32, inputSize*outputSize)
 	for i := range weightData {
-		weightData[i] = float32((rand.Float64()*2.0 - 1.0) * bound)
+		weightData[i] = float32((globalRng.Float64()*2.0 - 1.0) * bound)
 	}
 	
-	// Create weight tensor on CPU first, then transfer to target device
-	weight, err := tensor.NewTensor([]int{outputSize, inputSize}, tensor.Float32, tensor.CPU, weightData)
+	// Create weight tensor with shape [inputSize, outputSize] to work with current MatMul
+	weight, err := tensor.NewTensor([]int{inputSize, outputSize}, tensor.Float32, tensor.CPU, weightData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create weight tensor: %v", err)
 	}
@@ -95,50 +103,20 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("Linear layer expects 2D input [batch_size, input_size], got shape %v", input.Shape)
 	}
 	
-	batchSize := input.Shape[0]
 	inputSize := input.Shape[1]
 	
-	if inputSize != l.weight.Shape[1] {
-		return nil, fmt.Errorf("input size mismatch: expected %d, got %d", l.weight.Shape[1], inputSize)
+	if inputSize != l.weight.Shape[0] {
+		return nil, fmt.Errorf("input size mismatch: expected %d, got %d", l.weight.Shape[0], inputSize)
 	}
 	
-	// Compute xW^T - use appropriate operation based on device
-	weightTransposed, err := l.weight.Transpose(0, 1)
-	if err != nil {
-		return nil, fmt.Errorf("weight transpose failed: %v", err)
-	}
-	
-	// Choose operation based on input device type
-	var output *tensor.Tensor
-	if input.Device == tensor.GPU || input.Device == tensor.PersistentGPU ||
-		l.weight.Device == tensor.GPU || l.weight.Device == tensor.PersistentGPU {
-		// Use MPS for GPU operations
-		output, err = tensor.MatMulMPS(input, weightTransposed)
-	} else {
-		// Use CPU operations
-		output, err = tensor.MatMul(input, weightTransposed)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("matrix multiplication failed: %v", err)
-	}
+	// Compute input @ weight using autograd for gradient support
+	// weight shape is [inputSize, outputSize], input shape is [batchSize, inputSize]
+	output, err := tensor.MatMulAutograd(input, l.weight)
 	
 	// Add bias if present
 	if l.bias != nil {
-		// Broadcast bias across batch dimension
-		biasExpanded, err := l.expandBias(l.bias, batchSize)
-		if err != nil {
-			return nil, fmt.Errorf("bias expansion failed: %v", err)
-		}
-		
-		// Use appropriate addition operation based on device
-		if output.Device == tensor.GPU || output.Device == tensor.PersistentGPU ||
-			biasExpanded.Device == tensor.GPU || biasExpanded.Device == tensor.PersistentGPU {
-			// Use MPS for GPU operations
-			output, err = tensor.AddMPS(output, biasExpanded)
-		} else {
-			// Use CPU operations
-			output, err = tensor.Add(output, biasExpanded)
-		}
+		// Try to add bias directly - AddAutograd should handle broadcasting
+		output, err = tensor.AddAutograd(output, l.bias)
 		if err != nil {
 			return nil, fmt.Errorf("bias addition failed: %v", err)
 		}
@@ -221,10 +199,8 @@ func NewReLU() *ReLU {
 
 // Forward performs ReLU activation
 func (r *ReLU) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
-	if input.Device == tensor.GPU || input.Device == tensor.PersistentGPU {
-		return tensor.ReLUMPS(input)
-	}
-	return tensor.ReLU(input)
+	// Use autograd ReLU to build computational graph
+	return tensor.ReLUAutograd(input)
 }
 
 // Parameters returns empty slice (ReLU has no parameters)
@@ -267,7 +243,7 @@ func NewConv2D(inputChannels, outputChannels, kernelSize, stride, padding int, b
 	
 	weightData := make([]float32, outputChannels*inputChannels*kernelSize*kernelSize)
 	for i := range weightData {
-		weightData[i] = float32((rand.Float64()*2.0 - 1.0) * bound)
+		weightData[i] = float32((globalRng.Float64()*2.0 - 1.0) * bound)
 	}
 	
 	// Weight shape: [output_channels, input_channels, kernel_height, kernel_width]
@@ -332,8 +308,8 @@ func (c *Conv2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("Conv2D expects 4D input [batch_size, channels, height, width], got shape %v", input.Shape)
 	}
 	
-	// Use MPSGraph Conv2D operation
-	return tensor.Conv2DMPS(input, c.weight, c.bias, c.stride, c.stride, c.padding, c.padding, c.padding, c.padding)
+	// Use autograd Conv2D operation to build computational graph
+	return tensor.Conv2DAutograd(input, c.weight, c.bias, c.stride, c.padding)
 }
 
 // Parameters returns the trainable parameters
@@ -440,127 +416,92 @@ func (bn *BatchNorm) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("BatchNorm currently only supports 2D input [batch_size, features], got shape %v", input.Shape)
 	}
 	
-	batchSize := input.Shape[0]
 	features := input.Shape[1]
 	
 	if features != bn.numFeatures {
 		return nil, fmt.Errorf("input features mismatch: expected %d, got %d", bn.numFeatures, features)
 	}
 	
-	if bn.training {
-		// Training mode: compute batch statistics
-		batchMean, err := bn.computeBatchMean(input)
-		if err != nil {
-			return nil, fmt.Errorf("batch mean computation failed: %v", err)
-		}
-		
-		batchVar, err := bn.computeBatchVariance(input, batchMean)
-		if err != nil {
-			return nil, fmt.Errorf("batch variance computation failed: %v", err)
-		}
-		
-		// Update running statistics
-		err = bn.updateRunningStats(batchMean, batchVar)
-		if err != nil {
-			return nil, fmt.Errorf("running stats update failed: %v", err)
-		}
-		
-		// Normalize using batch statistics
-		return bn.normalize(input, batchMean, batchVar, batchSize)
-	} else {
-		// Evaluation mode: use running statistics
-		return bn.normalize(input, bn.runningMean, bn.runningVar, batchSize)
-	}
+	// Use simplified batch norm that ensures gradient flow to gamma and beta
+	return bn.simpleBatchNorm(input)
 }
 
-// computeBatchMean computes the mean across the batch dimension
-func (bn *BatchNorm) computeBatchMean(input *tensor.Tensor) (*tensor.Tensor, error) {
-	batchSize := float32(input.Shape[0])
-	inputData := input.Data.([]float32)
+// simpleBatchNorm performs a simplified batch normalization that ensures gradient flow to gamma/beta
+func (bn *BatchNorm) simpleBatchNorm(input *tensor.Tensor) (*tensor.Tensor, error) {
+	// Compute batch statistics manually (for now)
+	batchSize := input.Shape[0]
 	features := input.Shape[1]
+	inputData := input.Data.([]float32)
 	
+	// Calculate mean and variance manually
 	meanData := make([]float32, features)
-	
-	for j := 0; j < features; j++ {
-		var sum float32
-		for i := 0; i < int(batchSize); i++ {
-			sum += inputData[i*features+j]
-		}
-		meanData[j] = sum / batchSize
-	}
-	
-	return tensor.NewTensor([]int{features}, tensor.Float32, input.Device, meanData)
-}
-
-// computeBatchVariance computes the variance across the batch dimension
-func (bn *BatchNorm) computeBatchVariance(input, mean *tensor.Tensor) (*tensor.Tensor, error) {
-	batchSize := float32(input.Shape[0])
-	inputData := input.Data.([]float32)
-	meanData := mean.Data.([]float32)
-	features := input.Shape[1]
-	
 	varData := make([]float32, features)
 	
+	// Compute mean
+	for j := 0; j < features; j++ {
+		var sum float32
+		for i := 0; i < batchSize; i++ {
+			sum += inputData[i*features+j]
+		}
+		meanData[j] = sum / float32(batchSize)
+	}
+	
+	// Compute variance
 	for j := 0; j < features; j++ {
 		var sumSq float32
-		for i := 0; i < int(batchSize); i++ {
+		for i := 0; i < batchSize; i++ {
 			diff := inputData[i*features+j] - meanData[j]
 			sumSq += diff * diff
 		}
-		varData[j] = sumSq / batchSize
+		varData[j] = sumSq / float32(batchSize)
 	}
 	
-	return tensor.NewTensor([]int{features}, tensor.Float32, input.Device, varData)
-}
-
-// updateRunningStats updates the running mean and variance using exponential moving average
-func (bn *BatchNorm) updateRunningStats(batchMean, batchVar *tensor.Tensor) error {
-	momentum := float32(bn.momentum)
-	
-	// running_mean = (1 - momentum) * running_mean + momentum * batch_mean
-	runningMeanData := bn.runningMean.Data.([]float32)
-	batchMeanData := batchMean.Data.([]float32)
-	
-	for i := range runningMeanData {
-		runningMeanData[i] = (1.0-momentum)*runningMeanData[i] + momentum*batchMeanData[i]
-	}
-	
-	// running_var = (1 - momentum) * running_var + momentum * batch_var
-	runningVarData := bn.runningVar.Data.([]float32)
-	batchVarData := batchVar.Data.([]float32)
-	
-	for i := range runningVarData {
-		runningVarData[i] = (1.0-momentum)*runningVarData[i] + momentum*batchVarData[i]
-	}
-	
-	return nil
-}
-
-// normalize performs the normalization: (x - mean) / sqrt(var + eps) * gamma + beta
-func (bn *BatchNorm) normalize(input, mean, variance *tensor.Tensor, batchSize int) (*tensor.Tensor, error) {
-	inputData := input.Data.([]float32)
-	meanData := mean.Data.([]float32)
-	varData := variance.Data.([]float32)
-	gammaData := bn.gamma.Data.([]float32)
-	betaData := bn.beta.Data.([]float32)
-	
-	features := input.Shape[1]
-	outputData := make([]float32, len(inputData))
-	
-	for i := 0; i < batchSize; i++ {
-		for j := 0; j < features; j++ {
-			idx := i*features + j
-			
-			// Normalize: (x - mean) / sqrt(var + eps)
-			normalized := (inputData[idx] - meanData[j]) / float32(math.Sqrt(float64(varData[j])+bn.eps))
-			
-			// Scale and shift: normalized * gamma + beta
-			outputData[idx] = normalized*gammaData[j] + betaData[j]
+	// Update running statistics
+	if bn.training {
+		momentum := float32(bn.momentum)
+		runningMeanData := bn.runningMean.Data.([]float32)
+		runningVarData := bn.runningVar.Data.([]float32)
+		
+		for i := range meanData {
+			runningMeanData[i] = (1.0-momentum)*runningMeanData[i] + momentum*meanData[i]
+			runningVarData[i] = (1.0-momentum)*runningVarData[i] + momentum*varData[i]
 		}
 	}
 	
-	return tensor.NewTensor(input.Shape, input.DType, input.Device, outputData)
+	// Normalize and apply gamma/beta using autograd operations to ensure gradient flow
+	
+	// Create normalized output manually first
+	normalizedData := make([]float32, len(inputData))
+	for i := 0; i < batchSize; i++ {
+		for j := 0; j < features; j++ {
+			idx := i*features + j
+			// Normalize: (x - mean) / sqrt(var + eps)
+			normalizedData[idx] = (inputData[idx] - meanData[j]) / 
+				float32(math.Sqrt(float64(varData[j])+bn.eps))
+		}
+	}
+	
+	// Create normalized tensor
+	normalized, err := tensor.NewTensor(input.Shape, input.DType, input.Device, normalizedData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create normalized tensor: %v", err)
+	}
+	
+	// Apply affine transformation using autograd: gamma * normalized + beta
+	scaled, err := tensor.MulAutograd(bn.gamma, normalized)
+	if err != nil {
+		return nil, fmt.Errorf("scaling failed: %v", err)
+	}
+	
+	output, err := tensor.AddAutograd(scaled, bn.beta)
+	if err != nil {
+		return nil, fmt.Errorf("shift failed: %v", err)
+	}
+	
+	return output, nil
 }
+
+
 
 // Parameters returns the trainable parameters
 func (bn *BatchNorm) Parameters() []*tensor.Tensor {
@@ -670,8 +611,8 @@ func (m *MaxPool2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("MaxPool2D expects 4D input [batch_size, channels, height, width], got shape %v", input.Shape)
 	}
 	
-	// Use MPSGraph MaxPool2D operation
-	return tensor.MaxPool2DMPS(input, m.kernelSize, m.stride, m.padding)
+	// Use autograd MaxPool2D operation to maintain computational graph
+	return tensor.MaxPool2DAutograd(input, m.kernelSize, m.stride, m.padding)
 }
 
 // Parameters returns empty slice (MaxPool2D has no parameters)
@@ -714,13 +655,8 @@ func (f *Flatten) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	totalElements := input.NumElems
 	flattenedSize := totalElements / batchSize
 	
-	// Use GPU-specific reshape for GPU tensors, CPU reshape for CPU tensors
-	if input.Device == tensor.GPU || input.Device == tensor.PersistentGPU {
-		return tensor.ReshapeMPS(input, []int{batchSize, flattenedSize})
-	}
-	
-	// For CPU tensors, use the standard reshape
-	return input.Reshape([]int{batchSize, flattenedSize})
+	// Use autograd reshape to maintain computational graph
+	return tensor.ReshapeAutograd(input, []int{batchSize, flattenedSize})
 }
 
 // Parameters returns empty slice (Flatten has no parameters)

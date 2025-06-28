@@ -4,6 +4,50 @@ import (
 	"fmt"
 )
 
+// broadcastScalarToShape expands a scalar tensor to the target shape
+func broadcastScalarToShape(scalar *Tensor, targetShape []int) (*Tensor, error) {
+	if len(scalar.Shape) != 0 {
+		return nil, fmt.Errorf("broadcastScalarToShape: input must be scalar, got shape %v", scalar.Shape)
+	}
+	
+	// Calculate number of elements in target shape
+	numElems := 1
+	for _, dim := range targetShape {
+		numElems *= dim
+	}
+	
+	// Create data by replicating scalar value
+	var newData interface{}
+	switch scalar.DType {
+	case Float32:
+		scalarData := scalar.Data.([]float32)
+		if len(scalarData) != 1 {
+			return nil, fmt.Errorf("scalar tensor must have exactly 1 element")
+		}
+		value := scalarData[0]
+		data := make([]float32, numElems)
+		for i := range data {
+			data[i] = value
+		}
+		newData = data
+	case Int32:
+		scalarData := scalar.Data.([]int32)
+		if len(scalarData) != 1 {
+			return nil, fmt.Errorf("scalar tensor must have exactly 1 element")
+		}
+		value := scalarData[0]
+		data := make([]int32, numElems)
+		for i := range data {
+			data[i] = value
+		}
+		newData = data
+	default:
+		return nil, fmt.Errorf("unsupported data type for scalar broadcasting: %v", scalar.DType)
+	}
+	
+	return NewTensor(targetShape, scalar.DType, scalar.Device, newData)
+}
+
 // BroadcastShapes determines if two shapes are broadcastable and returns the resulting shape
 // Follows NumPy/PyTorch broadcasting rules:
 // 1. Start from trailing dimensions and work backwards
@@ -70,8 +114,15 @@ func AreBroadcastable(shape1, shape2 []int) bool {
 
 // BroadcastTensor expands a tensor to a target shape using broadcasting rules
 func BroadcastTensor(t *Tensor, targetShape []int) (*Tensor, error) {
-	if len(t.Shape) == 0 || len(targetShape) == 0 {
-		return nil, fmt.Errorf("cannot broadcast empty shapes")
+	// Handle scalar tensors (empty shape) - they can broadcast to any shape
+	if len(t.Shape) == 0 {
+		// Scalar to any shape - replicate the scalar value
+		return broadcastScalarToShape(t, targetShape)
+	}
+	if len(targetShape) == 0 {
+		// Any shape to scalar - this should sum to a scalar but that's a reduction, not broadcasting
+		// For broadcasting, we just return the original tensor
+		return t.Clone()
 	}
 	
 	// Check if broadcasting is needed

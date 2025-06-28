@@ -99,6 +99,36 @@ func (op *AddOp) Forward(inputs ...*Tensor) (*Tensor, error)
 func (op *AddOp) GetInputs() []*Tensor
 ```
 
+#### type Conv2DOp
+
+```go
+type Conv2DOp struct {
+}
+```
+
+Conv2DOp implements 2D convolution operation for autograd
+
+#### func (*Conv2DOp) Backward
+
+```go
+func (op *Conv2DOp) Backward(gradOutput *Tensor) ([]*Tensor, error)
+```
+Backward computes gradients for convolution operation
+
+#### func (*Conv2DOp) Forward
+
+```go
+func (op *Conv2DOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+Forward performs the forward pass for 2D convolution
+
+#### func (*Conv2DOp) GetInputs
+
+```go
+func (op *Conv2DOp) GetInputs() []*Tensor
+```
+GetInputs returns the input tensors for this operation
+
 #### type DType
 
 ```go
@@ -338,6 +368,36 @@ type GraphOperation struct {
 
 GraphOperation represents a single operation in the computation graph
 
+#### type LogOp
+
+```go
+type LogOp struct {
+}
+```
+
+LogOp implements log operation for autograd
+
+#### func (*LogOp) Backward
+
+```go
+func (op *LogOp) Backward(gradOutput *Tensor) ([]*Tensor, error)
+```
+Backward computes gradients for log operation
+
+#### func (*LogOp) Forward
+
+```go
+func (op *LogOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+Forward performs the forward pass for log
+
+#### func (*LogOp) GetInputs
+
+```go
+func (op *LogOp) GetInputs() []*Tensor
+```
+GetInputs returns the input tensors for this operation
+
 #### type MPSGraphEngine
 
 ```go
@@ -381,6 +441,36 @@ func (op *MatMulOp) Forward(inputs ...*Tensor) (*Tensor, error)
 ```go
 func (op *MatMulOp) GetInputs() []*Tensor
 ```
+
+#### type MaxPool2DOp
+
+```go
+type MaxPool2DOp struct {
+}
+```
+
+MaxPool2DOp implements max pooling operation for autograd
+
+#### func (*MaxPool2DOp) Backward
+
+```go
+func (op *MaxPool2DOp) Backward(gradOutput *Tensor) ([]*Tensor, error)
+```
+Backward computes gradients for max pooling with proper gradient routing
+
+#### func (*MaxPool2DOp) Forward
+
+```go
+func (op *MaxPool2DOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+Forward performs max pooling operation
+
+#### func (*MaxPool2DOp) GetInputs
+
+```go
+func (op *MaxPool2DOp) GetInputs() []*Tensor
+```
+GetInputs returns the input tensors
 
 #### type MulOp
 
@@ -511,6 +601,66 @@ func (op *ReLUOp) Forward(inputs ...*Tensor) (*Tensor, error)
 func (op *ReLUOp) GetInputs() []*Tensor
 ```
 
+#### type ReshapeOp
+
+```go
+type ReshapeOp struct {
+}
+```
+
+ReshapeOp implements reshape operation for autograd
+
+#### func (*ReshapeOp) Backward
+
+```go
+func (op *ReshapeOp) Backward(gradOutput *Tensor) ([]*Tensor, error)
+```
+Backward computes gradients for reshape operation
+
+#### func (*ReshapeOp) Forward
+
+```go
+func (op *ReshapeOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+Forward performs the forward pass for reshape
+
+#### func (*ReshapeOp) GetInputs
+
+```go
+func (op *ReshapeOp) GetInputs() []*Tensor
+```
+GetInputs returns the input tensors for this operation
+
+#### type SelectOp
+
+```go
+type SelectOp struct {
+}
+```
+
+SelectOp implements indexing operation for autograd (used for CrossEntropy)
+
+#### func (*SelectOp) Backward
+
+```go
+func (op *SelectOp) Backward(gradOutput *Tensor) ([]*Tensor, error)
+```
+Backward computes gradients for selection operation
+
+#### func (*SelectOp) Forward
+
+```go
+func (op *SelectOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+Forward performs the forward pass for indexing
+
+#### func (*SelectOp) GetInputs
+
+```go
+func (op *SelectOp) GetInputs() []*Tensor
+```
+GetInputs returns the input tensors for this operation
+
 #### type SigmoidOp
 
 ```go
@@ -536,6 +686,63 @@ func (op *SigmoidOp) Forward(inputs ...*Tensor) (*Tensor, error)
 
 ```go
 func (op *SigmoidOp) GetInputs() []*Tensor
+```
+
+#### type SoftmaxOp
+
+```go
+type SoftmaxOp struct {
+}
+```
+
+SoftmaxOp implements softmax operation for autograd
+
+#### func (*SoftmaxOp) Backward
+
+```go
+func (op *SoftmaxOp) Backward(gradOutput *Tensor) ([]*Tensor, error)
+```
+Backward computes gradients for softmax operation
+
+#### func (*SoftmaxOp) Forward
+
+```go
+func (op *SoftmaxOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+Forward performs the forward pass for softmax
+
+#### func (*SoftmaxOp) GetInputs
+
+```go
+func (op *SoftmaxOp) GetInputs() []*Tensor
+```
+GetInputs returns the input tensors for this operation
+
+#### type SquareOp
+
+```go
+type SquareOp struct {
+}
+```
+
+SquareOp implements element-wise square for autograd
+
+#### func (*SquareOp) Backward
+
+```go
+func (op *SquareOp) Backward(gradOut *Tensor) ([]*Tensor, error)
+```
+
+#### func (*SquareOp) Forward
+
+```go
+func (op *SquareOp) Forward(inputs ...*Tensor) (*Tensor, error)
+```
+
+#### func (*SquareOp) GetInputs
+
+```go
+func (op *SquareOp) GetInputs() []*Tensor
 ```
 
 #### type SubOp
@@ -655,6 +862,13 @@ func BroadcastTensor(t *Tensor, targetShape []int) (*Tensor, error)
 ```
 BroadcastTensor expands a tensor to a target shape using broadcasting rules
 
+#### func  Conv2DAutograd
+
+```go
+func Conv2DAutograd(input, weight, bias *Tensor, stride, padding int) (*Tensor, error)
+```
+Conv2DAutograd performs 2D convolution with automatic differentiation
+
 #### func  Conv2DMPS
 
 ```go
@@ -743,6 +957,13 @@ input_features] to match training.Linear convention
 func Log(t *Tensor) (*Tensor, error)
 ```
 
+#### func  LogAutograd
+
+```go
+func LogAutograd(input *Tensor) (*Tensor, error)
+```
+LogAutograd performs natural logarithm with automatic differentiation
+
 #### func  MatMul
 
 ```go
@@ -768,6 +989,13 @@ func MatMulGPU(t1, t2 *Tensor) (*Tensor, error)
 func MatMulMPS(a, b *Tensor) (*Tensor, error)
 ```
 MatMulMPS performs matrix multiplication using a cached MPSGraph
+
+#### func  MaxPool2DAutograd
+
+```go
+func MaxPool2DAutograd(input *Tensor, kernelSize, stride, padding int) (*Tensor, error)
+```
+MaxPool2DAutograd performs 2D max pooling with automatic differentiation
 
 #### func  MaxPool2DMPS
 
@@ -801,6 +1029,13 @@ MulMPS performs tensor multiplication using a cached MPSGraph
 ```go
 func NewTensor(shape []int, dtype DType, device DeviceType, data interface{}) (*Tensor, error)
 ```
+
+#### func  NewTensorOnDevice
+
+```go
+func NewTensorOnDevice(shape []int, dtype DType, device DeviceType, data interface{}) *Tensor
+```
+NewTensorOnDevice creates a tensor on the specified device
 
 #### func  Ones
 
@@ -853,6 +1088,27 @@ ReLUMPS performs ReLU activation using a cached MPSGraph
 func Reshape(t *Tensor, newShape []int) (*Tensor, error)
 ```
 
+#### func  ReshapeAutograd
+
+```go
+func ReshapeAutograd(input *Tensor, newShape []int) (*Tensor, error)
+```
+ReshapeAutograd performs reshape with automatic differentiation
+
+#### func  ReshapeMPS
+
+```go
+func ReshapeMPS(input *Tensor, newShape []int) (*Tensor, error)
+```
+ReshapeMPS performs tensor reshape using a cached MPSGraph
+
+#### func  SelectAutograd
+
+```go
+func SelectAutograd(input, indices *Tensor) (*Tensor, error)
+```
+SelectAutograd performs indexing with automatic differentiation
+
 #### func  Sigmoid
 
 ```go
@@ -873,12 +1129,26 @@ func SigmoidMPS(a *Tensor) (*Tensor, error)
 ```
 SigmoidMPS performs Sigmoid activation using a cached MPSGraph
 
+#### func  SoftmaxAutograd
+
+```go
+func SoftmaxAutograd(input *Tensor, dim int) (*Tensor, error)
+```
+SoftmaxAutograd performs softmax with automatic differentiation
+
 #### func  Sqrt
 
 ```go
 func Sqrt(t *Tensor) (*Tensor, error)
 ```
 Sqrt computes the square root of a tensor element-wise
+
+#### func  SquareAutograd
+
+```go
+func SquareAutograd(a *Tensor) (*Tensor, error)
+```
+SquareAutograd performs element-wise square with automatic differentiation
 
 #### func  Squeeze
 

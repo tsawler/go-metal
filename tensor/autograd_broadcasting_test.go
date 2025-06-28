@@ -114,7 +114,7 @@ func TestGradientReduction(t *testing.T) {
 		}
 		
 		// Check shape is scalar
-		expectedShape := []int{1}
+		expectedShape := []int{} // Scalar has empty shape
 		if !reflect.DeepEqual(result.Shape, expectedShape) {
 			t.Errorf("Result shape = %v, expected %v", result.Shape, expectedShape)
 		}

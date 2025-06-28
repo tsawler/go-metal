@@ -89,14 +89,26 @@ func (t *Tensor) Clone() (*Tensor, error) {
 	copy(clone.Shape, t.Shape)
 	copy(clone.Strides, t.Strides)
 
-	// Handle GPU tensors with nil Data differently
-	if t.Device == GPU && t.Data == nil {
-		// For pure GPU tensors, convert to CPU first then clone
+	// Handle GPU and PersistentGPU tensors with nil Data differently
+	if (t.Device == GPU || t.Device == PersistentGPU) && t.Data == nil {
+		// For pure GPU tensors, convert to CPU first, clone, then convert back to preserve device
 		cpuTensor, err := t.ToCPU()
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert GPU tensor to CPU for cloning: %v", err)
 		}
-		return cpuTensor, nil
+		
+		// Clone the CPU tensor
+		cpuClone, err := cpuTensor.Clone()
+		if err != nil {
+			return nil, fmt.Errorf("failed to clone CPU tensor: %v", err)
+		}
+		
+		// Convert back to original device
+		if t.Device == PersistentGPU {
+			return cpuClone.ToPersistentGPU()
+		} else {
+			return cpuClone.ToGPU()
+		}
 	}
 	
 	switch t.DType {
@@ -389,16 +401,16 @@ func FromScalar(value float64, dtype DType, device DeviceType) *Tensor {
 	switch dtype {
 	case Float32:
 		data := []float32{float32(value)}
-		tensor, _ := NewTensor([]int{1}, dtype, device, data)
+		tensor, _ := NewTensor([]int{}, dtype, device, data)
 		return tensor
 	case Int32:
 		data := []int32{int32(value)}
-		tensor, _ := NewTensor([]int{1}, dtype, device, data)
+		tensor, _ := NewTensor([]int{}, dtype, device, data)
 		return tensor
 	default:
 		// Default to Float32
 		data := []float32{float32(value)}
-		tensor, _ := NewTensor([]int{1}, dtype, device, data)
+		tensor, _ := NewTensor([]int{}, dtype, device, data)
 		return tensor
 	}
 }

@@ -806,7 +806,7 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
 	}
 
-	cacheKey := generateCacheKey("conv2d", input, weights, bias)
+	cacheKey := generateCacheKey(fmt.Sprintf("conv2d_s%dx%d_p%d%d%d%d", strideX, strideY, paddingLeft, paddingRight, paddingTop, paddingBottom), input, weights, bias)
 	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
 		graph := metal_bridge.NewGraph()
 		dataType := convertDTypeToMPS(input.DType)
@@ -821,7 +821,7 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 			
 			// Perform convolution without bias first
 			convResult := graph.Conv2D(placeholderInput, placeholderWeights, nil,
-				1, 1, // strideX, strideY (using 1,1 for simplicity, can be parameterized later)
+				strideX, strideY, // strideX, strideY
 				1, 1, // dilationX, dilationY
 				paddingLeft, paddingRight, paddingTop, paddingBottom,
 				1) // groups
@@ -833,7 +833,7 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		} else {
 			inputTensors = []*metal_bridge.GraphTensor{placeholderInput, placeholderWeights}
 			resultTensor = graph.Conv2D(placeholderInput, placeholderWeights, nil,
-				1, 1, // strideX, strideY (using 1,1 for simplicity, can be parameterized later)
+				strideX, strideY, // strideX, strideY
 				1, 1, // dilationX, dilationY
 				paddingLeft, paddingRight, paddingTop, paddingBottom,
 				1) // groups

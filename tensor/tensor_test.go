@@ -67,7 +67,7 @@ func TestCalculateNumElements(t *testing.T) {
 		shape    []int
 		expected int
 	}{
-		{[]int{}, 0},
+		{[]int{}, 1}, // Scalar has 1 element
 		{[]int{5}, 5},
 		{[]int{2, 3}, 6},
 		{[]int{2, 3, 4}, 24},

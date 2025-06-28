@@ -195,8 +195,8 @@ func TestFromScalar(t *testing.T) {
 
 			if tensor != nil {
 				// Verify tensor properties
-				if len(tensor.Shape) != 1 || tensor.Shape[0] != 1 {
-					t.Errorf("Expected shape [1], got %v", tensor.Shape)
+				if len(tensor.Shape) != 0 {
+					t.Errorf("Expected scalar shape [], got %v", tensor.Shape)
 				}
 
 				if tensor.DType != tt.dtype {
