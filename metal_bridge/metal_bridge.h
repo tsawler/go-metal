@@ -49,6 +49,10 @@ typedef void* MPSGraphExecutionDescriptorRef;
 typedef void* MPSGraphCompilationDescriptorRef;
 typedef void* MPSGraphDeviceRef;
 
+typedef struct {
+    int id;
+} goHandlerData;
+
 // C-compatible types for non-Objective-C compilation
 typedef void* id;
 typedef void* CFTypeRef;

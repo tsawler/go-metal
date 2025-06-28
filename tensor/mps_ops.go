@@ -1078,3 +1078,82 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 
 	return result, nil
 }
+
+// ReshapeMPS performs tensor reshape using a cached MPSGraph
+func ReshapeMPS(input *Tensor, newShape []int) (*Tensor, error) {
+	// Validate new shape
+	newNumElems := 1
+	for _, dim := range newShape {
+		if dim <= 0 {
+			return nil, fmt.Errorf("invalid dimension in new shape: %d", dim)
+		}
+		newNumElems *= dim
+	}
+	
+	if newNumElems != input.NumElems {
+		return nil, fmt.Errorf("cannot reshape tensor of size %d into shape %v (size %d)", input.NumElems, newShape, newNumElems)
+	}
+
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+
+	// Create cache key that includes both input shape and target shape
+	cacheKey := fmt.Sprintf("reshape_%v_%v_%v", input.Shape, newShape, input.DType)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(input.DType)
+		placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
+		
+		resultTensor := graph.Reshape(placeholderInput, newShape)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Create output tensor
+	result := &Tensor{
+		Shape:    make([]int, len(newShape)),
+		Strides:  calculateStrides(newShape),
+		DType:    input.DType,
+		Device:   determineResultDevice(input),
+		NumElems: newNumElems,
+	}
+	copy(result.Shape, newShape)
+
+	allocator := metal_bridge.GetGlobalAllocator()
+
+	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
+	}
+	defer inputBuffer.Release()
+
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result buffer: %v", err)
+	}
+
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
+		[]*metal_bridge.Buffer{inputBuffer},
+		cached.resultTensors,
+		[]*metal_bridge.Buffer{resultBuffer},
+		executionDescriptor)
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}

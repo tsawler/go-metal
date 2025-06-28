@@ -645,3 +645,100 @@ func (s *Sequential) IsTraining() bool {
 func (s *Sequential) Add(module Module) {
 	s.modules = append(s.modules, module)
 }
+
+// MaxPool2D implements a 2D max pooling layer
+type MaxPool2D struct {
+	kernelSize int
+	stride     int
+	padding    int
+	training   bool
+}
+
+// NewMaxPool2D creates a new MaxPool2D layer
+func NewMaxPool2D(kernelSize, stride, padding int) *MaxPool2D {
+	return &MaxPool2D{
+		kernelSize: kernelSize,
+		stride:     stride,
+		padding:    padding,
+		training:   true,
+	}
+}
+
+// Forward performs 2D max pooling
+func (m *MaxPool2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
+	if len(input.Shape) != 4 {
+		return nil, fmt.Errorf("MaxPool2D expects 4D input [batch_size, channels, height, width], got shape %v", input.Shape)
+	}
+	
+	// Use MPSGraph MaxPool2D operation
+	return tensor.MaxPool2DMPS(input, m.kernelSize, m.stride, m.padding)
+}
+
+// Parameters returns empty slice (MaxPool2D has no parameters)
+func (m *MaxPool2D) Parameters() []*tensor.Tensor {
+	return []*tensor.Tensor{}
+}
+
+// Train sets the module to training mode
+func (m *MaxPool2D) Train() {
+	m.training = true
+}
+
+// Eval sets the module to evaluation mode
+func (m *MaxPool2D) Eval() {
+	m.training = false
+}
+
+// IsTraining returns true if in training mode
+func (m *MaxPool2D) IsTraining() bool {
+	return m.training
+}
+
+// Flatten reshapes input tensor to [batch_size, -1]
+type Flatten struct {
+	training bool
+}
+
+// NewFlatten creates a new Flatten layer
+func NewFlatten() *Flatten {
+	return &Flatten{training: true}
+}
+
+// Forward flattens the input tensor to [batch_size, -1]
+func (f *Flatten) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
+	if len(input.Shape) < 2 {
+		return nil, fmt.Errorf("Flatten expects input with at least 2 dimensions, got shape %v", input.Shape)
+	}
+	
+	batchSize := input.Shape[0]
+	totalElements := input.NumElems
+	flattenedSize := totalElements / batchSize
+	
+	// Use GPU-specific reshape for GPU tensors, CPU reshape for CPU tensors
+	if input.Device == tensor.GPU || input.Device == tensor.PersistentGPU {
+		return tensor.ReshapeMPS(input, []int{batchSize, flattenedSize})
+	}
+	
+	// For CPU tensors, use the standard reshape
+	return input.Reshape([]int{batchSize, flattenedSize})
+}
+
+// Parameters returns empty slice (Flatten has no parameters)
+func (f *Flatten) Parameters() []*tensor.Tensor {
+	return []*tensor.Tensor{}
+}
+
+// Train sets the module to training mode
+func (f *Flatten) Train() {
+	f.training = true
+}
+
+// Eval sets the module to evaluation mode
+func (f *Flatten) Eval() {
+	f.training = false
+}
+
+// IsTraining returns true if in training mode
+func (f *Flatten) IsTraining() bool {
+	return f.training
+}

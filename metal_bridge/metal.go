@@ -15,6 +15,12 @@ import (
 	"unsafe"
 )
 
+// goHandlerData is a small struct to hold the handler ID, allowing us to pass a pointer
+// to allocated memory to C, instead of converting an integer to a pointer directly.
+type goHandlerData struct {
+	id int
+}
+
 // Global map to store completion handlers
 var (
 	completionHandlers = make(map[int]func(status int))
@@ -451,8 +457,9 @@ func (cb *CommandBuffer) WaitUntilCompleted() {
 func goCommandBufferCompleted(userData unsafe.Pointer, statusCode C.long) {
 	// If userData contains a handler ID, look up and execute the handler
 	if userData != nil {
-		// Convert userData back to handler ID
-		handlerID := int(uintptr(userData))
+		// Convert userData back to *goHandlerData and get the ID
+		handlerData := (*goHandlerData)(userData)
+		handlerID := handlerData.id
 		
 		handlerMutex.Lock()
 		handler, exists := completionHandlers[handlerID]
@@ -460,6 +467,9 @@ func goCommandBufferCompleted(userData unsafe.Pointer, statusCode C.long) {
 			delete(completionHandlers, handlerID) // Clean up after execution
 		}
 		handlerMutex.Unlock()
+		
+		// Free the allocated memory for handlerData
+		C.free(userData)
 		
 		if exists {
 			// Execute the handler in a goroutine to avoid blocking the Metal callback
@@ -478,11 +488,12 @@ func (cb *CommandBuffer) AddCompletedHandler(handler func(status int)) {
 	completionHandlers[handlerID] = handler
 	handlerMutex.Unlock()
 	
-	// Convert handler ID to userData pointer
-	userData := unsafe.Pointer(uintptr(handlerID))
+	// Allocate memory for goHandlerData and store the handlerID
+	handlerData := (*C.goHandlerData)(C.malloc(C.sizeof_goHandlerData))
+	handlerData.id = C.int(handlerID)
 	
 	// Register the completion handler with the command buffer
-	C.AddCommandBufferCompletedHandler(cb.c_commandBuffer, userData, (C.CompletionHandlerFunc)(C.goCommandBufferCompleted))
+	C.AddCommandBufferCompletedHandler(cb.c_commandBuffer, unsafe.Pointer(handlerData), (C.CompletionHandlerFunc)(C.goCommandBufferCompleted))
 }
 
 // MPSGraph wrapper structs and functions

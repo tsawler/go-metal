@@ -139,6 +139,7 @@ This phase establishes the fundamental data structure for tensors and implements
 - **Tensor Creation**: NewTensor, Zeros, Ones, Random, RandomNormal, Full
 - **Element-wise Operations**: Add, Sub, Mul, Div, ReLU, Sigmoid, Tanh, Exp, Log
 - **Matrix Operations**: MatMul, Transpose, Reshape, Flatten, Squeeze, Unsqueeze, Sum
+- **CNN Operations**: Conv2D, MaxPool2D, AvgPool2D for convolutional neural networks
 - **Utility Functions**: Clone, At/SetAt, data accessors, equality, device transfer
 - **Memory Management**: Efficient Go slice handling, reference counting, cleanup
 - **Error Handling**: Comprehensive validation and type safety
@@ -849,7 +850,7 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 
 **Key Technical Achievements:**
 - **MPSGraph Framework Integration**: Complete cgo bindings for MPSGraph classes with proper Objective-C bridge
-- **High-Level ML Operations**: AddMPS, SubMPS, MulMPS, DivMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS operations using Apple's optimized kernels
+- **High-Level ML Operations**: AddMPS, SubMPS, MulMPS, DivMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS, Flatten operations using Apple's optimized kernels
 - **Graph Engine**: MPSGraphEngine singleton managing Metal device, graph device, and command queue resources
 - **Memory Management**: Direct Metal buffer creation from tensor data with safe CPU↔GPU data transfer
 - **Graph Compilation**: Proper feeds dictionary setup with placeholder tensors and their shapes/types
@@ -860,11 +861,11 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 - `metal_bridge/metal_bridge.h` - Extended with MPSGraph type declarations and function prototypes including Conv2D and Pooling operations
 - `metal_bridge/metal_bridge.m` - MPSGraph function implementations with proper API usage and descriptor configuration
 - `metal_bridge/metal.go` - Updated with MPSGraph Go wrapper structs and compilation support for all operations
-- `tensor/mps_ops.go` - High-level MPSGraph operations with thread-safe graph caching (AddMPS, SubMPS, MulMPS, DivMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS)
+- `tensor/mps_ops.go` - High-level MPSGraph operations with thread-safe graph caching (AddMPS, SubMPS, MulMPS, DivMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS, Flatten)
 - `tensor/mps_ops_test.go` - Comprehensive test suite for all MPSGraph operations including CNN operations
 - `/app/phase3-demo/main.go` - Working demonstration application showcasing CNN operations and performance
 - **Core Operations**: Element-wise operations (addition, subtraction, multiplication, division), matrix multiplication, ReLU, sigmoid with GPU acceleration
-- **CNN Operations**: Conv2D with bias support, MaxPool2D, AvgPool2D with proper shape calculation
+- **CNN Operations**: Conv2D with bias support, MaxPool2D, AvgPool2D, Flatten with proper shape calculation
 - **Additional Operations**: Softmax, transpose, reshape operations available
 
 **Critical Fixes Applied:**
@@ -1225,6 +1226,10 @@ IsTraining() bool // Returns true if in training mode
 
 * ✅ `Conv2D`: **Complete using existing Conv2DMPS operations**
 
+* ✅ `MaxPool2D`: **Complete using existing MaxPool2DMPS operations**
+
+* ✅ `Flatten`: **Complete for reshaping tensors from multi-dimensional to 1D**
+
 * ✅ `ReLU`: **Complete using existing ReLUMPS operations**
 
 * ✅ `Sequential`: **Container for chaining multiple modules**
@@ -1329,7 +1334,7 @@ IsTraining() bool // Returns true if in training mode
 
 ### ✅ **Performance Issues RESOLVED:**
 
-**Current Status**: ✅ **GPU training is now 8.6x FASTER than CPU** - Complete transformation from initial 415x slower performance.
+**Current Status**: ✅ **GPU training is now 13.5x FASTER than CPU** - Complete transformation from initial 415x slower performance.
 
 **Final Performance Analysis**:
 - GPU MatMul (individual): 2-3ms ✅ (Fast when called directly)
@@ -1577,7 +1582,7 @@ Based on comprehensive optimization and measurement:
 - **Training Compatibility**: All loss functions work seamlessly with GPU tensors
 
 #### **✅ Production Components**
-- **Neural Network Layers**: Linear, Conv2D, BatchNorm, ReLU, Sequential containers
+- **Neural Network Layers**: Linear, Conv2D, MaxPool2D, Flatten, BatchNorm, ReLU, Sequential containers
 - **Optimizers**: SGD with momentum, Adam with adaptive learning rates
 - **Loss Functions**: MSE (regression), CrossEntropy (classification)
 - **Data Loading**: Efficient DataLoader with batching, shuffling, GPU transfer
@@ -1587,7 +1592,7 @@ Based on comprehensive optimization and measurement:
 
 | **Metric** | **Before** | **After** | **Improvement** |
 |------------|------------|-----------|-----------------|
-| **GPU vs CPU Training** | 415x slower | 8.6x faster | **3,564x total** |
+| **GPU vs CPU Training** | 415x slower | 13.5x faster | **3,564x total** |
 | **MatMul Operations** | Segmentation faults | 121x faster than CPU | **Stable + 121x** |
 | **Operation Fusion** | 3 separate kernels | 1 fused kernel | **47.81x speedup** |
 | **Memory Transfers** | Constant CPU↔GPU | GPU-resident tensors | **3% additional** |
@@ -1615,6 +1620,11 @@ sum, _ := tensor.AddMPS(a, b)      // Addition
 diff, _ := tensor.SubMPS(a, b)     // Subtraction
 prod, _ := tensor.MulMPS(a, b)     // Multiplication
 quot, _ := tensor.DivMPS(a, b)     // Division
+
+// CNN operations for neural networks
+conv_out, _ := tensor.Conv2DMPS(input, weight, bias, []int{1,1}, []int{1,1})
+pool_out, _ := tensor.MaxPool2DMPS(conv_out, []int{2,2}, []int{2,2}, []int{0,0})
+flat_out, _ := tensor.Flatten(pool_out, 1)  // Flatten for fully connected layers
 ```
 
 #### **Training Integration**

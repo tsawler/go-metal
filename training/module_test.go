@@ -412,3 +412,222 @@ func TestSequentialModule(t *testing.T) {
 		}
 	})
 }
+
+func TestMaxPool2DModule(t *testing.T) {
+	t.Run("MaxPool2D layer creation", func(t *testing.T) {
+		// Create MaxPool2D layer: 2x2 kernel, stride=2, padding=0
+		maxpool := NewMaxPool2D(2, 2, 0)
+		
+		// Check parameters
+		params := maxpool.Parameters()
+		if len(params) != 0 {
+			t.Errorf("MaxPool2D should have no parameters, got %d", len(params))
+		}
+		
+		// Check configuration
+		if maxpool.kernelSize != 2 {
+			t.Errorf("Expected kernel size 2, got %d", maxpool.kernelSize)
+		}
+		if maxpool.stride != 2 {
+			t.Errorf("Expected stride 2, got %d", maxpool.stride)
+		}
+		if maxpool.padding != 0 {
+			t.Errorf("Expected padding 0, got %d", maxpool.padding)
+		}
+	})
+	
+	t.Run("MaxPool2D forward pass shape", func(t *testing.T) {
+		maxpool := NewMaxPool2D(2, 2, 0)
+		
+		// Create 4D input: [batch_size=1, channels=3, height=4, width=4]
+		input, err := tensor.NewTensor([]int{1, 3, 4, 4}, tensor.Float32, tensor.CPU, 
+			make([]float32, 1*3*4*4))
+		if err != nil {
+			t.Fatalf("Failed to create input tensor: %v", err)
+		}
+		
+		// Skip if MPS not available
+		_, mpsErr := tensor.GetMPSGraphEngine()
+		if mpsErr != nil {
+			t.Skipf("MPSGraph not available on this system: %v", mpsErr)
+		}
+		
+		// Forward pass
+		output, err := maxpool.Forward(input)
+		if err != nil {
+			t.Fatalf("MaxPool2D forward pass failed: %v", err)
+		}
+		
+		// Check output shape: [1, 3, 2, 2] (input 4x4 -> output 2x2 with 2x2 pool, stride 2)
+		expectedShape := []int{1, 3, 2, 2}
+		if len(output.Shape) != len(expectedShape) {
+			t.Fatalf("Expected output shape %v, got %v", expectedShape, output.Shape)
+		}
+		
+		for i, dim := range expectedShape {
+			if output.Shape[i] != dim {
+				t.Errorf("Output shape dimension %d: expected %d, got %d", i, dim, output.Shape[i])
+			}
+		}
+	})
+	
+	t.Run("MaxPool2D invalid input", func(t *testing.T) {
+		maxpool := NewMaxPool2D(2, 2, 0)
+		
+		// Create 3D input (invalid for MaxPool2D)
+		input, err := tensor.NewTensor([]int{2, 3, 4}, tensor.Float32, tensor.CPU, 
+			make([]float32, 2*3*4))
+		if err != nil {
+			t.Fatalf("Failed to create input tensor: %v", err)
+		}
+		
+		// Forward pass should fail
+		_, err = maxpool.Forward(input)
+		if err == nil {
+			t.Error("MaxPool2D should fail with 3D input")
+		}
+	})
+	
+	t.Run("MaxPool2D train/eval mode", func(t *testing.T) {
+		maxpool := NewMaxPool2D(2, 2, 0)
+		
+		// Initially in training mode
+		if !maxpool.IsTraining() {
+			t.Error("MaxPool2D should start in training mode")
+		}
+		
+		// Set to eval mode
+		maxpool.Eval()
+		if maxpool.IsTraining() {
+			t.Error("MaxPool2D should be in eval mode")
+		}
+		
+		// Set back to train mode
+		maxpool.Train()
+		if !maxpool.IsTraining() {
+			t.Error("MaxPool2D should be in training mode")
+		}
+	})
+}
+
+func TestFlattenModule(t *testing.T) {
+	t.Run("Flatten layer creation", func(t *testing.T) {
+		flatten := NewFlatten()
+		
+		// Check parameters
+		params := flatten.Parameters()
+		if len(params) != 0 {
+			t.Errorf("Flatten should have no parameters, got %d", len(params))
+		}
+		
+		// Initially in training mode
+		if !flatten.IsTraining() {
+			t.Error("Flatten should start in training mode")
+		}
+	})
+	
+	t.Run("Flatten forward pass 2D", func(t *testing.T) {
+		flatten := NewFlatten()
+		
+		// Create 2D input: [batch_size=2, features=3]
+		input, err := tensor.NewTensor([]int{2, 3}, tensor.Float32, tensor.CPU, 
+			[]float32{1.0, 2.0, 3.0, 4.0, 5.0, 6.0})
+		if err != nil {
+			t.Fatalf("Failed to create input tensor: %v", err)
+		}
+		
+		// Forward pass
+		output, err := flatten.Forward(input)
+		if err != nil {
+			t.Fatalf("Flatten forward pass failed: %v", err)
+		}
+		
+		// Output should be same as input for 2D tensor
+		expectedShape := []int{2, 3}
+		if len(output.Shape) != len(expectedShape) {
+			t.Fatalf("Expected output shape %v, got %v", expectedShape, output.Shape)
+		}
+		
+		for i, dim := range expectedShape {
+			if output.Shape[i] != dim {
+				t.Errorf("Output shape dimension %d: expected %d, got %d", i, dim, output.Shape[i])
+			}
+		}
+		
+		// Check data is preserved
+		outputData := output.Data.([]float32)
+		inputData := input.Data.([]float32)
+		for i, expected := range inputData {
+			if math.Abs(float64(outputData[i]-expected)) > 1e-6 {
+				t.Errorf("Output[%d]: expected %.6f, got %.6f", i, expected, outputData[i])
+			}
+		}
+	})
+	
+	t.Run("Flatten forward pass 4D", func(t *testing.T) {
+		flatten := NewFlatten()
+		
+		// Create 4D input: [batch_size=2, channels=3, height=2, width=2]
+		input, err := tensor.NewTensor([]int{2, 3, 2, 2}, tensor.Float32, tensor.CPU, 
+			make([]float32, 2*3*2*2))
+		if err != nil {
+			t.Fatalf("Failed to create input tensor: %v", err)
+		}
+		
+		// Forward pass
+		output, err := flatten.Forward(input)
+		if err != nil {
+			t.Fatalf("Flatten forward pass failed: %v", err)
+		}
+		
+		// Output shape should be [batch_size, flattened_features] = [2, 12]
+		expectedShape := []int{2, 12}
+		if len(output.Shape) != len(expectedShape) {
+			t.Fatalf("Expected output shape %v, got %v", expectedShape, output.Shape)
+		}
+		
+		for i, dim := range expectedShape {
+			if output.Shape[i] != dim {
+				t.Errorf("Output shape dimension %d: expected %d, got %d", i, dim, output.Shape[i])
+			}
+		}
+	})
+	
+	t.Run("Flatten invalid input", func(t *testing.T) {
+		flatten := NewFlatten()
+		
+		// Create 1D input (invalid for Flatten)
+		input, err := tensor.NewTensor([]int{5}, tensor.Float32, tensor.CPU, 
+			[]float32{1.0, 2.0, 3.0, 4.0, 5.0})
+		if err != nil {
+			t.Fatalf("Failed to create input tensor: %v", err)
+		}
+		
+		// Forward pass should fail
+		_, err = flatten.Forward(input)
+		if err == nil {
+			t.Error("Flatten should fail with 1D input")
+		}
+	})
+	
+	t.Run("Flatten train/eval mode", func(t *testing.T) {
+		flatten := NewFlatten()
+		
+		// Initially in training mode
+		if !flatten.IsTraining() {
+			t.Error("Flatten should start in training mode")
+		}
+		
+		// Set to eval mode
+		flatten.Eval()
+		if flatten.IsTraining() {
+			t.Error("Flatten should be in eval mode")
+		}
+		
+		// Set back to train mode
+		flatten.Train()
+		if !flatten.IsTraining() {
+			t.Error("Flatten should be in training mode")
+		}
+	})
+}
