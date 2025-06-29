@@ -13,7 +13,7 @@ The go-metal library uses a three-layer architecture:
 ```
 ┌─────────────────────────────────────────────────────┐
 │                 Go Layer                            │
-│  tensor.go, gpu_ops.go, mps_ops.go, etc.          │
+│  tensor.go, mps_ops.go, autograd.go, etc.          │
 └─────────────────────┬───────────────────────────────┘
                       │ Go struct method calls
 ┌─────────────────────▼───────────────────────────────┐
@@ -32,6 +32,8 @@ The go-metal library uses a three-layer architecture:
 │      Apple's native GPU computation APIs           │
 └─────────────────────────────────────────────────────┘
 ```
+
+**Major Architecture Update (2025)**: The library has transitioned from a custom compute engine to fully leverage MPSGraph for all GPU operations, including gradient computation. This provides better performance and compatibility with Apple's Metal ecosystem.
 
 ## Type System and Object Representation
 
@@ -489,6 +491,78 @@ MPSGraph* CreateMPSGraph() {
 3. **Finalizers**: Go finalizers ensure cleanup even if explicit cleanup is missed
 4. **Exception Handling**: Objective-C exceptions are caught and converted to Go errors
 
+## MPSGraph Integration for Machine Learning
+
+### Gradient Computation Architecture
+
+The library now implements automatic differentiation using MPSGraph's native gradient operations:
+
+```go
+// Conv2D gradient computation using MPSGraph
+func (op *Conv2dOp) computeInputGradientMPSGraph(gradOutput *Tensor) (*Tensor, error) {
+    engine, err := GetMPSGraphEngine()
+    
+    // Create cached graph for gradient computation
+    createGraphFunc := func() *cachedGraph {
+        graph := metal_bridge.NewGraph()
+        
+        // Create placeholder tensors
+        gradOutputPlaceholder := graph.PlaceholderTensor(gradOutput.Shape, int(metal_bridge.MPSDataTypeFloat32))
+        weightsPlaceholder := graph.PlaceholderTensor(op.weight.Shape, int(metal_bridge.MPSDataTypeFloat32))
+        
+        // Use native MPSGraph gradient operation
+        inputGradTensor := graph.Convolution2DDataGradient(
+            gradOutputPlaceholder,
+            weightsPlaceholder,
+            op.input.Shape,  // Original input shape
+            op.stride, op.stride,
+            op.dilation, op.dilation,
+            op.padding, op.padding, op.padding, op.padding,
+            op.groups,
+        )
+        
+        // Compile the graph
+        executable := graph.Compile(graphDevice, nil, nil, nil)
+        
+        return &cachedGraph{
+            executable:    executable,
+            inputTensors:  []*metal_bridge.GraphTensor{gradOutputPlaceholder, weightsPlaceholder},
+            resultTensors: []*metal_bridge.GraphTensor{inputGradTensor},
+        }
+    }
+    
+    // Execute with caching for performance
+    return engine.executeGraph(cachedGraph, inputs)
+}
+```
+
+### Key MPSGraph Operations Added
+
+1. **Convolution2DDataGradient**: Computes gradients with respect to input data
+2. **Convolution2DWeightsGradient**: Computes gradients with respect to convolution weights
+3. **ConvolutionTranspose2D**: Implements transposed convolution for gradient computation
+
+### Graph Caching Strategy
+
+The library implements a sophisticated caching mechanism for compiled MPSGraph operations:
+
+```go
+type MPSGraphEngine struct {
+    device       *metal_bridge.Device
+    graphDevice  *metal_bridge.GraphDevice
+    commandQueue *metal_bridge.CommandQueue
+    
+    // Cache for compiled graph executables
+    cacheMutex sync.Mutex
+    graphCache map[string]*cachedGraph
+}
+```
+
+This caching significantly improves performance by:
+- Avoiding recompilation of identical graphs
+- Reusing compiled executables across operations
+- Maintaining thread-safe access to cached resources
+
 ## Performance Considerations
 
 ### Memory Pool Benefits
@@ -502,6 +576,12 @@ MPSGraph* CreateMPSGraph() {
 1. **Batch Operations**: Multiple operations are batched to reduce CGO overhead
 2. **Async Patterns**: Asynchronous operations allow overlapping computation and data transfer
 3. **Buffer Reuse**: Pool management reduces frequent allocations
+
+### MPSGraph Optimizations
+
+1. **Graph Compilation Caching**: Compiled graphs are cached and reused
+2. **Native Gradient Operations**: Using MPSGraph's built-in gradient functions avoids manual implementation overhead
+3. **Persistent GPU Tensors**: Keeping intermediate results on GPU reduces data transfer
 
 ## Best Practices and Lessons Learned
 

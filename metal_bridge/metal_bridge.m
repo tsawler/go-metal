@@ -218,6 +218,11 @@ MPSGraphTensor* MPSGraphReshape(MPSGraph* graph, MPSGraphTensor* tensor, int* sh
     return [graph reshapeTensor:tensor withShape:nsShape name:nil];
 }
 
+MPSGraphTensor* MPSGraphReductionSum(MPSGraph* graph, MPSGraphTensor* tensor, int axis, int keepDims) {
+    NSArray<NSNumber*>* axes = @[@(axis)];
+    return [graph reductionSumWithTensor:tensor axes:axes name:nil];
+}
+
 // MPSGraph Convolution and Pooling operations
 MPSGraphTensor* MPSGraphConvolution2D(MPSGraph* graph, MPSGraphTensor* source, MPSGraphTensor* weights, MPSGraphTensor* bias, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups) {
     MPSGraphConvolution2DOpDescriptor* descriptor = [[MPSGraphConvolution2DOpDescriptor alloc] init];
@@ -246,6 +251,90 @@ MPSGraphTensor* MPSGraphConvolution2D(MPSGraph* graph, MPSGraphTensor* source, M
                                          descriptor:descriptor
                                                name:nil];
     }
+}
+
+MPSGraphTensor* MPSGraphConvolutionTranspose2D(MPSGraph* graph, MPSGraphTensor* source, MPSGraphTensor* weights, int* outputShape, size_t outputShapeCount, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups) {
+    MPSGraphConvolution2DOpDescriptor* descriptor = [[MPSGraphConvolution2DOpDescriptor alloc] init];
+    
+    descriptor.strideInX = strideInX;
+    descriptor.strideInY = strideInY;
+    descriptor.dilationRateInX = dilationRateInX;
+    descriptor.dilationRateInY = dilationRateInY;
+    descriptor.paddingLeft = paddingLeft;
+    descriptor.paddingRight = paddingRight;
+    descriptor.paddingTop = paddingTop;
+    descriptor.paddingBottom = paddingBottom;
+    descriptor.groups = groups;
+    descriptor.dataLayout = MPSGraphTensorNamedDataLayoutNCHW;
+    descriptor.weightsLayout = MPSGraphTensorNamedDataLayoutOIHW;
+    
+    // Convert C array to NSArray for outputShape
+    NSMutableArray<NSNumber*>* nsOutputShape = [[NSMutableArray alloc] initWithCapacity:outputShapeCount];
+    for (size_t i = 0; i < outputShapeCount; i++) {
+        [nsOutputShape addObject:@(outputShape[i])];
+    }
+    
+    return [graph convolutionTranspose2DWithSourceTensor:source
+                                           weightsTensor:weights
+                                             outputShape:nsOutputShape
+                                              descriptor:descriptor
+                                                    name:nil];
+}
+
+MPSGraphTensor* MPSGraphConvolution2DDataGradient(MPSGraph* graph, MPSGraphTensor* incomingGradient, MPSGraphTensor* weights, int* outputShape, size_t outputShapeCount, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups) {
+    MPSGraphConvolution2DOpDescriptor* descriptor = [[MPSGraphConvolution2DOpDescriptor alloc] init];
+    
+    descriptor.strideInX = strideInX;
+    descriptor.strideInY = strideInY;
+    descriptor.dilationRateInX = dilationRateInX;
+    descriptor.dilationRateInY = dilationRateInY;
+    descriptor.paddingLeft = paddingLeft;
+    descriptor.paddingRight = paddingRight;
+    descriptor.paddingTop = paddingTop;
+    descriptor.paddingBottom = paddingBottom;
+    descriptor.groups = groups;
+    descriptor.dataLayout = MPSGraphTensorNamedDataLayoutNCHW;
+    descriptor.weightsLayout = MPSGraphTensorNamedDataLayoutOIHW;
+    
+    // Convert C array to NSArray for outputShape (shape of original input)
+    NSMutableArray<NSNumber*>* nsOutputShape = [[NSMutableArray alloc] initWithCapacity:outputShapeCount];
+    for (size_t i = 0; i < outputShapeCount; i++) {
+        [nsOutputShape addObject:@(outputShape[i])];
+    }
+    
+    return [graph convolution2DDataGradientWithIncomingGradientTensor:incomingGradient
+                                                       weightsTensor:weights
+                                                         outputShape:nsOutputShape
+                                            forwardConvolutionDescriptor:descriptor
+                                                                name:nil];
+}
+
+MPSGraphTensor* MPSGraphConvolution2DWeightsGradient(MPSGraph* graph, MPSGraphTensor* incomingGradient, MPSGraphTensor* source, int* outputShape, size_t outputShapeCount, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups) {
+    MPSGraphConvolution2DOpDescriptor* descriptor = [[MPSGraphConvolution2DOpDescriptor alloc] init];
+    
+    descriptor.strideInX = strideInX;
+    descriptor.strideInY = strideInY;
+    descriptor.dilationRateInX = dilationRateInX;
+    descriptor.dilationRateInY = dilationRateInY;
+    descriptor.paddingLeft = paddingLeft;
+    descriptor.paddingRight = paddingRight;
+    descriptor.paddingTop = paddingTop;
+    descriptor.paddingBottom = paddingBottom;
+    descriptor.groups = groups;
+    descriptor.dataLayout = MPSGraphTensorNamedDataLayoutNCHW;
+    descriptor.weightsLayout = MPSGraphTensorNamedDataLayoutOIHW;
+    
+    // Convert C array to NSArray for outputShape (shape of original weights)
+    NSMutableArray<NSNumber*>* nsOutputShape = [[NSMutableArray alloc] initWithCapacity:outputShapeCount];
+    for (size_t i = 0; i < outputShapeCount; i++) {
+        [nsOutputShape addObject:@(outputShape[i])];
+    }
+    
+    return [graph convolution2DWeightsGradientWithIncomingGradientTensor:incomingGradient
+                                                            sourceTensor:source
+                                                             outputShape:nsOutputShape
+                                                forwardConvolutionDescriptor:descriptor
+                                                                    name:nil];
 }
 
 MPSGraphTensor* MPSGraphMaxPooling2D(MPSGraph* graph, MPSGraphTensor* source, int kernelWidth, int kernelHeight, int strideInX, int strideInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom) {
@@ -282,6 +371,75 @@ MPSGraphTensor* MPSGraphAvgPooling2D(MPSGraph* graph, MPSGraphTensor* source, in
     descriptor.dataLayout = MPSGraphTensorNamedDataLayoutNCHW;
     
     return [graph avgPooling2DWithSourceTensor:source descriptor:descriptor name:nil];
+}
+
+// MPSGraph gradient operations for automatic differentiation
+MPSGraphTensor* MPSGraphGradientForPrimaryTensor(MPSGraph* graph, MPSGraphTensor* primaryTensor, MPSGraphTensor** tensors, size_t tensorCount, MPSGraphTensorRef lossGradient) {
+    @try {
+        if (graph == nil || primaryTensor == nil) {
+            NSLog(@"Invalid parameters for MPSGraphGradientForPrimaryTensor");
+            return nil;
+        }
+        
+        // Convert C array to NSArray
+        NSMutableArray<MPSGraphTensor*>* tensorsArray = [[NSMutableArray alloc] init];
+        for (size_t i = 0; i < tensorCount; i++) {
+            if (tensors[i] != nil) {
+                [tensorsArray addObject:tensors[i]];
+            }
+        }
+        
+        // Compute gradients using the correct API
+        NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradients = [graph gradientForPrimaryTensor:primaryTensor
+                                                                                         withTensors:tensorsArray 
+                                                                                                name:nil];
+        
+        // Return the gradient for the primary tensor if available
+        MPSGraphTensor* result = gradients[primaryTensor];
+        if (result == nil) {
+            NSLog(@"No gradient computed for primary tensor");
+        }
+        return result;
+        
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in MPSGraphGradientForPrimaryTensor: %@", exception);
+        return nil;
+    }
+}
+
+MPSGraphTensor* MPSGraphGradientForTensor(MPSGraph* graph, MPSGraphTensor* primaryTensor, MPSGraphTensor* targetTensor, MPSGraphTensor** allTensors, size_t tensorCount) {
+    @try {
+        if (graph == nil || primaryTensor == nil || targetTensor == nil) {
+            NSLog(@"Invalid parameters for MPSGraphGradientForTensor");
+            return nil;
+        }
+        
+        // Convert C array to NSArray of tensors to differentiate with respect to
+        NSMutableArray<MPSGraphTensor*>* tensorsArray = [[NSMutableArray alloc] init];
+        [tensorsArray addObject:targetTensor]; // We want gradient w.r.t. this tensor
+        
+        for (size_t i = 0; i < tensorCount; i++) {
+            if (allTensors[i] != nil && allTensors[i] != targetTensor) {
+                [tensorsArray addObject:allTensors[i]];
+            }
+        }
+        
+        // Compute gradients using the correct API
+        NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradients = [graph gradientForPrimaryTensor:primaryTensor
+                                                                                         withTensors:tensorsArray 
+                                                                                                name:nil];
+        
+        // Return the gradient for the target tensor
+        MPSGraphTensor* result = gradients[targetTensor];
+        if (result == nil) {
+            NSLog(@"No gradient computed for target tensor");
+        }
+        return result;
+        
+    } @catch (NSException *exception) {
+        NSLog(@"Exception in MPSGraphGradientForTensor: %@", exception);
+        return nil;
+    }
 }
 
 // MPSGraph execution

@@ -41,12 +41,8 @@ func MatMul(t1, t2 *Tensor) (*Tensor, error) {
 		// If MPS fails, log the error and try GPU fallback
 		fmt.Printf("MPS MatMul failed: %v\n", err)
 		
-		// Fallback to basic GPU operations
-		result, err = MatMulGPU(t1, t2)
-		if err == nil {
-			return result, nil
-		}
-		// If GPU operations fail, log and continue with CPU implementation below
+		// If MPS fails, use CPU implementation
+		// (GPU operations have been replaced with MPSGraph operations)
 		fmt.Printf("GPU MatMul failed: %v\n", err)
 	}
 

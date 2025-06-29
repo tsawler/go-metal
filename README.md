@@ -851,11 +851,13 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 **Key Technical Achievements:**
 - **MPSGraph Framework Integration**: Complete cgo bindings for MPSGraph classes with proper Objective-C bridge
 - **High-Level ML Operations**: AddMPS, SubMPS, MulMPS, DivMPS, MatMulMPS, ReLUMPS, SigmoidMPS, Conv2DMPS, MaxPool2DMPS, AvgPool2DMPS, Flatten operations using Apple's optimized kernels
+- **Gradient Operations**: Convolution2DDataGradient, Convolution2DWeightsGradient, ConvolutionTranspose2D for complete Conv2D backpropagation
 - **Graph Engine**: MPSGraphEngine singleton managing Metal device, graph device, and command queue resources
 - **Memory Management**: Direct Metal buffer creation from tensor data with safe CPU↔GPU data transfer
 - **Graph Compilation**: Proper feeds dictionary setup with placeholder tensors and their shapes/types
 - **Performance Validation**: All operations tested with numerical correctness verification
 - **Convolutional Neural Networks**: Full support for Conv2D with bias, MaxPool2D, and AvgPool2D operations
+- **Conv2D Gradients**: Complete gradient computation using native MPSGraph operations for training CNNs
 
 **Files Implemented:**
 - `metal_bridge/metal_bridge.h` - Extended with MPSGraph type declarations and function prototypes including Conv2D and Pooling operations
@@ -866,6 +868,7 @@ This phase moves beyond raw Metal compute kernels to leverage the much higher-le
 - `/app/phase3-demo/main.go` - Working demonstration application showcasing CNN operations and performance
 - **Core Operations**: Element-wise operations (addition, subtraction, multiplication, division), matrix multiplication, ReLU, sigmoid with GPU acceleration
 - **CNN Operations**: Conv2D with bias support, MaxPool2D, AvgPool2D, Flatten with proper shape calculation
+- **CNN Training**: Full gradient computation for Conv2D layers enabling end-to-end CNN training
 - **Additional Operations**: Softmax, transpose, reshape operations available
 
 **Critical Fixes Applied:**
@@ -962,23 +965,27 @@ This phase introduces the ability to automatically compute gradients, which is f
 **Key Technical Achievements:**
 - **Autograd Fields**: Extended Tensor struct with requiresGrad, grad, and creator fields
 - **Operation Interface**: Defined Forward/Backward interface for all operations
-- **Concrete Operations**: AddOp, SubOp, MulOp, MatMulOp, ReLUOp, SigmoidOp implementations
+- **Concrete Operations**: AddOp, SubOp, MulOp, MatMulOp, ReLUOp, SigmoidOp, Conv2dOp implementations
 - **Backward Pass**: Tensor.Backward() method with reverse topological traversal
 - **Chain Rule**: Proper gradient flow through complex computational graphs
 - **Memory Management**: Safe gradient accumulation and cleanup with ZeroGrad()
 - **Device Agnostic**: Seamless integration with both CPU and GPU operations
+- **Conv2D Gradients**: Complete MPSGraph-based gradient computation for convolution operations
 
 **Files Implemented:**
-- `tensor/autograd.go` - Complete automatic differentiation implementation with operation structs
+- `tensor/autograd.go` - Complete automatic differentiation implementation with operation structs and Conv2D gradient computation
 - `tensor/tensor.go` - Extended with Backward(), ZeroGrad(), gradient accumulation methods
 - `tensor/autograd_test.go` - Comprehensive test suite covering all autograd functionality
 - `tensor/autograd_broadcasting_test.go` - Tests for autograd with broadcasting operations
+- `metal_bridge/metal_bridge.h/.m` - Extended with MPSGraph convolution gradient operations
+- `metal_bridge/metal.go` - Added Go wrappers for gradient computation functions
 - `/app/phase4-demo/main.go` - Working demonstration application showcasing automatic differentiation
 
 **Mathematical Operations Supported:**
 - **Element-wise**: Addition, Subtraction, Multiplication with proper gradients
 - **Matrix Operations**: Matrix multiplication with transpose-based gradient computation
 - **Activation Functions**: ReLU (step function), Sigmoid (smooth derivative) 
+- **Convolutional Operations**: Conv2D with complete input and weight gradient computation using MPSGraph
 - **Complex Graphs**: Multi-variable functions with chain rule application
 - **Gradient Flow**: Proper accumulation and propagation through arbitrary computational graphs
 

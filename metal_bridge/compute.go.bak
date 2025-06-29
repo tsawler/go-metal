@@ -25,9 +25,9 @@ func NewComputeEngine() (*ComputeEngine, error) {
 		return nil, fmt.Errorf("failed to create command queue")
 	}
 
-	library, err := device.CreateLibraryWithSource(MetalKernelSource)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Metal library: %v", err)
+	library := device.NewLibraryWithSource(MetalKernelSource)
+	if library == nil {
+		return nil, fmt.Errorf("failed to create Metal library")
 	}
 
 	engine := &ComputeEngine{
@@ -69,14 +69,14 @@ func NewComputeEngine() (*ComputeEngine, error) {
 
 // LoadKernel loads a specific kernel function and creates its pipeline state
 func (e *ComputeEngine) LoadKernel(kernelName string) error {
-	function, err := e.library.GetFunction(kernelName)
-	if err != nil {
-		return fmt.Errorf("failed to get function %s: %v", kernelName, err)
+	function := e.library.NewFunctionWithName(kernelName)
+	if function == nil {
+		return fmt.Errorf("failed to get function %s", kernelName)
 	}
 
-	pipeline, err := e.device.NewComputePipelineStateWithFunction(function)
-	if err != nil {
-		return fmt.Errorf("failed to create pipeline state for %s: %v", kernelName, err)
+	pipeline := e.device.NewComputePipelineStateWithFunction(function)
+	if pipeline == nil {
+		return fmt.Errorf("failed to create pipeline state for %s", kernelName)
 	}
 
 	e.kernels[kernelName] = function
@@ -105,23 +105,11 @@ func (e *ComputeEngine) AddArraysFloat32Async(inputA, inputB []float32, completi
 	result := make([]float32, length)
 
 	// Create buffers
-	bufferA, err := e.device.CreateBufferWithBytes(inputA, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create buffer A: %v", err))
-		return err
-	}
+	bufferA := e.device.NewBufferWithBytes(inputA, ResourceStorageModeShared)
 
-	bufferB, err := e.device.CreateBufferWithBytes(inputB, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create buffer B: %v", err))
-		return err
-	}
+	bufferB := e.device.NewBufferWithBytes(inputB, ResourceStorageModeShared)
 
-	bufferResult, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create result buffer: %v", err))
-		return err
-	}
+	bufferResult := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Execute kernel asynchronously
 	err = e.executeKernelAsync("add_arrays_float32", uint(length), func() {
@@ -131,10 +119,6 @@ func (e *ComputeEngine) AddArraysFloat32Async(inputA, inputB []float32, completi
 		completion(result, nil)
 	}, bufferA, bufferB, bufferResult)
 	
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to execute kernel: %v", err))
-		return err
-	}
 
 	return nil
 }
@@ -149,23 +133,14 @@ func (e *ComputeEngine) AddArraysFloat32(inputA, inputB []float32) ([]float32, e
 	result := make([]float32, length)
 
 	// Create buffers
-	bufferA, err := e.device.CreateBufferWithBytes(inputA, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create buffer A: %v", err)
-	}
+	bufferA := e.device.NewBufferWithBytes(inputA, ResourceStorageModeShared)
 
-	bufferB, err := e.device.CreateBufferWithBytes(inputB, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create buffer B: %v", err)
-	}
+	bufferB := e.device.NewBufferWithBytes(inputB, ResourceStorageModeShared)
 
-	bufferResult, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create result buffer: %v", err)
-	}
+	bufferResult := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Execute kernel
-	err = e.executeKernel("add_arrays_float32", uint(length), bufferA, bufferB, bufferResult)
+	err := e.executeKernel("add_arrays_float32", uint(length), bufferA, bufferB, bufferResult)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute kernel: %v", err)
 	}
@@ -187,26 +162,14 @@ func (e *ComputeEngine) AddArraysInt32(inputA, inputB []int32) ([]int32, error) 
 	result := make([]int32, length)
 
 	// Create buffers
-	bufferA, err := e.device.CreateBufferWithBytes(inputA, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create buffer A: %v", err)
-	}
+	bufferA := e.device.NewBufferWithBytes(inputA, ResourceStorageModeShared)
 
-	bufferB, err := e.device.CreateBufferWithBytes(inputB, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create buffer B: %v", err)
-	}
+	bufferB := e.device.NewBufferWithBytes(inputB, ResourceStorageModeShared)
 
-	bufferResult, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create result buffer: %v", err)
-	}
+	bufferResult := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Execute kernel
 	err = e.executeKernel("add_arrays_int32", uint(length), bufferA, bufferB, bufferResult)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute kernel: %v", err)
-	}
 
 	// Copy result back
 	resultSlice := bufferResult.ContentsAsInt32()
@@ -221,17 +184,9 @@ func (e *ComputeEngine) ReLUFloat32Async(input []float32, completion func([]floa
 	result := make([]float32, length)
 
 	// Create buffers
-	bufferInput, err := e.device.CreateBufferWithBytes(input, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create input buffer: %v", err))
-		return err
-	}
+	bufferInput := e.device.NewBufferWithBytes(input, ResourceStorageModeShared)
 
-	bufferResult, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create result buffer: %v", err))
-		return err
-	}
+	bufferResult := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Execute kernel asynchronously
 	err = e.executeKernelAsync("relu_float32", uint(length), func() {
@@ -241,10 +196,6 @@ func (e *ComputeEngine) ReLUFloat32Async(input []float32, completion func([]floa
 		completion(result, nil)
 	}, bufferInput, bufferResult)
 	
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to execute kernel: %v", err))
-		return err
-	}
 
 	return nil
 }
@@ -255,21 +206,12 @@ func (e *ComputeEngine) ReLUFloat32(input []float32) ([]float32, error) {
 	result := make([]float32, length)
 
 	// Create buffers
-	bufferInput, err := e.device.CreateBufferWithBytes(input, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create input buffer: %v", err)
-	}
+	bufferInput := e.device.NewBufferWithBytes(input, ResourceStorageModeShared)
 
-	bufferResult, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create result buffer: %v", err)
-	}
+	bufferResult := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Execute kernel
 	err = e.executeKernel("relu_float32", uint(length), bufferInput, bufferResult)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute kernel: %v", err)
-	}
 
 	// Copy result back
 	resultSlice := bufferResult.ContentsAsFloat32()
@@ -394,42 +336,18 @@ func (e *ComputeEngine) MatMulFloat32Async(matrixA, matrixB []float32, M, N, P u
 	result := make([]float32, M*P)
 
 	// Create buffers
-	bufferA, err := e.device.CreateBufferWithBytes(matrixA, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create A buffer: %v", err))
-		return err
-	}
+	bufferA := e.device.NewBufferWithBytes(matrixA, ResourceStorageModeShared)
 
-	bufferB, err := e.device.CreateBufferWithBytes(matrixB, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create B buffer: %v", err))
-		return err
-	}
+	bufferB := e.device.NewBufferWithBytes(matrixB, ResourceStorageModeShared)
 
-	bufferResult, err := e.device.CreateBufferWithLength(uintptr(len(result)*4), ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create result buffer: %v", err))
-		return err
-	}
+	bufferResult := e.device.NewBufferWithLength(len(result)*4, int(ResourceStorageModeShared))
 
 	// Create dimension buffers
-	mBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(M)}, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create M buffer: %v", err))
-		return err
-	}
+	mBuffer := e.device.NewBufferWithBytes([]uint32{uint32(M)}, ResourceStorageModeShared)
 
-	nBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(N)}, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create N buffer: %v", err))
-		return err
-	}
+	nBuffer := e.device.NewBufferWithBytes([]uint32{uint32(N)}, ResourceStorageModeShared)
 
-	pBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(P)}, ResourceStorageModeShared)
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to create P buffer: %v", err))
-		return err
-	}
+	pBuffer := e.device.NewBufferWithBytes([]uint32{uint32(P)}, ResourceStorageModeShared)
 
 	// Execute matrix multiplication kernel asynchronously
 	err = e.executeMatMulKernelAsync("matmul_float32", M, P, func() {
@@ -439,10 +357,6 @@ func (e *ComputeEngine) MatMulFloat32Async(matrixA, matrixB []float32, M, N, P u
 		completion(result, nil)
 	}, bufferA, bufferB, bufferResult, mBuffer, nBuffer, pBuffer)
 	
-	if err != nil {
-		completion(nil, fmt.Errorf("failed to execute matmul kernel: %v", err))
-		return err
-	}
 
 	return nil
 }
@@ -459,42 +373,21 @@ func (e *ComputeEngine) MatMulFloat32(matrixA, matrixB []float32, M, N, P uint) 
 	result := make([]float32, M*P)
 
 	// Create buffers
-	bufferA, err := e.device.CreateBufferWithBytes(matrixA, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create buffer A: %v", err)
-	}
+	bufferA := e.device.NewBufferWithBytes(matrixA, ResourceStorageModeShared)
 
-	bufferB, err := e.device.CreateBufferWithBytes(matrixB, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create buffer B: %v", err)
-	}
+	bufferB := e.device.NewBufferWithBytes(matrixB, ResourceStorageModeShared)
 
-	bufferResult, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create result buffer: %v", err)
-	}
+	bufferResult := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Create parameter buffers
-	mBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(M)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create M buffer: %v", err)
-	}
+	mBuffer := e.device.NewBufferWithBytes([]uint32{uint32(M)}, ResourceStorageModeShared)
 
-	nBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(N)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create N buffer: %v", err)
-	}
+	nBuffer := e.device.NewBufferWithBytes([]uint32{uint32(N)}, ResourceStorageModeShared)
 
-	pBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(P)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create P buffer: %v", err)
-	}
+	pBuffer := e.device.NewBufferWithBytes([]uint32{uint32(P)}, ResourceStorageModeShared)
 
 	// Execute matrix multiplication kernel
 	err = e.executeMatMulKernel("matmul_float32", M, P, bufferA, bufferB, bufferResult, mBuffer, nBuffer, pBuffer)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute matmul kernel: %v", err)
-	}
 
 	// Copy result back
 	resultSlice := bufferResult.ContentsAsFloat32()
@@ -622,49 +515,25 @@ func (e *ComputeEngine) LinearForwardFloat32(input, weight, bias []float32, batc
 	result := make([]float32, batchSize*outputFeatures)
 
 	// Create buffers
-	inputBuffer, err := e.device.CreateBufferWithBytes(input, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create input buffer: %v", err)
-	}
+	inputBuffer := e.device.NewBufferWithBytes(input, ResourceStorageModeShared)
 
-	weightBuffer, err := e.device.CreateBufferWithBytes(weight, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create weight buffer: %v", err)
-	}
+	weightBuffer := e.device.NewBufferWithBytes(weight, ResourceStorageModeShared)
 
-	biasBuffer, err := e.device.CreateBufferWithBytes(bias, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create bias buffer: %v", err)
-	}
+	biasBuffer := e.device.NewBufferWithBytes(bias, ResourceStorageModeShared)
 
-	outputBuffer, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create output buffer: %v", err)
-	}
+	outputBuffer := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Create parameter buffers
-	batchSizeBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(batchSize)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	batchSizeBuffer := e.device.NewBufferWithBytes([]uint32{uint32(batchSize)}, ResourceStorageModeShared)
 
-	inputFeaturesBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(inputFeatures)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	inputFeaturesBuffer := e.device.NewBufferWithBytes([]uint32{uint32(inputFeatures)}, ResourceStorageModeShared)
 
-	outputFeaturesBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(outputFeatures)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	outputFeaturesBuffer := e.device.NewBufferWithBytes([]uint32{uint32(outputFeatures)}, ResourceStorageModeShared)
 
 	// Execute fused linear kernel
 	err = e.executeFusedLinearKernel("linear_forward_float32", batchSize, outputFeatures,
 		inputBuffer, weightBuffer, biasBuffer, outputBuffer,
 		batchSizeBuffer, inputFeaturesBuffer, outputFeaturesBuffer)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute linear forward kernel: %v", err)
-	}
 
 	// Copy result back
 	resultSlice := outputBuffer.ContentsAsFloat32()
@@ -688,49 +557,25 @@ func (e *ComputeEngine) LinearReLUFloat32(input, weight, bias []float32, batchSi
 	result := make([]float32, batchSize*outputFeatures)
 
 	// Create buffers
-	inputBuffer, err := e.device.CreateBufferWithBytes(input, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create input buffer: %v", err)
-	}
+	inputBuffer := e.device.NewBufferWithBytes(input, ResourceStorageModeShared)
 
-	weightBuffer, err := e.device.CreateBufferWithBytes(weight, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create weight buffer: %v", err)
-	}
+	weightBuffer := e.device.NewBufferWithBytes(weight, ResourceStorageModeShared)
 
-	biasBuffer, err := e.device.CreateBufferWithBytes(bias, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create bias buffer: %v", err)
-	}
+	biasBuffer := e.device.NewBufferWithBytes(bias, ResourceStorageModeShared)
 
-	outputBuffer, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create output buffer: %v", err)
-	}
+	outputBuffer := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Create parameter buffers
-	batchSizeBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(batchSize)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	batchSizeBuffer := e.device.NewBufferWithBytes([]uint32{uint32(batchSize)}, ResourceStorageModeShared)
 
-	inputFeaturesBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(inputFeatures)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	inputFeaturesBuffer := e.device.NewBufferWithBytes([]uint32{uint32(inputFeatures)}, ResourceStorageModeShared)
 
-	outputFeaturesBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(outputFeatures)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	outputFeaturesBuffer := e.device.NewBufferWithBytes([]uint32{uint32(outputFeatures)}, ResourceStorageModeShared)
 
 	// Execute fused linear + ReLU kernel
 	err = e.executeFusedLinearKernel("linear_relu_float32", batchSize, outputFeatures,
 		inputBuffer, weightBuffer, biasBuffer, outputBuffer,
 		batchSizeBuffer, inputFeaturesBuffer, outputFeaturesBuffer)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute linear ReLU kernel: %v", err)
-	}
 
 	// Copy result back
 	resultSlice := outputBuffer.ContentsAsFloat32()
@@ -754,49 +599,25 @@ func (e *ComputeEngine) LinearSigmoidFloat32(input, weight, bias []float32, batc
 	result := make([]float32, batchSize*outputFeatures)
 
 	// Create buffers
-	inputBuffer, err := e.device.CreateBufferWithBytes(input, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create input buffer: %v", err)
-	}
+	inputBuffer := e.device.NewBufferWithBytes(input, ResourceStorageModeShared)
 
-	weightBuffer, err := e.device.CreateBufferWithBytes(weight, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create weight buffer: %v", err)
-	}
+	weightBuffer := e.device.NewBufferWithBytes(weight, ResourceStorageModeShared)
 
-	biasBuffer, err := e.device.CreateBufferWithBytes(bias, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create bias buffer: %v", err)
-	}
+	biasBuffer := e.device.NewBufferWithBytes(bias, ResourceStorageModeShared)
 
-	outputBuffer, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create output buffer: %v", err)
-	}
+	outputBuffer := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Create parameter buffers
-	batchSizeBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(batchSize)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	batchSizeBuffer := e.device.NewBufferWithBytes([]uint32{uint32(batchSize)}, ResourceStorageModeShared)
 
-	inputFeaturesBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(inputFeatures)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	inputFeaturesBuffer := e.device.NewBufferWithBytes([]uint32{uint32(inputFeatures)}, ResourceStorageModeShared)
 
-	outputFeaturesBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(outputFeatures)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	outputFeaturesBuffer := e.device.NewBufferWithBytes([]uint32{uint32(outputFeatures)}, ResourceStorageModeShared)
 
 	// Execute fused linear + Sigmoid kernel
 	err = e.executeFusedLinearKernel("linear_sigmoid_float32", batchSize, outputFeatures,
 		inputBuffer, weightBuffer, biasBuffer, outputBuffer,
 		batchSizeBuffer, inputFeaturesBuffer, outputFeaturesBuffer)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute linear sigmoid kernel: %v", err)
-	}
 
 	// Copy result back
 	resultSlice := outputBuffer.ContentsAsFloat32()
@@ -820,48 +641,24 @@ func (e *ComputeEngine) BatchMatMulFloat32(batchA, batchB []float32, batchSize, 
 	result := make([]float32, batchSize*M*P)
 
 	// Create buffers
-	bufferA, err := e.device.CreateBufferWithBytes(batchA, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create batch A buffer: %v", err)
-	}
+	bufferA := e.device.NewBufferWithBytes(batchA, ResourceStorageModeShared)
 
-	bufferB, err := e.device.CreateBufferWithBytes(batchB, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create batch B buffer: %v", err)
-	}
+	bufferB := e.device.NewBufferWithBytes(batchB, ResourceStorageModeShared)
 
-	bufferResult, err := e.device.CreateBufferWithBytes(result, ResourceStorageModeShared)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create result buffer: %v", err)
-	}
+	bufferResult := e.device.NewBufferWithBytes(result, ResourceStorageModeShared)
 
 	// Create parameter buffers
-	batchSizeBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(batchSize)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	batchSizeBuffer := e.device.NewBufferWithBytes([]uint32{uint32(batchSize)}, ResourceStorageModeShared)
 
-	mBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(M)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	mBuffer := e.device.NewBufferWithBytes([]uint32{uint32(M)}, ResourceStorageModeShared)
 
-	nBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(N)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	nBuffer := e.device.NewBufferWithBytes([]uint32{uint32(N)}, ResourceStorageModeShared)
 
-	pBuffer, err := e.device.CreateBufferWithBytes([]uint32{uint32(P)}, ResourceStorageModeShared)
-	if err != nil {
-		return nil, err
-	}
+	pBuffer := e.device.NewBufferWithBytes([]uint32{uint32(P)}, ResourceStorageModeShared)
 
 	// Execute batch matrix multiplication kernel
 	err = e.executeBatchMatMulKernel("batch_matmul_float32", batchSize, M, P,
 		bufferA, bufferB, bufferResult, batchSizeBuffer, mBuffer, nBuffer, pBuffer)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute batch matmul kernel: %v", err)
-	}
 
 	// Copy result back
 	resultSlice := bufferResult.ContentsAsFloat32()

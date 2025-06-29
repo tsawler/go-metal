@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"sync/atomic"
+	"github.com/tsawler/go-metal/metal_bridge"
 )
 
 // Reshape returns a new tensor with the same data but different shape
@@ -326,6 +327,49 @@ func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error) {
 	return nil, fmt.Errorf("unsupported device conversion from %v to %v", t.Device, device)
 }
 
+// ToCPU moves a tensor to CPU device (creates a copy with CPU device type)
+func (t *Tensor) ToCPU() (*Tensor, error) {
+	if t.Device == CPU {
+		return t, nil
+	}
+
+	// Create CPU tensor with data copied from GPU buffer
+	var cpuData interface{}
+	
+	if t.gpuBuffer != nil {
+		// Copy data from GPU buffer to CPU
+		var err error
+		cpuData, err = copyDataFromGPUBuffer(t.gpuBuffer, t.DType, t.NumElems)
+		if err != nil {
+			return nil, fmt.Errorf("failed to copy data from GPU: %v", err)
+		}
+	} else {
+		// Fallback to existing CPU data if no GPU buffer
+		cpuData = t.Data
+	}
+
+	// Create new CPU tensor
+	cpuTensor := &Tensor{
+		Shape:        make([]int, len(t.Shape)),
+		Strides:      make([]int, len(t.Strides)),
+		DType:        t.DType,
+		Device:       CPU,
+		Data:         cpuData,
+		NumElems:     t.NumElems,
+		requiresGrad: t.requiresGrad,
+	}
+	
+	copy(cpuTensor.Shape, t.Shape)
+	copy(cpuTensor.Strides, t.Strides)
+
+	return cpuTensor, nil
+}
+
+// ToGPU moves a tensor to GPU device (creates a copy with GPU device type)
+func (t *Tensor) ToGPU() (*Tensor, error) {
+	return t.ToDevice(GPU)
+}
+
 func (t *Tensor) PrintData(maxElements int) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Tensor(shape=%v, dtype=%s, device=%s)\n", t.Shape, t.DType, t.Device))
@@ -434,4 +478,68 @@ func Sqrt(t *Tensor) (*Tensor, error) {
 	}
 	
 	return NewTensor(t.Shape, t.DType, t.Device, result)
+}
+
+// copyDataFromGPUBuffer copies data from a GPU buffer to CPU
+func copyDataFromGPUBuffer(buffer interface{}, dtype DType, numElems int) (interface{}, error) {
+	// Type assert the buffer to metal_bridge.Buffer
+	mtlBuffer, ok := buffer.(*metal_bridge.Buffer)
+	if !ok {
+		return nil, fmt.Errorf("invalid buffer type for GPU copy")
+	}
+	
+	// Get buffer contents pointer
+	bufferPtr := mtlBuffer.Contents()
+	
+	switch dtype {
+	case Float32:
+		// Create new CPU slice and copy data from GPU buffer
+		cpuData := make([]float32, numElems)
+		copy(cpuData, (*[1<<30]float32)(bufferPtr)[:numElems])
+		return cpuData, nil
+		
+	case Int32:
+		cpuData := make([]int32, numElems)
+		copy(cpuData, (*[1<<30]int32)(bufferPtr)[:numElems])
+		return cpuData, nil
+		
+	default:
+		return nil, fmt.Errorf("unsupported data type for GPU copy: %v", dtype)
+	}
+}
+
+// copyDataToGPUBuffer copies CPU data to a GPU buffer
+func copyDataToGPUBuffer(cpuData interface{}, buffer interface{}, dtype DType) error {
+	// Type assert the buffer to metal_bridge.Buffer
+	mtlBuffer, ok := buffer.(*metal_bridge.Buffer)
+	if !ok {
+		return fmt.Errorf("invalid buffer type for GPU copy")
+	}
+	
+	// Check for nil data
+	if cpuData == nil {
+		return fmt.Errorf("CPU data is nil, cannot copy to GPU buffer")
+	}
+	
+	// Get buffer contents pointer
+	bufferPtr := mtlBuffer.Contents()
+	
+	switch dtype {
+	case Float32:
+		data, ok := cpuData.([]float32)
+		if !ok {
+			return fmt.Errorf("expected []float32 for Float32 dtype, got %T", cpuData)
+		}
+		// Copy data from Go slice to Metal buffer
+		copy((*[1<<30]float32)(bufferPtr)[:len(data)], data)
+		
+	case Int32:
+		data := cpuData.([]int32)
+		copy((*[1<<30]int32)(bufferPtr)[:len(data)], data)
+		
+	default:
+		return fmt.Errorf("unsupported data type for GPU copy: %v", dtype)
+	}
+	
+	return nil
 }

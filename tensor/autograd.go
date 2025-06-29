@@ -3,7 +3,39 @@ package tensor
 import (
 	"fmt"
 	"math"
+	"github.com/tsawler/go-metal/metal_bridge"
 )
+
+// Helper functions for GPU-aware operations in autograd
+// These ensure that operations use GPU acceleration when tensors are on GPU devices
+
+func addWithDeviceRouting(a, b *Tensor) (*Tensor, error) {
+	if a.Device == GPU || a.Device == PersistentGPU || b.Device == GPU || b.Device == PersistentGPU {
+		return AddMPS(a, b)
+	}
+	return Add(a, b)
+}
+
+func subWithDeviceRouting(a, b *Tensor) (*Tensor, error) {
+	if a.Device == GPU || a.Device == PersistentGPU || b.Device == GPU || b.Device == PersistentGPU {
+		return SubMPS(a, b)
+	}
+	return Sub(a, b)
+}
+
+func mulWithDeviceRouting(a, b *Tensor) (*Tensor, error) {
+	if a.Device == GPU || a.Device == PersistentGPU || b.Device == GPU || b.Device == PersistentGPU {
+		return MulMPS(a, b)
+	}
+	return Mul(a, b)
+}
+
+func matMulWithDeviceRouting(a, b *Tensor) (*Tensor, error) {
+	if a.Device == GPU || a.Device == PersistentGPU || b.Device == GPU || b.Device == PersistentGPU {
+		return MatMulMPS(a, b)
+	}
+	return MatMul(a, b)
+}
 
 // Helper functions for max pooling
 func max(a, b int) int {
@@ -69,16 +101,26 @@ func reduceGradientToShape(grad *Tensor, targetShape []int) (*Tensor, error) {
 
 // sumAllElements sums all elements in a tensor to create a scalar
 func sumAllElements(t *Tensor) (*Tensor, error) {
+	// Ensure tensor is on CPU for data access
+	workingTensor := t
+	if t.Device != CPU {
+		var err error
+		workingTensor, err = t.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert tensor to CPU: %v", err)
+		}
+	}
+	
 	switch t.DType {
 	case Float32:
-		data := t.Data.([]float32)
+		data := workingTensor.Data.([]float32)
 		sum := float32(0)
 		for _, val := range data {
 			sum += val
 		}
 		return NewTensor([]int{}, t.DType, t.Device, []float32{sum})
 	case Int32:
-		data := t.Data.([]int32)
+		data := workingTensor.Data.([]int32)
 		sum := int32(0)
 		for _, val := range data {
 			sum += val
@@ -108,6 +150,16 @@ func sumOverDimension(t *Tensor, dim int) (*Tensor, error) {
 		return sumAllElements(t)
 	}
 	
+	// Ensure tensor is on CPU for data access
+	workingTensor := t
+	if t.Device != CPU {
+		var err error
+		workingTensor, err = t.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert tensor to CPU: %v", err)
+		}
+	}
+	
 	// Create result tensor
 	result, err := Zeros(outputShape, t.DType, t.Device)
 	if err != nil {
@@ -117,7 +169,7 @@ func sumOverDimension(t *Tensor, dim int) (*Tensor, error) {
 	// Perform the summation
 	switch t.DType {
 	case Float32:
-		inputData := t.Data.([]float32)
+		inputData := workingTensor.Data.([]float32)
 		outputData := result.Data.([]float32)
 		
 		// Calculate strides for input
@@ -223,12 +275,8 @@ func (op *AddOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	var result *Tensor
 	var err error
 	
-	// Use GPU operation if either tensor is on GPU or PersistentGPU
-	if a.Device == GPU || a.Device == PersistentGPU || b.Device == GPU || b.Device == PersistentGPU {
-		result, err = AddMPS(a, b)
-	} else {
-		result, err = Add(a, b)
-	}
+	// Use appropriate device routing
+	result, err = addWithDeviceRouting(a, b)
 	
 	if err != nil {
 		return nil, fmt.Errorf("AddOp forward pass failed: %v", err)
@@ -282,12 +330,8 @@ func (op *SubOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	var result *Tensor
 	var err error
 	
-	// Use GPU operation if either tensor is on GPU or PersistentGPU
-	if a.Device == GPU || a.Device == PersistentGPU || b.Device == GPU || b.Device == PersistentGPU {
-		result, err = SubMPS(a, b)
-	} else {
-		result, err = Sub(a, b)
-	}
+	// Use appropriate device routing
+	result, err = subWithDeviceRouting(a, b)
 	if err != nil {
 		return nil, fmt.Errorf("SubOp forward pass failed: %v", err)
 	}
@@ -354,12 +398,8 @@ func (op *MulOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	var result *Tensor
 	var err error
 	
-	// Use GPU operation if either tensor is on GPU or PersistentGPU
-	if a.Device == GPU || a.Device == PersistentGPU || b.Device == GPU || b.Device == PersistentGPU {
-		result, err = MulMPS(a, b)
-	} else {
-		result, err = Mul(a, b)
-	}
+	// Use appropriate device routing
+	result, err = mulWithDeviceRouting(a, b)
 	if err != nil {
 		return nil, fmt.Errorf("MulOp forward pass failed: %v", err)
 	}
@@ -385,7 +425,7 @@ func (op *MulOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 		return nil, fmt.Errorf("failed to broadcast b for gradA: %v", err)
 	}
 	
-	gradAFull, err := Mul(gradOut, bBroadcast)
+	gradAFull, err := mulWithDeviceRouting(gradOut, bBroadcast)
 	if err != nil {
 		return nil, fmt.Errorf("backward pass failed for gradA: %v", err)
 	}
@@ -402,7 +442,7 @@ func (op *MulOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 		return nil, fmt.Errorf("failed to broadcast a for gradB: %v", err)
 	}
 	
-	gradBFull, err := Mul(gradOut, aBroadcast)
+	gradBFull, err := mulWithDeviceRouting(gradOut, aBroadcast)
 	if err != nil {
 		return nil, fmt.Errorf("backward pass failed for gradB: %v", err)
 	}
@@ -435,12 +475,8 @@ func (op *MatMulOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	var result *Tensor
 	var err error
 	
-	// Use GPU operation if either tensor is on GPU or PersistentGPU
-	if a.Device == GPU || a.Device == PersistentGPU || b.Device == GPU || b.Device == PersistentGPU {
-		result, err = MatMulMPS(a, b)
-	} else {
-		result, err = MatMul(a, b)
-	}
+	// Use appropriate device routing
+	result, err = matMulWithDeviceRouting(a, b)
 	
 	if err != nil {
 		return nil, fmt.Errorf("MatMulOp forward pass failed: %v", err)
@@ -466,12 +502,7 @@ func (op *MatMulOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 		return nil, fmt.Errorf("failed to transpose B: %v", err)
 	}
 	
-	var gradA *Tensor
-	if gradOut.Device == GPU || gradOut.Device == PersistentGPU || bT.Device == GPU || bT.Device == PersistentGPU {
-		gradA, err = MatMulMPS(gradOut, bT)
-	} else {
-		gradA, err = MatMul(gradOut, bT)
-	}
+	gradA, err := matMulWithDeviceRouting(gradOut, bT)
 	if err != nil {
 		return nil, fmt.Errorf("backward pass failed for gradA: %v", err)
 	}
@@ -481,12 +512,7 @@ func (op *MatMulOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 		return nil, fmt.Errorf("failed to transpose A: %v", err)
 	}
 	
-	var gradB *Tensor
-	if aT.Device == GPU || aT.Device == PersistentGPU || gradOut.Device == GPU || gradOut.Device == PersistentGPU {
-		gradB, err = MatMulMPS(aT, gradOut)
-	} else {
-		gradB, err = MatMul(aT, gradOut)
-	}
+	gradB, err := matMulWithDeviceRouting(aT, gradOut)
 	if err != nil {
 		return nil, fmt.Errorf("backward pass failed for gradB: %v", err)
 	}
@@ -672,19 +698,19 @@ func (op *SigmoidOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 		return nil, fmt.Errorf("failed to create ones tensor: %v", err)
 	}
 	
-	oneMinusOutput, err := Sub(ones, op.output)
+	oneMinusOutput, err := subWithDeviceRouting(ones, op.output)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute (1 - output): %v", err)
 	}
 	
 	// output * (1 - output)
-	sigmoidGrad, err := Mul(op.output, oneMinusOutput)
+	sigmoidGrad, err := mulWithDeviceRouting(op.output, oneMinusOutput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute sigmoid gradient: %v", err)
 	}
 	
 	// gradOut * sigmoidGrad
-	grad, err := Mul(gradOut, sigmoidGrad)
+	grad, err := mulWithDeviceRouting(gradOut, sigmoidGrad)
 	if err != nil {
 		return nil, fmt.Errorf("failed to apply chain rule: %v", err)
 	}
@@ -968,8 +994,26 @@ func (op *Conv2DOp) conv2DCPU(input, weight, bias *Tensor) (*Tensor, error) {
 	outputShape := []int{batchSize, outChannels, outHeight, outWidth}
 	outputData := make([]float32, batchSize*outChannels*outHeight*outWidth)
 	
-	inputData := input.Data.([]float32)
-	weightData := weight.Data.([]float32)
+	// Ensure tensors are on CPU for data access
+	workingInput := input
+	workingWeight := weight
+	if input.Device != CPU {
+		var err error
+		workingInput, err = input.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert input to CPU: %v", err)
+		}
+	}
+	if weight.Device != CPU {
+		var err error
+		workingWeight, err = weight.ToCPU()
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert weight to CPU: %v", err)
+		}
+	}
+	
+	inputData := workingInput.Data.([]float32)
+	weightData := workingWeight.Data.([]float32)
 	
 	// Perform convolution
 	for b := 0; b < batchSize; b++ {
@@ -1011,7 +1055,17 @@ func (op *Conv2DOp) conv2DCPU(input, weight, bias *Tensor) (*Tensor, error) {
 	
 	// Add bias if present
 	if bias != nil {
-		biasData := bias.Data.([]float32)
+		// Ensure bias tensor is on CPU for data access
+		workingBias := bias
+		if bias.Device != CPU {
+			var err error
+			workingBias, err = bias.ToCPU()
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert bias to CPU: %v", err)
+			}
+		}
+		
+		biasData := workingBias.Data.([]float32)
 		resultData := result.Data.([]float32)
 		
 		for b := 0; b < batchSize; b++ {
@@ -1036,6 +1090,12 @@ func (op *Conv2DOp) Backward(gradOutput *Tensor) ([]*Tensor, error) {
 	input := op.inputs[0]
 	weight := op.inputs[1]
 	
+	// Check if we can use MPSGraph for gradient computation
+	if (input.Device == GPU || input.Device == PersistentGPU) && (weight.Device == GPU || weight.Device == PersistentGPU) {
+		return op.backwardMPSGraph(gradOutput)
+	}
+	
+	// Fallback to CPU computation
 	// Gradient w.r.t. input: simplified approach using correlation
 	if input.RequiresGrad() {
 		gradInput, err := op.computeInputGradient(gradOutput, weight)
@@ -1066,7 +1126,85 @@ func (op *Conv2DOp) Backward(gradOutput *Tensor) ([]*Tensor, error) {
 	return gradients, nil
 }
 
-// computeBiasGradient computes the gradient for bias by summing over spatial dimensions
+// backwardMPSGraph computes gradients using MPSGraph GPU operations
+func (op *Conv2DOp) backwardMPSGraph(gradOutput *Tensor) ([]*Tensor, error) {
+	gradients := make([]*Tensor, len(op.inputs))
+	
+	input := op.inputs[0]
+	weight := op.inputs[1]
+	
+	// Gradient w.r.t. input: use MPSGraph convolution transpose
+	if input.RequiresGrad() {
+		gradInput, err := op.computeInputGradientMPSGraph(gradOutput, weight)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute input gradient with MPSGraph: %v", err)
+		}
+		gradients[0] = gradInput
+	}
+	
+	// Gradient w.r.t. weight: use MPSGraph convolution
+	if weight.RequiresGrad() {
+		gradWeight, err := op.computeWeightGradientMPSGraph(gradOutput, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute weight gradient with MPSGraph: %v", err)
+		}
+		gradients[1] = gradWeight
+	}
+	
+	// Gradient w.r.t. bias: use MPSGraph reduction
+	if len(op.inputs) == 3 && op.bias != nil && op.bias.RequiresGrad() {
+		gradBias, err := op.computeBiasGradientMPSGraph(gradOutput)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute bias gradient with MPSGraph: %v", err)
+		}
+		gradients[2] = gradBias
+	}
+	
+	return gradients, nil
+}
+
+// computeBiasGradientMPSGraph computes bias gradient using MPSGraph reduction operations
+func (op *Conv2DOp) computeBiasGradientMPSGraph(gradOutput *Tensor) (*Tensor, error) {
+	// gradOutput shape: [batch, channels, height, width]
+	// bias shape: [channels]
+	// We need to sum over dimensions 0, 2, 3 (batch, height, width)
+	
+	if len(gradOutput.Shape) != 4 {
+		return nil, fmt.Errorf("gradOutput must be 4D for bias gradient computation")
+	}
+	
+	result := gradOutput
+	var err error
+	
+	// Sum over batch dimension (0)
+	result, err = SumMPS(result, 0, true) // keepdim=true to maintain structure
+	if err != nil {
+		return nil, fmt.Errorf("failed to sum over batch dimension: %v", err)
+	}
+	
+	// Sum over height dimension (2, but now it's 2 after previous sum)
+	result, err = SumMPS(result, 2, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sum over height dimension: %v", err)
+	}
+	
+	// Sum over width dimension (3, but now it's 3 after previous sums)
+	result, err = SumMPS(result, 3, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sum over width dimension: %v", err)
+	}
+	
+	// Reshape to [channels] to match bias shape
+	channels := gradOutput.Shape[1]
+	result, err = ReshapeMPS(result, []int{channels})
+	if err != nil {
+		return nil, fmt.Errorf("failed to reshape bias gradient: %v", err)
+	}
+	
+	return result, nil
+}
+
+// computeBiasGradient computes the gradient for bias by summing over spatial dimensions (CPU fallback)
 func (op *Conv2DOp) computeBiasGradient(gradOutput *Tensor) (*Tensor, error) {
 	// gradOutput shape: [batch, channels, height, width]
 	// bias shape: [channels]
@@ -2089,7 +2227,7 @@ func (op *SquareOp) Forward(inputs ...*Tensor) (*Tensor, error) {
 	op.inputs = inputs
 	
 	// Compute x^2 = x * x
-	result, err := Mul(t, t)
+	result, err := mulWithDeviceRouting(t, t)
 	if err != nil {
 		return nil, fmt.Errorf("SquareOp forward pass failed: %v", err)
 	}
@@ -2116,12 +2254,12 @@ func (op *SquareOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 		return nil, fmt.Errorf("failed to create scalar 2: %v", err)
 	}
 	
-	twoX, err := Mul(two, input)
+	twoX, err := mulWithDeviceRouting(two, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute 2*x: %v", err)
 	}
 	
-	gradInput, err := Mul(gradOut, twoX)
+	gradInput, err := mulWithDeviceRouting(gradOut, twoX)
 	if err != nil {
 		return nil, fmt.Errorf("failed to apply chain rule: %v", err)
 	}
@@ -2133,4 +2271,148 @@ func (op *SquareOp) Backward(gradOut *Tensor) ([]*Tensor, error) {
 	}
 	
 	return []*Tensor{gradInputReduced}, nil
+}
+
+// computeInputGradientMPSGraph computes input gradient using MPSGraph operations
+func (op *Conv2DOp) computeInputGradientMPSGraph(gradOutput, weight *Tensor) (*Tensor, error) {
+	// Use MPSGraph convolution data gradient for GPU computation
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+	
+	// Create cache key for this operation
+	cacheKey := generateCacheKey("conv2d_data_grad", gradOutput, weight)
+	
+	// Create graph function for data gradient computation
+	createGraphFunc := func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		if graph == nil {
+			return nil
+		}
+		
+		// Create placeholder tensors
+		gradOutputPlaceholder := graph.PlaceholderTensor(gradOutput.Shape, int(metal_bridge.MPSDataTypeFloat32))
+		weightPlaceholder := graph.PlaceholderTensor(weight.Shape, int(metal_bridge.MPSDataTypeFloat32))
+		
+		if gradOutputPlaceholder == nil || weightPlaceholder == nil {
+			return nil
+		}
+		
+		// Compute input gradient using the new MPSGraph data gradient function
+		inputGradTensor := graph.Convolution2DDataGradient(
+			gradOutputPlaceholder, 
+			weightPlaceholder, 
+			op.savedShape, // Original input shape
+			op.stride, op.stride, // strideX, strideY 
+			1, 1, // dilationX, dilationY
+			op.padding, op.padding, op.padding, op.padding, // padding
+			1) // groups
+		
+		if inputGradTensor == nil {
+			return nil
+		}
+		
+		// Compile the graph
+		executable := graph.Compile(engine.graphDevice, 
+			[]*metal_bridge.GraphTensor{gradOutputPlaceholder, weightPlaceholder},
+			[]*metal_bridge.GraphTensor{inputGradTensor},
+			metal_bridge.NewGraphCompilationDescriptor())
+		
+		return &cachedGraph{
+			executable:    executable,
+			inputTensors:  []*metal_bridge.GraphTensor{gradOutputPlaceholder, weightPlaceholder},
+			resultTensors: []*metal_bridge.GraphTensor{inputGradTensor},
+		}
+	}
+	
+	// Get or create cached graph
+	cachedGraphObj, err := engine.getOrCreateGraph(cacheKey, createGraphFunc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get/create graph: %v", err)
+	}
+	
+	// Execute the graph
+	result, err := engine.executeGraph(cachedGraphObj, []*Tensor{gradOutput, weight})
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute gradient computation: %v", err)
+	}
+	
+	if len(result) != 1 {
+		return nil, fmt.Errorf("expected 1 result tensor, got %d", len(result))
+	}
+	
+	return result[0], nil
+}
+
+// computeWeightGradientMPSGraph computes weight gradient using MPSGraph operations 
+func (op *Conv2DOp) computeWeightGradientMPSGraph(gradOutput, input *Tensor) (*Tensor, error) {
+	// Use MPSGraph convolution weights gradient for GPU computation
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+	
+	// Create cache key for this operation
+	cacheKey := generateCacheKey("conv2d_weights_grad", gradOutput, input)
+	
+	// Create graph function for weights gradient computation
+	createGraphFunc := func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		if graph == nil {
+			return nil
+		}
+		
+		// Create placeholder tensors
+		gradOutputPlaceholder := graph.PlaceholderTensor(gradOutput.Shape, int(metal_bridge.MPSDataTypeFloat32))
+		inputPlaceholder := graph.PlaceholderTensor(input.Shape, int(metal_bridge.MPSDataTypeFloat32))
+		
+		if gradOutputPlaceholder == nil || inputPlaceholder == nil {
+			return nil
+		}
+		
+		// Compute weight gradient using the new MPSGraph weights gradient function
+		weightGradTensor := graph.Convolution2DWeightsGradient(
+			gradOutputPlaceholder, 
+			inputPlaceholder, 
+			op.weight.Shape, // Original weight shape
+			op.stride, op.stride, // strideX, strideY 
+			1, 1, // dilationX, dilationY
+			op.padding, op.padding, op.padding, op.padding, // padding
+			1) // groups
+		
+		if weightGradTensor == nil {
+			return nil
+		}
+		
+		// Compile the graph
+		executable := graph.Compile(engine.graphDevice, 
+			[]*metal_bridge.GraphTensor{gradOutputPlaceholder, inputPlaceholder},
+			[]*metal_bridge.GraphTensor{weightGradTensor},
+			metal_bridge.NewGraphCompilationDescriptor())
+		
+		return &cachedGraph{
+			executable:    executable,
+			inputTensors:  []*metal_bridge.GraphTensor{gradOutputPlaceholder, inputPlaceholder},
+			resultTensors: []*metal_bridge.GraphTensor{weightGradTensor},
+		}
+	}
+	
+	// Get or create cached graph
+	cachedGraphObj, err := engine.getOrCreateGraph(cacheKey, createGraphFunc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get/create graph: %v", err)
+	}
+	
+	// Execute the graph
+	result, err := engine.executeGraph(cachedGraphObj, []*Tensor{gradOutput, input})
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute gradient computation: %v", err)
+	}
+	
+	if len(result) != 1 {
+		return nil, fmt.Errorf("expected 1 result tensor, got %d", len(result))
+	}
+	
+	return result[0], nil
 }

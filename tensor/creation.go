@@ -74,6 +74,15 @@ func (t *Tensor) setData(data interface{}) error {
 	default:
 		return fmt.Errorf("unsupported dtype: %s", t.DType)
 	}
+	
+	// For GPU tensors, create GPU buffer and copy data
+	if t.Device == GPU || t.Device == PersistentGPU {
+		err := t.createGPUBuffer()
+		if err != nil {
+			return fmt.Errorf("failed to create GPU buffer: %v", err)
+		}
+	}
+	
 	return nil
 }
 

@@ -129,17 +129,13 @@ func LinearSigmoid(input, weight, bias *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("LinearSigmoid requires 2D input/weight and 1D bias tensors")
 	}
 
-	batchSize := uint(input.Shape[0])
-	inputFeatures := uint(input.Shape[1])
-	outputFeatures := uint(weight.Shape[0])  // weight is [output_features, input_features]
-
 	if input.Shape[1] != weight.Shape[1] {  // input_features must match weight.Shape[1]
 		return nil, fmt.Errorf("input features (%d) must match weight input features (%d)", 
 			input.Shape[1], weight.Shape[1])
 	}
-	if bias.Shape[0] != int(outputFeatures) {
+	if bias.Shape[0] != weight.Shape[0] {
 		return nil, fmt.Errorf("bias size (%d) must match output features (%d)", 
-			bias.Shape[0], outputFeatures)
+			bias.Shape[0], weight.Shape[0])
 	}
 
 	// Only support Float32 for now
@@ -147,32 +143,20 @@ func LinearSigmoid(input, weight, bias *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("LinearSigmoid only supports Float32 tensors")
 	}
 
-	// Get compute engine
-	engine, err := getComputeEngine()
+	// Execute linear layer using basic operations
+	// For now, use CPU implementation until MPSGraph fused operations are implemented
+	linearResult, err := LinearForward(input, weight, bias)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get compute engine: %v", err)
+		return nil, fmt.Errorf("failed to execute linear forward: %v", err)
 	}
-
-	// Extract float32 data
-	inputData := input.Data.([]float32)
-	weightData := weight.Data.([]float32)
-	biasData := bias.Data.([]float32)
-
-	// Execute fused linear + Sigmoid kernel
-	resultData, err := engine.LinearSigmoidFloat32(inputData, weightData, biasData, 
-		batchSize, inputFeatures, outputFeatures)
+	
+	// Apply sigmoid activation
+	sigmoidResult, err := Sigmoid(linearResult)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute fused linear sigmoid: %v", err)
+		return nil, fmt.Errorf("failed to execute sigmoid: %v", err)
 	}
-
-	// Create result tensor
-	resultShape := []int{int(batchSize), int(outputFeatures)}
-	result, err := NewTensor(resultShape, Float32, GPU, resultData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create result tensor: %v", err)
-	}
-
-	return result, nil
+	
+	return sigmoidResult, nil
 }
 
 // BatchMatMul performs batched matrix multiplication
@@ -205,30 +189,57 @@ func BatchMatMul(tensorA, tensorB *Tensor) (*Tensor, error) {
 		return nil, fmt.Errorf("BatchMatMul only supports Float32 tensors")
 	}
 
-	// Get compute engine
-	engine, err := getComputeEngine()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get compute engine: %v", err)
-	}
-
 	// Extract float32 data
 	dataA := tensorA.Data.([]float32)
 	dataB := tensorB.Data.([]float32)
 
-	// Execute batch matrix multiplication kernel
-	resultData, err := engine.BatchMatMulFloat32(dataA, dataB, batchSize, M, N, P)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute batch matmul: %v", err)
+	// For now, use basic matrix multiplication for each batch
+	// This can be optimized with MPSGraph batch operations later
+	results := make([]*Tensor, batchSize)
+	
+	for b := 0; b < int(batchSize); b++ {
+		// Extract matrices for this batch
+		startA := b * int(M) * int(N)
+		endA := startA + int(M) * int(N)
+		matA := dataA[startA:endA]
+		
+		startB := b * int(N) * int(P)
+		endB := startB + int(N) * int(P)
+		matB := dataB[startB:endB]
+		
+		// Create tensors for this batch
+		tensorA, err := NewTensor([]int{int(M), int(N)}, Float32, CPU, matA)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create batch tensor A: %v", err)
+		}
+		
+		tensorB, err := NewTensor([]int{int(N), int(P)}, Float32, CPU, matB)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create batch tensor B: %v", err)
+		}
+		
+		// Perform matrix multiplication
+		result, err := MatMul(tensorA, tensorB)
+		if err != nil {
+			return nil, fmt.Errorf("failed to perform matmul for batch %d: %v", b, err)
+		}
+		
+		results[b] = result
 	}
-
-	// Create result tensor
+	
+	// Combine results into batch tensor manually
 	resultShape := []int{int(batchSize), int(M), int(P)}
-	result, err := NewTensor(resultShape, Float32, GPU, resultData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create result tensor: %v", err)
+	totalElems := int(batchSize) * int(M) * int(P)
+	resultData := make([]float32, totalElems)
+	
+	elementsPerBatch := int(M) * int(P)
+	for b, result := range results {
+		data := result.Data.([]float32)
+		start := b * elementsPerBatch
+		copy(resultData[start:start+elementsPerBatch], data)
 	}
-
-	return result, nil
+	
+	return NewTensor(resultShape, Float32, CPU, resultData)
 }
 
 // FusedOperationDetector analyzes a sequence of operations to detect fusion opportunities

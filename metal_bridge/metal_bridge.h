@@ -113,11 +113,19 @@ MPSGraphTensorRef MPSGraphSigmoid(MPSGraphRef graph, MPSGraphTensorRef tensor);
 MPSGraphTensorRef MPSGraphSoftmax(MPSGraphRef graph, MPSGraphTensorRef tensor, size_t axis);
 MPSGraphTensorRef MPSGraphTranspose(MPSGraphRef graph, MPSGraphTensorRef tensor, size_t dimension, size_t dimensionTwo);
 MPSGraphTensorRef MPSGraphReshape(MPSGraphRef graph, MPSGraphTensorRef tensor, int* shape, size_t shapeCount);
+MPSGraphTensorRef MPSGraphReductionSum(MPSGraphRef graph, MPSGraphTensorRef tensor, int axis, int keepDims);
 
 // MPSGraph Convolution and Pooling operations
 MPSGraphTensorRef MPSGraphConvolution2D(MPSGraphRef graph, MPSGraphTensorRef source, MPSGraphTensorRef weights, MPSGraphTensorRef bias, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups);
+MPSGraphTensorRef MPSGraphConvolutionTranspose2D(MPSGraphRef graph, MPSGraphTensorRef source, MPSGraphTensorRef weights, int* outputShape, size_t outputShapeCount, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups);
+MPSGraphTensorRef MPSGraphConvolution2DDataGradient(MPSGraphRef graph, MPSGraphTensorRef incomingGradient, MPSGraphTensorRef weights, int* outputShape, size_t outputShapeCount, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups);
+MPSGraphTensorRef MPSGraphConvolution2DWeightsGradient(MPSGraphRef graph, MPSGraphTensorRef incomingGradient, MPSGraphTensorRef source, int* outputShape, size_t outputShapeCount, int strideInX, int strideInY, int dilationRateInX, int dilationRateInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom, int groups);
 MPSGraphTensorRef MPSGraphMaxPooling2D(MPSGraphRef graph, MPSGraphTensorRef source, int kernelWidth, int kernelHeight, int strideInX, int strideInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom);
 MPSGraphTensorRef MPSGraphAvgPooling2D(MPSGraphRef graph, MPSGraphTensorRef source, int kernelWidth, int kernelHeight, int strideInX, int strideInY, int paddingLeft, int paddingRight, int paddingTop, int paddingBottom);
+
+// MPSGraph gradient operations for automatic differentiation
+MPSGraphTensorRef MPSGraphGradientForPrimaryTensor(MPSGraphRef graph, MPSGraphTensorRef primaryTensor, MPSGraphTensorRef* tensors, size_t tensorCount, MPSGraphTensorRef lossGradient);
+MPSGraphTensorRef MPSGraphGradientForTensor(MPSGraphRef graph, MPSGraphTensorRef primaryTensor, MPSGraphTensorRef targetTensor, MPSGraphTensorRef* allTensors, size_t tensorCount);
 
 // MPSGraph execution  
 MPSGraphExecutableRef MPSGraphCompile(MPSGraphRef graph, MPSGraphDeviceRef device, MPSGraphTensorRef* inputTensors, size_t inputTensorsCount, MPSGraphTensorRef* targetTensors, size_t targetTensorsCount, MPSGraphCompilationDescriptorRef compilationDescriptor);

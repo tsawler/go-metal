@@ -3,6 +3,7 @@ package tensor
 import (
 	"fmt"
 	"sync"
+	"unsafe"
 	"github.com/tsawler/go-metal/metal_bridge"
 )
 
@@ -98,6 +99,131 @@ func (engine *MPSGraphEngine) getOrCreateGraph(key string, createGraphFunc func(
 	return newGraph, nil
 }
 
+// executeGraph executes a cached graph with the given input tensors
+func (engine *MPSGraphEngine) executeGraph(cachedGraphObj *cachedGraph, inputs []*Tensor) ([]*Tensor, error) {
+	if len(inputs) != len(cachedGraphObj.inputTensors) {
+		return nil, fmt.Errorf("input tensor count mismatch: expected %d, got %d", len(cachedGraphObj.inputTensors), len(inputs))
+	}
+	
+	// Create input buffers for the tensors
+	inputBuffers := make([]*metal_bridge.Buffer, len(inputs))
+	for i, tensor := range inputs {
+		buffer, err := engine.createBufferFromTensor(tensor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create input buffer %d: %v", i, err)
+		}
+		inputBuffers[i] = buffer
+	}
+	
+	// Create output buffers based on result tensor shapes
+	resultBuffers := make([]*metal_bridge.Buffer, len(cachedGraphObj.resultTensors))
+	resultTensors := make([]*Tensor, len(cachedGraphObj.resultTensors))
+	
+	for i, graphTensor := range cachedGraphObj.resultTensors {
+		// Calculate buffer size
+		numElems := 1
+		for _, dim := range graphTensor.Shape() {
+			numElems *= dim
+		}
+		bufferSize := numElems * 4 // Assume float32
+		
+		buffer := engine.device.NewBufferWithLength(bufferSize, int(metal_bridge.ResourceStorageModeShared))
+		if buffer == nil {
+			return nil, fmt.Errorf("failed to create result buffer %d", i)
+		}
+		resultBuffers[i] = buffer
+		
+		// Create result tensor
+		shape := graphTensor.Shape()
+		resultTensor := &Tensor{
+			Shape:    shape,
+			Strides:  calculateStrides(shape),
+			DType:    Float32,
+			Device:   determineResultDevice(inputs...),
+			NumElems: numElems, // Use the numElems calculated above
+		}
+		resultTensors[i] = resultTensor
+	}
+	
+	// Execute the graph
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+	
+	cachedGraphObj.executable.Execute(engine.commandQueue, cachedGraphObj.inputTensors, inputBuffers, 
+		cachedGraphObj.resultTensors, resultBuffers, executionDescriptor)
+	
+	// Handle results - copy data from GPU buffers to CPU tensors
+	for i, resultTensor := range resultTensors {
+		err := handleMPSResult(resultTensor, resultBuffers[i])
+		if err != nil {
+			return nil, fmt.Errorf("failed to handle result %d: %v", i, err)
+		}
+	}
+	
+	return resultTensors, nil
+}
+
+// createBufferFromTensor creates a Metal buffer from a tensor's data
+func (engine *MPSGraphEngine) createBufferFromTensor(tensor *Tensor) (*metal_bridge.Buffer, error) {
+	// For persistent GPU tensors, use existing GPU buffer if available
+	if tensor.Device == PersistentGPU && tensor.GetGPUBuffer() != nil {
+		if buffer, ok := tensor.GetGPUBuffer().(*metal_bridge.Buffer); ok {
+			return buffer, nil
+		}
+	}
+	
+	// Get tensor data as bytes
+	var data []byte
+	
+	switch tensor.DType {
+	case Float32:
+		var float32Data []float32
+		
+		if tensor.Data == nil {
+			// For GPU tensors without CPU data, copy from GPU buffer
+			if tensor.GetGPUBuffer() != nil {
+				cpuTensor, err := tensor.ToCPU()
+				if err != nil {
+					return nil, fmt.Errorf("failed to copy tensor to CPU: %v", err)
+				}
+				float32Data = cpuTensor.Data.([]float32)
+			} else {
+				return nil, fmt.Errorf("tensor data is nil and no GPU buffer available")
+			}
+		} else {
+			// Use existing CPU data
+			if tensor.Device == CPU {
+				float32Data = tensor.Data.([]float32)
+			} else {
+				// For GPU tensors, we need to copy data to CPU first
+				cpuTensor, err := tensor.ToCPU()
+				if err != nil {
+					return nil, fmt.Errorf("failed to copy tensor to CPU: %v", err)
+				}
+				float32Data = cpuTensor.Data.([]float32)
+			}
+		}
+		
+		// Convert to bytes
+		data = make([]byte, len(float32Data)*4)
+		for i, val := range float32Data {
+			*(*float32)(unsafe.Pointer(&data[i*4])) = val
+		}
+	default:
+		return nil, fmt.Errorf("unsupported data type: %v", tensor.DType)
+	}
+	
+	// Create Metal buffer
+	buffer := engine.device.NewBufferWithBytes(data, int(metal_bridge.ResourceStorageModeShared))
+	if buffer == nil {
+		return nil, fmt.Errorf("failed to create Metal buffer")
+	}
+	
+	return buffer, nil
+}
+
 // determineResultDevice determines the device type for the result based on input tensors
 func determineResultDevice(tensors ...*Tensor) DeviceType {
 	// If any tensor is PersistentGPU, result should be PersistentGPU
@@ -131,10 +257,7 @@ func handleMPSResult(result *Tensor, resultBuffer interface{}) error {
 			return fmt.Errorf("failed to copy result from GPU buffer: %v", err)
 		}
 		result.Data = resultData
-		// Release the GPU buffer since we copied to CPU
-		if buffer, ok := resultBuffer.(interface{ Release() }); ok {
-			buffer.Release()
-		}
+		// GPU buffer will be garbage collected
 	}
 	return nil
 }
@@ -165,32 +288,30 @@ func convertDTypeToMPS(dtype DType) int {
 	}
 }
 
-// createMPSBufferFromTensor creates a GPU buffer using the allocator and copies tensor data
-func createMPSBufferFromTensor(tensor *Tensor, allocator *metal_bridge.BufferAllocator) (*metal_bridge.Buffer, error) {
+// createMPSBufferFromTensor creates a GPU buffer and copies tensor data
+func createMPSBufferFromTensor(tensor *Tensor, device *metal_bridge.Device) (*metal_bridge.Buffer, error) {
 	size := calculateTensorSize(tensor.Shape, tensor.DType)
-	buffer, err := allocator.Allocate(uint64(size), 0) // 0 = MTLResourceStorageModeShared
-	if err != nil {
-		return nil, fmt.Errorf("failed to allocate buffer: %v", err)
+	buffer := device.NewBufferWithLength(int(size), int(metal_bridge.ResourceStorageModeShared))
+	if buffer == nil {
+		return nil, fmt.Errorf("failed to allocate buffer")
 	}
 	
 	// Handle different tensor device types
 	if tensor.Device == PersistentGPU && tensor.gpuBuffer != nil {
 		// For PersistentGPU tensors, copy from existing GPU buffer
-		err = copyGPUBufferToGPUBuffer(tensor.gpuBuffer, buffer, tensor.DType, tensor.NumElems)
+		err := copyGPUBufferToGPUBuffer(tensor.gpuBuffer, buffer, tensor.DType, tensor.NumElems)
 		if err != nil {
-			buffer.Release() // Clean up on error
+			// Clean up on error - no Release method available, buffer will be garbage collected
 			return nil, fmt.Errorf("failed to copy GPU buffer to buffer: %v", err)
 		}
 	} else {
 		// For CPU tensors, views, or temporary GPU tensors, materialize the data and copy
 		data := tensor.materializeView()
 		if data == nil {
-			buffer.Release()
 			return nil, fmt.Errorf("failed to materialize tensor data")
 		}
-		err = copyDataToGPUBuffer(data, buffer, tensor.DType)
+		err := copyDataToGPUBuffer(data, buffer, tensor.DType)
 		if err != nil {
-			buffer.Release() // Clean up on error
 			return nil, fmt.Errorf("failed to copy data to buffer: %v", err)
 		}
 	}
@@ -234,12 +355,12 @@ func copyGPUBufferToGPUBuffer(srcBuffer, dstBuffer interface{}, dtype DType, num
 	return nil
 }
 
-// createMPSResultBuffer creates a result buffer using the allocator
-func createMPSResultBuffer(shape []int, dtype DType, allocator *metal_bridge.BufferAllocator) (*metal_bridge.Buffer, error) {
+// createMPSResultBuffer creates a result buffer
+func createMPSResultBuffer(shape []int, dtype DType, device *metal_bridge.Device) (*metal_bridge.Buffer, error) {
 	size := calculateTensorSize(shape, dtype)
-	buffer, err := allocator.Allocate(uint64(size), 0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to allocate result buffer: %v", err)
+	buffer := device.NewBufferWithLength(int(size), int(metal_bridge.ResourceStorageModeShared))
+	if buffer == nil {
+		return nil, fmt.Errorf("failed to allocate result buffer")
 	}
 	return buffer, nil
 }
@@ -286,20 +407,19 @@ func AddMPS(a, b *Tensor) (*Tensor, error) {
 		NumElems: calculateNumElements(broadcastShape),
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
-	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	aBuffer, err := createMPSBufferFromTensor(a, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
-	defer aBuffer.Release()
+	// aBuffer will be garbage collected
 
-	bBuffer, err := createMPSBufferFromTensor(b, allocator)
+	bBuffer, err := createMPSBufferFromTensor(b, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
-	defer bBuffer.Release()
+	// bBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -365,20 +485,19 @@ func SubMPS(a, b *Tensor) (*Tensor, error) {
 		NumElems: calculateNumElements(broadcastShape),
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
-	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	aBuffer, err := createMPSBufferFromTensor(a, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
-	defer aBuffer.Release()
+	// aBuffer will be garbage collected
 
-	bBuffer, err := createMPSBufferFromTensor(b, allocator)
+	bBuffer, err := createMPSBufferFromTensor(b, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
-	defer bBuffer.Release()
+	// bBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -444,20 +563,19 @@ func MulMPS(a, b *Tensor) (*Tensor, error) {
 		NumElems: calculateNumElements(broadcastShape),
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
-	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	aBuffer, err := createMPSBufferFromTensor(a, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
-	defer aBuffer.Release()
+	// aBuffer will be garbage collected
 
-	bBuffer, err := createMPSBufferFromTensor(b, allocator)
+	bBuffer, err := createMPSBufferFromTensor(b, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
-	defer bBuffer.Release()
+	// bBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -523,20 +641,19 @@ func DivMPS(a, b *Tensor) (*Tensor, error) {
 		NumElems: calculateNumElements(broadcastShape),
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
-	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	aBuffer, err := createMPSBufferFromTensor(a, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
-	defer aBuffer.Release()
+	// aBuffer will be garbage collected
 
-	bBuffer, err := createMPSBufferFromTensor(b, allocator)
+	bBuffer, err := createMPSBufferFromTensor(b, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
-	defer bBuffer.Release()
+	// bBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -603,20 +720,19 @@ func MatMulMPS(a, b *Tensor) (*Tensor, error) {
 		NumElems: outputShape[0] * outputShape[1],
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
-	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	aBuffer, err := createMPSBufferFromTensor(a, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
-	defer aBuffer.Release()
+	// aBuffer will be garbage collected
 
-	bBuffer, err := createMPSBufferFromTensor(b, allocator)
+	bBuffer, err := createMPSBufferFromTensor(b, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor B: %v", err)
 	}
-	defer bBuffer.Release()
+	// bBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -670,14 +786,13 @@ func ReLUMPS(a *Tensor) (*Tensor, error) {
 		NumElems: a.NumElems,
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
-	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	aBuffer, err := createMPSBufferFromTensor(a, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
-	defer aBuffer.Release()
+	// aBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -731,14 +846,13 @@ func SigmoidMPS(a *Tensor) (*Tensor, error) {
 		NumElems: a.NumElems,
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
-	aBuffer, err := createMPSBufferFromTensor(a, allocator)
+	aBuffer, err := createMPSBufferFromTensor(a, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
 	}
-	defer aBuffer.Release()
+	// aBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -869,33 +983,32 @@ func Conv2DMPS(input, weights, bias *Tensor, strideX, strideY, paddingLeft, padd
 		NumElems: N * C_out * outputH * outputW,
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
 
-	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
+	inputBuffer, err := createMPSBufferFromTensor(input, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
-	defer inputBuffer.Release()
+	// inputBuffer will be garbage collected
 
-	weightsBuffer, err := createMPSBufferFromTensor(weights, allocator)
+	weightsBuffer, err := createMPSBufferFromTensor(weights, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for weights: %v", err)
 	}
-	defer weightsBuffer.Release()
+	// weightsBuffer will be garbage collected
 
 	var inputBuffers []*metal_bridge.Buffer
 	if bias != nil {
-		biasBuffer, err := createMPSBufferFromTensor(bias, allocator)
+		biasBuffer, err := createMPSBufferFromTensor(bias, engine.device)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create buffer for bias: %v", err)
 		}
-		defer biasBuffer.Release()
+		// biasBuffer will be garbage collected
 		inputBuffers = []*metal_bridge.Buffer{inputBuffer, weightsBuffer, biasBuffer}
 	} else {
 		inputBuffers = []*metal_bridge.Buffer{inputBuffer, weightsBuffer}
 	}
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -967,15 +1080,14 @@ func MaxPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		NumElems: N * C * outputH * outputW,
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
 
-	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
+	inputBuffer, err := createMPSBufferFromTensor(input, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
-	defer inputBuffer.Release()
+	// inputBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -1047,15 +1159,14 @@ func AvgPool2DMPS(input *Tensor, kernelSize, stride, padding int) (*Tensor, erro
 		NumElems: N * C * outputH * outputW,
 	}
 
-	allocator := metal_bridge.GetGlobalAllocator()
 
-	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
+	inputBuffer, err := createMPSBufferFromTensor(input, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
-	defer inputBuffer.Release()
+	// inputBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -1126,15 +1237,14 @@ func ReshapeMPS(input *Tensor, newShape []int) (*Tensor, error) {
 	}
 	copy(result.Shape, newShape)
 
-	allocator := metal_bridge.GetGlobalAllocator()
 
-	inputBuffer, err := createMPSBufferFromTensor(input, allocator)
+	inputBuffer, err := createMPSBufferFromTensor(input, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
 	}
-	defer inputBuffer.Release()
+	// inputBuffer will be garbage collected
 
-	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, allocator)
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create result buffer: %v", err)
 	}
@@ -1156,4 +1266,180 @@ func ReshapeMPS(input *Tensor, newShape []int) (*Tensor, error) {
 	}
 
 	return result, nil
+}
+
+// SumMPS performs tensor reduction sum along specified axis using MPSGraph
+func SumMPS(input *Tensor, axis int, keepdim bool) (*Tensor, error) {
+	if len(input.Shape) == 0 {
+		return nil, fmt.Errorf("cannot sum empty tensor")
+	}
+	if axis < 0 || axis >= len(input.Shape) {
+		return nil, fmt.Errorf("axis %d out of range for tensor with %d dimensions", axis, len(input.Shape))
+	}
+
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+
+	cacheKey := fmt.Sprintf("sum_axis%d_keepdim%t_%v_%v", axis, keepdim, input.Shape, input.DType)
+	cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+		graph := metal_bridge.NewGraph()
+		dataType := convertDTypeToMPS(input.DType)
+		placeholderInput := graph.PlaceholderTensor(input.Shape, dataType)
+		
+		// Use the reduction sum operation
+		resultTensor := graph.ReductionSum(placeholderInput, axis, keepdim)
+		compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+		executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+		return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderInput}, []*metal_bridge.GraphTensor{resultTensor}}
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate output shape
+	outputShape := make([]int, 0, len(input.Shape))
+	for i, dim := range input.Shape {
+		if i == axis {
+			if keepdim {
+				outputShape = append(outputShape, 1)
+			}
+			// Skip this dimension if not keeping it
+		} else {
+			outputShape = append(outputShape, dim)
+		}
+	}
+
+	// Create output tensor
+	result := &Tensor{
+		Shape:    outputShape,
+		Strides:  calculateStrides(outputShape),
+		DType:    input.DType,
+		Device:   determineResultDevice(input),
+		NumElems: calculateNumElements(outputShape),
+	}
+
+
+	inputBuffer, err := createMPSBufferFromTensor(input, engine.device)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create buffer for input: %v", err)
+	}
+	// inputBuffer will be garbage collected
+
+	resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create result buffer: %v", err)
+	}
+
+	executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+	if executionDescriptor == nil {
+		return nil, fmt.Errorf("failed to create execution descriptor")
+	}
+
+	cached.executable.Execute(engine.commandQueue,
+		cached.inputTensors,
+		[]*metal_bridge.Buffer{inputBuffer},
+		cached.resultTensors,
+		[]*metal_bridge.Buffer{resultBuffer},
+		executionDescriptor)
+
+	if err := handleMPSResult(result, resultBuffer); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// IsGPUAvailable checks if Metal GPU compute is available
+func IsGPUAvailable() bool {
+	_, err := GetMPSGraphEngine()
+	return err == nil
+}
+
+// AddGPUAsync performs tensor addition on GPU asynchronously
+func AddGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error {
+	// Validate inputs before starting async operation
+	if !isCompatibleForOp(t1, t2) {
+		return fmt.Errorf("tensors are not compatible for addition")
+	}
+	
+	// Perform operation asynchronously
+	go func() {
+		result, err := AddMPS(t1, t2)
+		completion(result, err)
+	}()
+	return nil
+}
+
+// MatMulGPUAsync performs matrix multiplication on GPU asynchronously  
+func MatMulGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error {
+	// Validate matrix dimensions before starting async operation
+	if len(t1.Shape) != 2 || len(t2.Shape) != 2 {
+		return fmt.Errorf("matrix multiplication requires 2D tensors")
+	}
+	if t1.Shape[1] != t2.Shape[0] {
+		return fmt.Errorf("inner dimensions must match for matrix multiplication: %d vs %d", t1.Shape[1], t2.Shape[0])
+	}
+	
+	// Perform operation asynchronously
+	go func() {
+		result, err := MatMulMPS(t1, t2)
+		completion(result, err)
+	}()
+	return nil
+}
+
+// AddGPU performs tensor addition on GPU synchronously
+func AddGPU(t1, t2 *Tensor) (*Tensor, error) {
+	return AddMPS(t1, t2)
+}
+
+// MatMulGPU performs matrix multiplication on GPU synchronously
+func MatMulGPU(t1, t2 *Tensor) (*Tensor, error) {
+	return MatMulMPS(t1, t2)
+}
+
+// ReLUGPU performs ReLU activation on GPU synchronously
+func ReLUGPU(t *Tensor) (*Tensor, error) {
+	return ReLUMPS(t)
+}
+
+// GPUInfo returns information about the GPU device
+func GPUInfo() (string, error) {
+	if !IsGPUAvailable() {
+		return "", fmt.Errorf("GPU not available")
+	}
+	return "Metal Performance Shaders GPU", nil
+}
+
+// createGPUBuffer creates a GPU buffer for a tensor and copies CPU data to it
+func (t *Tensor) createGPUBuffer() error {
+	if t.Data == nil {
+		return fmt.Errorf("cannot create GPU buffer: tensor data is nil")
+	}
+	
+	engine, err := GetMPSGraphEngine()
+	if err != nil {
+		return fmt.Errorf("failed to get MPSGraph engine: %v", err)
+	}
+	
+	// Create buffer based on tensor size
+	size := calculateTensorSize(t.Shape, t.DType)
+	buffer := engine.device.NewBufferWithLength(int(size), int(metal_bridge.ResourceStorageModeShared))
+	if buffer == nil {
+		return fmt.Errorf("failed to allocate GPU buffer")
+	}
+	
+	// Copy CPU data to GPU buffer
+	err = copyDataToGPUBuffer(t.Data, buffer, t.DType)
+	if err != nil {
+		return fmt.Errorf("failed to copy data to GPU buffer: %v", err)
+	}
+	
+	// Set GPU buffer and initialize reference counting
+	t.SetGPUBuffer(buffer)
+	
+	return nil
 }

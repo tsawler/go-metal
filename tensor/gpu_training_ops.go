@@ -131,7 +131,12 @@ func (ctx *GPUTrainingContext) BatchOperationsAsync(ops []OperationDesc) ([]*Ten
 				// In the future, this could be optimized with better dependency tracking
 			}
 			
-			opID, err := ctx.graph.AddOperation(resolvedOp.Type, resolvedOp.Inputs, deps, resolvedOp.Params)
+			// Convert deps to []interface{}
+			interfaceDeps := make([]interface{}, len(deps))
+			for i, dep := range deps {
+				interfaceDeps[i] = dep
+			}
+			opID, err := ctx.graph.AddOperation(resolvedOp.Type, resolvedOp.Inputs, interfaceDeps, resolvedOp.Params)
 			if err != nil {
 				return nil, fmt.Errorf("failed to add operation %d: %v", i, err)
 			}
