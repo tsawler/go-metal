@@ -302,25 +302,6 @@ var (
 ```
 MPSGraph data type constants
 
-#### type AllocatorConfig
-
-```go
-type AllocatorConfig struct {
-	MaxPoolSize    int    // Maximum buffers per size pool (default: 32)
-	MaxTotalMemory uint64 // Maximum total cached memory in bytes (default: 1GB)
-	MinBufferSize  uint64 // Minimum buffer size to pool in bytes (default: 1KB)
-}
-```
-
-AllocatorConfig holds configuration for the BufferAllocator
-
-#### func  DefaultAllocatorConfig
-
-```go
-func DefaultAllocatorConfig() AllocatorConfig
-```
-DefaultAllocatorConfig returns sensible defaults for the allocator
-
 #### type Buffer
 
 ```go
@@ -336,45 +317,11 @@ Wrapper struct for MTLBuffer
 func (b *Buffer) Contents() unsafe.Pointer
 ```
 
-#### func (*Buffer) ContentsAsFloat32
-
-```go
-func (b *Buffer) ContentsAsFloat32() []float32
-```
-
-#### func (*Buffer) ContentsAsInt32
-
-```go
-func (b *Buffer) ContentsAsInt32() []int32
-```
-
 #### func (*Buffer) Length
 
 ```go
-func (b *Buffer) Length() uintptr
+func (b *Buffer) Length() int
 ```
-
-#### func (*Buffer) RefCount
-
-```go
-func (b *Buffer) RefCount() int32
-```
-RefCount returns the current reference count
-
-#### func (*Buffer) Release
-
-```go
-func (b *Buffer) Release()
-```
-Release decrements the reference count and returns the buffer to allocator when
-it reaches zero
-
-#### func (*Buffer) Retain
-
-```go
-func (b *Buffer) Retain()
-```
-Retain increments the reference count for this buffer
 
 #### type BufferAllocator
 
@@ -383,61 +330,21 @@ type BufferAllocator struct {
 }
 ```
 
-BufferAllocator manages a pool of MTLBuffers for efficient memory management It
-categorizes buffers by size to minimize fragmentation and allocation overhead
+BufferAllocator is a stub for compatibility
 
 #### func  GetGlobalAllocator
 
 ```go
 func GetGlobalAllocator() *BufferAllocator
 ```
-GetGlobalAllocator returns the singleton BufferAllocator instance
-
-#### func  NewBufferAllocator
-
-```go
-func NewBufferAllocator(device *Device, config AllocatorConfig) *BufferAllocator
-```
-NewBufferAllocator creates a new BufferAllocator with the given device and
-configuration
-
-#### func (*BufferAllocator) Allocate
-
-```go
-func (a *BufferAllocator) Allocate(sizeInBytes uint64, options C.NSUInteger) (*Buffer, error)
-```
-Allocate allocates a buffer of the specified size from the pool or creates a new
-one
+GetGlobalAllocator returns a stub allocator for compatibility
 
 #### func (*BufferAllocator) GetMemoryStats
 
 ```go
-func (a *BufferAllocator) GetMemoryStats() MemoryStats
+func (ba *BufferAllocator) GetMemoryStats() MemoryStats
 ```
-GetMemoryStats returns current memory usage statistics
-
-#### func (*BufferAllocator) Release
-
-```go
-func (a *BufferAllocator) Release(buffer *Buffer)
-```
-Release returns a buffer to the pool for reuse
-
-#### func (*BufferAllocator) Shutdown
-
-```go
-func (a *BufferAllocator) Shutdown()
-```
-Shutdown performs cleanup and releases all resources
-
-#### type BufferPool
-
-```go
-type BufferPool struct {
-}
-```
-
-BufferPool represents a pool of buffers for a specific size category
+GetMemoryStats returns zero stats for compatibility
 
 #### type CommandBuffer
 
@@ -446,16 +353,13 @@ type CommandBuffer struct {
 }
 ```
 
-Wrapper for MTLCommandBuffer
+Wrapper struct for MTLCommandBuffer
 
 #### func (*CommandBuffer) AddCompletedHandler
 
 ```go
 func (cb *CommandBuffer) AddCompletedHandler(handler func(status int))
 ```
-AddCompletedHandler allows registering a Go callback for command buffer
-completion. It passes a userData pointer which can be used to pass context to
-the Go function.
 
 #### func (*CommandBuffer) Commit
 
@@ -463,10 +367,10 @@ the Go function.
 func (cb *CommandBuffer) Commit()
 ```
 
-#### func (*CommandBuffer) ComputeCommandEncoder
+#### func (*CommandBuffer) NewComputeCommandEncoder
 
 ```go
-func (cb *CommandBuffer) ComputeCommandEncoder() *ComputeCommandEncoder
+func (cb *CommandBuffer) NewComputeCommandEncoder() *ComputeCommandEncoder
 ```
 
 #### func (*CommandBuffer) WaitUntilCompleted
@@ -535,10 +439,10 @@ type CommandQueue struct {
 
 Wrapper struct for MTLCommandQueue
 
-#### func (*CommandQueue) CommandBuffer
+#### func (*CommandQueue) NewCommandBuffer
 
 ```go
-func (q *CommandQueue) CommandBuffer() *CommandBuffer
+func (cq *CommandQueue) NewCommandBuffer() *CommandBuffer
 ```
 
 #### type ComputeCommandEncoder
@@ -548,147 +452,31 @@ type ComputeCommandEncoder struct {
 }
 ```
 
-Wrapper for MTLComputeCommandEncoder
+Wrapper struct for MTLComputeCommandEncoder
 
 #### func (*ComputeCommandEncoder) DispatchThreads
 
 ```go
-func (e *ComputeCommandEncoder) DispatchThreads(gridSize, threadgroupSize MTLSize)
+func (cce *ComputeCommandEncoder) DispatchThreads(gridSize, threadgroupSize MTLSize)
 ```
 
 #### func (*ComputeCommandEncoder) EndEncoding
 
 ```go
-func (e *ComputeCommandEncoder) EndEncoding()
+func (cce *ComputeCommandEncoder) EndEncoding()
 ```
 
 #### func (*ComputeCommandEncoder) SetBuffer
 
 ```go
-func (e *ComputeCommandEncoder) SetBuffer(buffer *Buffer, offset, index uint)
+func (cce *ComputeCommandEncoder) SetBuffer(buffer *Buffer, offset, index int)
 ```
 
 #### func (*ComputeCommandEncoder) SetComputePipelineState
 
 ```go
-func (e *ComputeCommandEncoder) SetComputePipelineState(pipelineState *ComputePipelineState)
+func (cce *ComputeCommandEncoder) SetComputePipelineState(pipelineState *ComputePipelineState)
 ```
-
-#### type ComputeEngine
-
-```go
-type ComputeEngine struct {
-}
-```
-
-ComputeEngine manages Metal compute operations
-
-#### func  NewComputeEngine
-
-```go
-func NewComputeEngine() (*ComputeEngine, error)
-```
-NewComputeEngine creates a new Metal compute engine
-
-#### func (*ComputeEngine) AddArraysFloat32
-
-```go
-func (e *ComputeEngine) AddArraysFloat32(inputA, inputB []float32) ([]float32, error)
-```
-AddArraysFloat32 performs element-wise addition of two float32 arrays on GPU
-
-#### func (*ComputeEngine) AddArraysFloat32Async
-
-```go
-func (e *ComputeEngine) AddArraysFloat32Async(inputA, inputB []float32, completion func([]float32, error)) error
-```
-AddArraysFloat32Async performs element-wise addition of two float32 arrays on
-GPU asynchronously
-
-#### func (*ComputeEngine) AddArraysInt32
-
-```go
-func (e *ComputeEngine) AddArraysInt32(inputA, inputB []int32) ([]int32, error)
-```
-AddArraysInt32 performs element-wise addition of two int32 arrays on GPU
-
-#### func (*ComputeEngine) BatchMatMulFloat32
-
-```go
-func (e *ComputeEngine) BatchMatMulFloat32(batchA, batchB []float32, batchSize, M, N, P uint) ([]float32, error)
-```
-BatchMatMulFloat32 performs batch matrix multiplication in one GPU call
-
-#### func (*ComputeEngine) GetCommandQueue
-
-```go
-func (e *ComputeEngine) GetCommandQueue() *CommandQueue
-```
-GetCommandQueue returns the command queue
-
-#### func (*ComputeEngine) GetDevice
-
-```go
-func (e *ComputeEngine) GetDevice() *Device
-```
-GetDevice returns the Metal device
-
-#### func (*ComputeEngine) LinearForwardFloat32
-
-```go
-func (e *ComputeEngine) LinearForwardFloat32(input, weight, bias []float32, batchSize, inputFeatures, outputFeatures uint) ([]float32, error)
-```
-LinearForwardFloat32 performs fused MatMul + Bias addition in one GPU call
-
-#### func (*ComputeEngine) LinearReLUFloat32
-
-```go
-func (e *ComputeEngine) LinearReLUFloat32(input, weight, bias []float32, batchSize, inputFeatures, outputFeatures uint) ([]float32, error)
-```
-LinearReLUFloat32 performs fused MatMul + Bias + ReLU activation in one GPU call
-
-#### func (*ComputeEngine) LinearSigmoidFloat32
-
-```go
-func (e *ComputeEngine) LinearSigmoidFloat32(input, weight, bias []float32, batchSize, inputFeatures, outputFeatures uint) ([]float32, error)
-```
-LinearSigmoidFloat32 performs fused MatMul + Bias + Sigmoid activation in one
-GPU call
-
-#### func (*ComputeEngine) LoadKernel
-
-```go
-func (e *ComputeEngine) LoadKernel(kernelName string) error
-```
-LoadKernel loads a specific kernel function and creates its pipeline state
-
-#### func (*ComputeEngine) MatMulFloat32
-
-```go
-func (e *ComputeEngine) MatMulFloat32(matrixA, matrixB []float32, M, N, P uint) ([]float32, error)
-```
-MatMulFloat32 performs matrix multiplication on GPU
-
-#### func (*ComputeEngine) MatMulFloat32Async
-
-```go
-func (e *ComputeEngine) MatMulFloat32Async(matrixA, matrixB []float32, M, N, P uint, completion func([]float32, error)) error
-```
-MatMulFloat32Async performs matrix multiplication on GPU asynchronously
-
-#### func (*ComputeEngine) ReLUFloat32
-
-```go
-func (e *ComputeEngine) ReLUFloat32(input []float32) ([]float32, error)
-```
-ReLUFloat32 applies ReLU activation to float32 array on GPU
-
-#### func (*ComputeEngine) ReLUFloat32Async
-
-```go
-func (e *ComputeEngine) ReLUFloat32Async(input []float32, completion func([]float32, error)) error
-```
-ReLUFloat32Async applies ReLU activation to float32 array on GPU asynchronously
 
 #### type ComputePipelineState
 
@@ -697,7 +485,7 @@ type ComputePipelineState struct {
 }
 ```
 
-Wrapper for MTLComputePipelineState
+Wrapper struct for MTLComputePipelineState
 
 #### type Device
 
@@ -714,22 +502,16 @@ Wrapper struct for MTLDevice
 func CreateSystemDefaultDevice() *Device
 ```
 
-#### func (*Device) CreateBufferWithBytes
+#### func (*Device) NewBufferWithBytes
 
 ```go
-func (d *Device) CreateBufferWithBytes(data interface{}, options C.size_t) (*Buffer, error)
+func (d *Device) NewBufferWithBytes(data []byte, resourceOptions int) *Buffer
 ```
 
-#### func (*Device) CreateBufferWithLength
+#### func (*Device) NewBufferWithLength
 
 ```go
-func (d *Device) CreateBufferWithLength(length uintptr, options C.size_t) (*Buffer, error)
-```
-
-#### func (*Device) CreateLibraryWithSource
-
-```go
-func (d *Device) CreateLibraryWithSource(source string) (*Library, error)
+func (d *Device) NewBufferWithLength(length int, resourceOptions int) *Buffer
 ```
 
 #### func (*Device) NewCommandQueue
@@ -741,7 +523,13 @@ func (d *Device) NewCommandQueue() *CommandQueue
 #### func (*Device) NewComputePipelineStateWithFunction
 
 ```go
-func (d *Device) NewComputePipelineStateWithFunction(function *Function) (*ComputePipelineState, error)
+func (d *Device) NewComputePipelineStateWithFunction(function *Function) *ComputePipelineState
+```
+
+#### func (*Device) NewLibraryWithSource
+
+```go
+func (d *Device) NewLibraryWithSource(source string) *Library
 ```
 
 #### type Function
@@ -760,7 +548,7 @@ type Graph struct {
 }
 ```
 
-Wrapper struct for MPSGraph
+MPSGraph wrapper types
 
 #### func  NewGraph
 
@@ -771,9 +559,9 @@ func NewGraph() *Graph
 #### func (*Graph) Addition
 
 ```go
-func (g *Graph) Addition(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+func (g *Graph) Addition(a, b *GraphTensor) *GraphTensor
 ```
-MPSGraph operations
+Addition operation
 
 #### func (*Graph) AvgPool2D
 
@@ -785,7 +573,7 @@ AvgPool2D performs 2D average pooling operation
 #### func (*Graph) Compile
 
 ```go
-func (g *Graph) Compile(device *GraphDevice, inputTensors []*GraphTensor, targetTensors []*GraphTensor, compilationDescriptor *GraphCompilationDescriptor) *GraphExecutable
+func (g *Graph) Compile(device *GraphDevice, inputTensors, targetTensors []*GraphTensor, compilationDescriptor *GraphCompilationDescriptor) *GraphExecutable
 ```
 
 #### func (*Graph) ConstantTensor
@@ -793,6 +581,7 @@ func (g *Graph) Compile(device *GraphDevice, inputTensors []*GraphTensor, target
 ```go
 func (g *Graph) ConstantTensor(value float64, shape []int, dataType int) *GraphTensor
 ```
+Create a constant tensor
 
 #### func (*Graph) Conv2D
 
@@ -801,17 +590,40 @@ func (g *Graph) Conv2D(source, weights, bias *GraphTensor, strideX, strideY, dil
 ```
 Conv2D performs 2D convolution operation
 
+#### func (*Graph) Convolution2DDataGradient
+
+```go
+func (g *Graph) Convolution2DDataGradient(incomingGradient, weights *GraphTensor, inputShape []int, strideX, strideY, dilationX, dilationY, paddingLeft, paddingRight, paddingTop, paddingBottom, groups int) *GraphTensor
+```
+Convolution2DDataGradient computes the gradient with respect to input data
+
+#### func (*Graph) Convolution2DWeightsGradient
+
+```go
+func (g *Graph) Convolution2DWeightsGradient(incomingGradient, source *GraphTensor, weightsShape []int, strideX, strideY, dilationX, dilationY, paddingLeft, paddingRight, paddingTop, paddingBottom, groups int) *GraphTensor
+```
+Convolution2DWeightsGradient computes the gradient with respect to weights
+
+#### func (*Graph) ConvolutionTranspose2D
+
+```go
+func (g *Graph) ConvolutionTranspose2D(source, weights *GraphTensor, outputShape []int, strideX, strideY, dilationX, dilationY, paddingLeft, paddingRight, paddingTop, paddingBottom, groups int) *GraphTensor
+```
+ConvolutionTranspose2D performs 2D transposed convolution operation
+
 #### func (*Graph) Division
 
 ```go
-func (g *Graph) Division(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+func (g *Graph) Division(a, b *GraphTensor) *GraphTensor
 ```
+Division operation
 
 #### func (*Graph) MatrixMultiplication
 
 ```go
-func (g *Graph) MatrixMultiplication(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+func (g *Graph) MatrixMultiplication(a, b *GraphTensor) *GraphTensor
 ```
+Matrix multiplication operation
 
 #### func (*Graph) MaxPool2D
 
@@ -823,50 +635,65 @@ MaxPool2D performs 2D max pooling operation
 #### func (*Graph) Multiplication
 
 ```go
-func (g *Graph) Multiplication(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+func (g *Graph) Multiplication(a, b *GraphTensor) *GraphTensor
 ```
+Multiplication operation
 
 #### func (*Graph) PlaceholderTensor
 
 ```go
 func (g *Graph) PlaceholderTensor(shape []int, dataType int) *GraphTensor
 ```
+Create a placeholder tensor
 
 #### func (*Graph) ReLU
 
 ```go
 func (g *Graph) ReLU(tensor *GraphTensor) *GraphTensor
 ```
+ReLU activation function
+
+#### func (*Graph) ReductionSum
+
+```go
+func (g *Graph) ReductionSum(tensor *GraphTensor, axis int, keepdim bool) *GraphTensor
+```
+ReductionSum performs tensor reduction sum along specified axis
 
 #### func (*Graph) Reshape
 
 ```go
 func (g *Graph) Reshape(tensor *GraphTensor, shape []int) *GraphTensor
 ```
+Reshape operation
 
 #### func (*Graph) Sigmoid
 
 ```go
 func (g *Graph) Sigmoid(tensor *GraphTensor) *GraphTensor
 ```
+Sigmoid activation function
 
 #### func (*Graph) Softmax
 
 ```go
 func (g *Graph) Softmax(tensor *GraphTensor, axis int) *GraphTensor
 ```
+Softmax activation function
 
 #### func (*Graph) Subtraction
 
 ```go
-func (g *Graph) Subtraction(primaryTensor, secondaryTensor *GraphTensor) *GraphTensor
+func (g *Graph) Subtraction(a, b *GraphTensor) *GraphTensor
 ```
+Subtraction operation
 
 #### func (*Graph) Transpose
 
 ```go
-func (g *Graph) Transpose(tensor *GraphTensor, dimension, dimensionTwo int) *GraphTensor
+func (g *Graph) Transpose(tensor *GraphTensor, dimension1, dimension2 int) *GraphTensor
 ```
+Transpose operation
 
 #### type GraphCompilationDescriptor
 
@@ -904,7 +731,6 @@ type GraphExecutable struct {
 }
 ```
 
-Wrapper structs for MPSGraph execution
 
 #### func (*GraphExecutable) Execute
 
@@ -919,6 +745,7 @@ type GraphExecutionDescriptor struct {
 }
 ```
 
+Wrapper structs for MPSGraph compilation and execution
 
 #### func  NewGraphExecutionDescriptor
 
@@ -935,6 +762,18 @@ type GraphTensor struct {
 
 Wrapper struct for MPSGraphTensor
 
+#### func (*GraphTensor) DataType
+
+```go
+func (gt *GraphTensor) DataType() int
+```
+
+#### func (*GraphTensor) Shape
+
+```go
+func (gt *GraphTensor) Shape() []int
+```
+
 #### type Library
 
 ```go
@@ -944,10 +783,10 @@ type Library struct {
 
 Wrapper struct for MTLLibrary
 
-#### func (*Library) GetFunction
+#### func (*Library) NewFunctionWithName
 
 ```go
-func (l *Library) GetFunction(functionName string) (*Function, error)
+func (l *Library) NewFunctionWithName(name string) *Function
 ```
 
 #### type MTLSize
@@ -964,18 +803,17 @@ Go equivalent of MTLSize
 
 ```go
 type MemoryStats struct {
-	TotalAllocated   uint64 // Total bytes allocated from Metal
-	TotalFree        uint64 // Total bytes available in pools
-	NumAllocations   uint64 // Number of allocation requests
-	NumDeallocations uint64 // Number of deallocation requests
-	NumPoolHits      uint64 // Number of successful pool retrievals
-	NumPoolMisses    uint64 // Number of new allocations needed
-	FragmentedMemory uint64 // Estimated fragmented memory
-	NumPools         int    // Number of active pools
+	NumAllocations   int
+	NumDeallocations int
+	NumPoolHits      int
+	NumPoolMisses    int
+	TotalMemory      int
+	UsedMemory       int
+	TotalFree        int
 }
 ```
 
-MemoryStats holds memory usage statistics
+MemoryStats represents memory allocation statistics
 
 #### type OperationID
 

@@ -705,31 +705,32 @@ type SubsetDataset struct {
 }
 ```
 
-SubsetDataset allows training on a limited number of samples from an underlying dataset.
+SubsetDataset allows training on a limited number of samples from an underlying
+dataset.
 
 #### func  NewSubsetDataset
 
 ```go
 func NewSubsetDataset(original Dataset, limit int) (*SubsetDataset, error)
 ```
-NewSubsetDataset creates a new SubsetDataset that wraps an existing dataset
-and limits the number of samples it exposes.
+NewSubsetDataset creates a new SubsetDataset that wraps an existing dataset and
+limits the number of samples it exposes.
 
 #### func (*SubsetDataset) Get
 
 ```go
 func (sd *SubsetDataset) Get(idx int) (data *tensor.Tensor, label *tensor.Tensor, err error)
 ```
-Get returns a sample at the given index from the original dataset.
-It assumes the index is within the bounds of the subset.
+Get returns a sample at the given index from the original dataset. It assumes
+the index is within the bounds of the subset.
 
 #### func (*SubsetDataset) Len
 
 ```go
 func (sd *SubsetDataset) Len() int
 ```
-Len returns the number of samples in the subset, which is the minimum
-of the original dataset's length and the specified limit.
+Len returns the number of samples in the subset, which is the minimum of the
+original dataset's length and the specified limit.
 
 #### type Trainer
 

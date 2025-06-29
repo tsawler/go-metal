@@ -64,7 +64,7 @@ IsGPUAvailable checks if Metal GPU compute is available
 ```go
 func MatMulGPUAsync(t1, t2 *Tensor, completion func(*Tensor, error)) error
 ```
-MatMulGPU performs matrix multiplication on GPU
+MatMulGPUAsync performs matrix multiplication on GPU asynchronously
 
 #### func  ZeroGrad
 
@@ -210,49 +210,51 @@ type GPUComputationGraph struct {
 }
 ```
 
-GPUComputationGraph manages a graph of GPU operations with dependency tracking
+GPUComputationGraph stub for compatibility This is a minimal stub to allow
+compilation of gpu_training_ops.go The actual implementation should use MPSGraph
+operations directly
 
 #### func  NewGPUComputationGraph
 
 ```go
 func NewGPUComputationGraph() (*GPUComputationGraph, error)
 ```
-NewGPUComputationGraph creates a new GPU computation graph
+NewGPUComputationGraph creates a stub computation graph
 
 #### func (*GPUComputationGraph) AddOperation
 
 ```go
-func (g *GPUComputationGraph) AddOperation(opType string, inputs []*Tensor, dependencies []metal_bridge.OperationID, params map[string]interface{}) (metal_bridge.OperationID, error)
+func (g *GPUComputationGraph) AddOperation(opType string, inputs []*Tensor, dependencies []interface{}, params map[string]interface{}) (interface{}, error)
 ```
-AddOperation adds an operation to the computation graph
+AddOperation is a stub for compatibility
 
 #### func (*GPUComputationGraph) ExecuteSequence
 
 ```go
 func (g *GPUComputationGraph) ExecuteSequence(operations []OperationDesc) (*Tensor, error)
 ```
-ExecuteSequence executes a sequence of operations and returns the final result
+ExecuteSequence is a stub for compatibility
 
 #### func (*GPUComputationGraph) GetStats
 
 ```go
 func (g *GPUComputationGraph) GetStats() (queued, executed int64, pending int)
 ```
-GetStats returns statistics about the computation graph
+GetStats is a stub for compatibility
 
 #### func (*GPUComputationGraph) Shutdown
 
 ```go
 func (g *GPUComputationGraph) Shutdown()
 ```
-Shutdown gracefully shuts down the computation graph
+Shutdown is a stub for compatibility
 
 #### func (*GPUComputationGraph) WaitForOperation
 
 ```go
-func (g *GPUComputationGraph) WaitForOperation(opID metal_bridge.OperationID) (*Tensor, error)
+func (g *GPUComputationGraph) WaitForOperation(opID interface{}) (*Tensor, error)
 ```
-WaitForOperation waits for a specific operation to complete
+WaitForOperation is a stub for compatibility
 
 #### type GPUTrainingContext
 
@@ -350,23 +352,6 @@ Shutdown gracefully shuts down the training context
 func (ctx *GPUTrainingContext) TrainingStepAsync(forward, backward []OperationDesc) error
 ```
 TrainingStepAsync performs a complete training step with batched operations
-
-#### type GraphOperation
-
-```go
-type GraphOperation struct {
-	ID           metal_bridge.OperationID
-	Type         string
-	InputTensors []*Tensor
-	OutputTensor *Tensor
-	Dependencies []metal_bridge.OperationID
-
-	// Operation-specific data
-	Params map[string]interface{}
-}
-```
-
-GraphOperation represents a single operation in the computation graph
 
 #### type LogOp
 
@@ -831,7 +816,7 @@ AddAutograd performs addition with automatic differentiation
 ```go
 func AddGPU(t1, t2 *Tensor) (*Tensor, error)
 ```
-AddGPU performs tensor addition on GPU
+AddGPU performs tensor addition on GPU synchronously
 
 #### func  AddMPS
 
@@ -982,6 +967,7 @@ MatMulAutograd performs matrix multiplication with automatic differentiation
 ```go
 func MatMulGPU(t1, t2 *Tensor) (*Tensor, error)
 ```
+MatMulGPU performs matrix multiplication on GPU synchronously
 
 #### func  MatMulMPS
 
@@ -1073,7 +1059,7 @@ ReLUAutograd performs ReLU activation with automatic differentiation
 ```go
 func ReLUGPU(t *Tensor) (*Tensor, error)
 ```
-ReLUGPU performs ReLU activation on GPU
+ReLUGPU performs ReLU activation on GPU synchronously
 
 #### func  ReLUMPS
 
@@ -1188,6 +1174,13 @@ func Sum(t *Tensor, dim int, keepDim bool) (*Tensor, error)
 func SumAutograd(t *Tensor) (*Tensor, error)
 ```
 SumAutograd performs sum of all elements with automatic differentiation
+
+#### func  SumMPS
+
+```go
+func SumMPS(input *Tensor, axis int, keepdim bool) (*Tensor, error)
+```
+SumMPS performs tensor reduction sum along specified axis using MPSGraph
 
 #### func  Tanh
 
@@ -1407,7 +1400,7 @@ func (t *Tensor) ToDevice(device DeviceType) (*Tensor, error)
 ```go
 func (t *Tensor) ToGPU() (*Tensor, error)
 ```
-ToGPU moves a tensor to GPU device using the BufferAllocator
+ToGPU moves a tensor to GPU device (creates a copy with GPU device type)
 
 #### func (*Tensor) ToPersistentGPU
 
