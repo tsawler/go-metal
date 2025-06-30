@@ -76,7 +76,7 @@ func (mm *MemoryManager) ReleaseBuffer(buffer unsafe.Pointer) {
 ### 5. **Buffer Zeroing Limited to CPU-Accessible Buffers** (LOW PRIORITY)
 **Files:** `cgo_bridge/bridge.m:2356-2357`
 ```objc
-// TODO: Use Metal compute shader to zero buffer for GPU-only buffers
+// TODO: Use MPSGraph operations to zero GPU-only buffers
 // For now, return error if buffer is not CPU-accessible
 ```
 **Problem:** Cannot zero GPU-only buffers
@@ -116,7 +116,7 @@ func (mm *MemoryManager) ReleaseBuffer(buffer unsafe.Pointer) {
 ### Phase 2: Performance Optimization (Future)
 1. **Optimize Adam with MPSGraph** - Replace CPU Adam with MPSGraph's optimized Adam operations
 2. **Fix Memory Manager Buffer Tracking** - Implement proper buffer size tracking instead of 4MB estimates
-3. **GPU Buffer Zeroing** - Add Metal compute shader for buffer initialization
+3. **GPU Buffer Zeroing** - Use MPSGraph operations for buffer initialization
 4. **Complete Async Pipeline** - Finish staging buffer and command pool implementations
 
 ### Phase 3: Advanced Features (Future)
