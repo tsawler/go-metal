@@ -1,0 +1,243 @@
+package async
+
+import (
+	"fmt"
+	"sync"
+	"unsafe"
+)
+
+// CommandBuffer represents a Metal command buffer wrapper
+type CommandBuffer struct {
+	buffer unsafe.Pointer // MTLCommandBuffer
+	inUse  bool           // Whether buffer is currently in use
+	id     int            // Unique identifier for debugging
+}
+
+// CommandBufferPool manages a pool of Metal command buffers for reuse
+type CommandBufferPool struct {
+	commandQueue  unsafe.Pointer       // MTLCommandQueue
+	buffers       []*CommandBuffer
+	available     chan *CommandBuffer
+	maxBuffers    int
+	mutex         sync.Mutex
+	nextID        int
+}
+
+// NewCommandBufferPool creates a new command buffer pool
+func NewCommandBufferPool(commandQueue unsafe.Pointer, maxBuffers int) (*CommandBufferPool, error) {
+	if commandQueue == nil {
+		return nil, fmt.Errorf("command queue cannot be nil")
+	}
+	
+	if maxBuffers <= 0 {
+		return nil, fmt.Errorf("maxBuffers must be positive, got %d", maxBuffers)
+	}
+	
+	pool := &CommandBufferPool{
+		commandQueue: commandQueue,
+		buffers:      make([]*CommandBuffer, 0, maxBuffers),
+		available:    make(chan *CommandBuffer, maxBuffers),
+		maxBuffers:   maxBuffers,
+		nextID:       1,
+	}
+	
+	// Pre-allocate some command buffers
+	initialBuffers := maxBuffers / 2
+	if initialBuffers < 2 {
+		initialBuffers = 2
+	}
+	
+	for i := 0; i < initialBuffers; i++ {
+		buffer, err := pool.createBuffer()
+		if err != nil {
+			pool.Cleanup()
+			return nil, fmt.Errorf("failed to create initial command buffer %d: %v", i, err)
+		}
+		pool.buffers = append(pool.buffers, buffer)
+		pool.available <- buffer
+	}
+	
+	return pool, nil
+}
+
+// createBuffer creates a new command buffer
+func (cbp *CommandBufferPool) createBuffer() (*CommandBuffer, error) {
+	// Note: In a complete implementation, this would create an actual MTLCommandBuffer
+	// For now, we'll use a placeholder approach since the Metal CGO integration
+	// would be handled in the cgo_bridge package
+	
+	cbp.mutex.Lock()
+	id := cbp.nextID
+	cbp.nextID++
+	cbp.mutex.Unlock()
+	
+	// TODO: Call CGO function to create MTLCommandBuffer from queue
+	// buffer := cgo_bridge.CreateCommandBuffer(cbp.commandQueue)
+	
+	return &CommandBuffer{
+		buffer: nil, // Placeholder - would be actual MTLCommandBuffer pointer
+		inUse:  false,
+		id:     id,
+	}, nil
+}
+
+// GetBuffer gets an available command buffer (creates new one if needed and under limit)
+func (cbp *CommandBufferPool) GetBuffer() (*CommandBuffer, error) {
+	select {
+	case buffer := <-cbp.available:
+		buffer.inUse = true
+		return buffer, nil
+	default:
+		// No buffer available, try to create new one if under limit
+		cbp.mutex.Lock()
+		defer cbp.mutex.Unlock()
+		
+		if len(cbp.buffers) < cbp.maxBuffers {
+			buffer, err := cbp.createBuffer()
+			if err != nil {
+				return nil, fmt.Errorf("failed to create new command buffer: %v", err)
+			}
+			cbp.buffers = append(cbp.buffers, buffer)
+			buffer.inUse = true
+			return buffer, nil
+		}
+		
+		return nil, fmt.Errorf("no command buffers available and pool is at capacity (%d)", cbp.maxBuffers)
+	}
+}
+
+// ReturnBuffer returns a command buffer to the pool after completion
+func (cbp *CommandBufferPool) ReturnBuffer(buffer *CommandBuffer) {
+	if buffer == nil {
+		return
+	}
+	
+	buffer.inUse = false
+	
+	select {
+	case cbp.available <- buffer:
+		// Successfully returned to pool
+	default:
+		// Pool channel is full, this shouldn't happen but handle gracefully
+		// Buffer will be garbage collected when pool is cleaned up
+	}
+}
+
+// ExecuteAsync submits a command buffer for async execution
+func (cbp *CommandBufferPool) ExecuteAsync(buffer *CommandBuffer, completion func(error)) error {
+	if buffer == nil {
+		return fmt.Errorf("command buffer is nil")
+	}
+	
+	if !buffer.inUse {
+		return fmt.Errorf("command buffer is not marked as in use")
+	}
+	
+	// TODO: Implement actual Metal command buffer execution
+	// This would involve:
+	// 1. Adding completion handler to command buffer
+	// 2. Committing command buffer for execution
+	// 3. Setting up callback to return buffer to pool when done
+	
+	// For now, simulate async execution
+	go func() {
+		// Simulate some work
+		if completion != nil {
+			completion(nil)
+		}
+		
+		// Return buffer to pool
+		cbp.ReturnBuffer(buffer)
+	}()
+	
+	return nil
+}
+
+// Batch operation support for multiple operations in single command buffer
+type BatchOperation struct {
+	Type        string // "training_step", "data_transfer", etc.
+	Data        interface{}
+	Completion  func(error)
+}
+
+// ExecuteBatch executes multiple operations in a single command buffer for efficiency
+func (cbp *CommandBufferPool) ExecuteBatch(operations []BatchOperation) error {
+	if len(operations) == 0 {
+		return fmt.Errorf("no operations provided")
+	}
+	
+	buffer, err := cbp.GetBuffer()
+	if err != nil {
+		return fmt.Errorf("failed to get command buffer: %v", err)
+	}
+	
+	// TODO: Implement actual batch operation encoding
+	// This would involve encoding all operations into the command buffer
+	// before committing for execution
+	
+	// Aggregate completion handlers
+	allCompletions := make([]func(error), 0, len(operations))
+	for _, op := range operations {
+		if op.Completion != nil {
+			allCompletions = append(allCompletions, op.Completion)
+		}
+	}
+	
+	// Execute with combined completion handler
+	return cbp.ExecuteAsync(buffer, func(err error) {
+		for _, completion := range allCompletions {
+			completion(err)
+		}
+	})
+}
+
+// Stats returns statistics about the command buffer pool
+func (cbp *CommandBufferPool) Stats() CommandPoolStats {
+	cbp.mutex.Lock()
+	defer cbp.mutex.Unlock()
+	
+	inUseCount := 0
+	for _, buffer := range cbp.buffers {
+		if buffer.inUse {
+			inUseCount++
+		}
+	}
+	
+	return CommandPoolStats{
+		TotalBuffers:     len(cbp.buffers),
+		AvailableBuffers: len(cbp.available),
+		InUseBuffers:     inUseCount,
+		MaxBuffers:       cbp.maxBuffers,
+	}
+}
+
+// CommandPoolStats provides statistics about the command buffer pool
+type CommandPoolStats struct {
+	TotalBuffers     int
+	AvailableBuffers int
+	InUseBuffers     int
+	MaxBuffers       int
+}
+
+// Cleanup releases all command buffers
+func (cbp *CommandBufferPool) Cleanup() {
+	cbp.mutex.Lock()
+	defer cbp.mutex.Unlock()
+	
+	// Drain available channel
+	close(cbp.available)
+	for range cbp.available {
+		// Drain remaining buffers
+	}
+	
+	// Release all buffers
+	for _, buffer := range cbp.buffers {
+		if buffer.buffer != nil {
+			// TODO: Call CGO function to release MTLCommandBuffer
+			// cgo_bridge.ReleaseCommandBuffer(buffer.buffer)
+			buffer.buffer = nil
+		}
+	}
+	
+	cbp.buffers = nil
+}

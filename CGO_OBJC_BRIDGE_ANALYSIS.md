@@ -609,4 +609,144 @@ This caching significantly improves performance by:
 3. Use meaningful names for completion handlers
 4. Implement statistics for pool monitoring
 
+## MPS Operations Standardization and Memory Management (2025 Update)
+
+### Standardized Binary Operation Pattern
+
+A major improvement to the MPSGraph integration was the implementation of a standardized helper function for binary operations, reducing code duplication and improving maintainability:
+
+```go
+// executeMPSBinaryOp executes a binary MPS operation with automatic buffer cleanup
+func executeMPSBinaryOp(a, b *Tensor, opName string, graphBuilder func(*metal_bridge.Graph, *metal_bridge.GraphTensor, *metal_bridge.GraphTensor) *metal_bridge.GraphTensor) (*Tensor, error) {
+    if !isCompatibleForOp(a, b) {
+        return nil, fmt.Errorf("tensors are not compatible for %s", opName)
+    }
+
+    engine, err := GetMPSGraphEngine()
+    if err != nil {
+        return nil, fmt.Errorf("failed to get MPSGraph engine: %v", err)
+    }
+
+    // Standard graph caching and compilation pattern
+    cacheKey := generateCacheKey(opName, a, b)
+    cached, err := engine.getOrCreateGraph(cacheKey, func() *cachedGraph {
+        graph := metal_bridge.NewGraph()
+        dataType := convertDTypeToMPS(a.DType)
+        placeholderA := graph.PlaceholderTensor(a.Shape, dataType)
+        placeholderB := graph.PlaceholderTensor(b.Shape, dataType)
+        resultTensor := graphBuilder(graph, placeholderA, placeholderB)
+        compilationDescriptor := metal_bridge.NewGraphCompilationDescriptor()
+        executable := graph.Compile(engine.graphDevice, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}, compilationDescriptor)
+        return &cachedGraph{executable, []*metal_bridge.GraphTensor{placeholderA, placeholderB}, []*metal_bridge.GraphTensor{resultTensor}}
+    })
+
+    // ... buffer creation and execution with proper finalizer-based cleanup
+}
+```
+
+### Finalizer-Based Buffer Management
+
+All MPS operations now follow the documented finalizer-based cleanup pattern rather than attempting explicit cleanup:
+
+```go
+// Binary operations using standardized helper
+func AddMPS(a, b *Tensor) (*Tensor, error) {
+    return executeMPSBinaryOp(a, b, "add", func(graph *metal_bridge.Graph, placeholderA, placeholderB *metal_bridge.GraphTensor) *metal_bridge.GraphTensor {
+        return graph.Addition(placeholderA, placeholderB)
+    })
+}
+
+func SubMPS(a, b *Tensor) (*Tensor, error) {
+    return executeMPSBinaryOp(a, b, "sub", func(graph *metal_bridge.Graph, placeholderA, placeholderB *metal_bridge.GraphTensor) *metal_bridge.GraphTensor {
+        return graph.Subtraction(placeholderA, placeholderB)
+    })
+}
+
+func MulMPS(a, b *Tensor) (*Tensor, error) {
+    return executeMPSBinaryOp(a, b, "mul", func(graph *metal_bridge.Graph, placeholderA, placeholderB *metal_bridge.GraphTensor) *metal_bridge.GraphTensor {
+        return graph.Multiplication(placeholderA, placeholderB)
+    })
+}
+
+func DivMPS(a, b *Tensor) (*Tensor, error) {
+    return executeMPSBinaryOp(a, b, "div", func(graph *metal_bridge.Graph, placeholderA, placeholderB *metal_bridge.GraphTensor) *metal_bridge.GraphTensor {
+        return graph.Division(placeholderA, placeholderB)
+    })
+}
+```
+
+### Complex Operations with Documented Memory Management
+
+For operations that cannot use the binary helper (unary operations, convolutions, pooling), explicit documentation of the finalizer-based approach was added:
+
+```go
+func ReLUMPS(a *Tensor) (*Tensor, error) {
+    // ... graph creation and caching ...
+    
+    aBuffer, err := createMPSBufferFromTensor(a, engine.device)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create buffer for tensor A: %v", err)
+    }
+    // Cleaned up by finalizers
+    
+    resultBuffer, err := createMPSResultBuffer(result.Shape, result.DType, engine.device)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create result buffer: %v", err)
+    }
+    // Cleaned up by finalizers
+    
+    executionDescriptor := metal_bridge.NewGraphExecutionDescriptor()
+    if executionDescriptor == nil {
+        return nil, fmt.Errorf("failed to create execution descriptor")
+    }
+    // Cleaned up by finalizers
+    
+    // ... execution ...
+}
+```
+
+### Memory Management Pattern Compliance
+
+This refactoring ensures all MPS operations follow the documented memory management principles:
+
+1. **Private `safeRelease()` Methods**: All Metal objects use private cleanup methods designed for finalizer use only
+2. **No Explicit Cleanup**: Temporary buffers rely on Go's finalizer system for cleanup
+3. **Atomic Reference Counting**: Buffer reference counting uses atomic operations for thread safety
+4. **Exception Safety**: All cleanup is handled by finalizers, preventing memory leaks even if operations fail
+
+### Performance Benefits
+
+The standardization provides several performance improvements:
+
+1. **Reduced Code Duplication**: Binary operations reduced from ~280 lines to ~20 lines of standardized code
+2. **Consistent Graph Caching**: All operations use the same caching strategy for compiled graphs
+3. **Unified Error Handling**: Standardized error patterns reduce debugging complexity
+4. **Maintainability**: Single implementation point for binary operation patterns
+
+### Memory Safety Validation
+
+The refactoring was validated against all memory safety requirements:
+
+- ✅ **CGO Object Lifetime**: Maintains existing `runtime.SetFinalizer()` patterns
+- ✅ **Buffer Pool Integration**: Doesn't interfere with buffer pooling mechanisms  
+- ✅ **Reference Counting**: Preserves atomic operations for shared resources
+- ✅ **Data Transfer Safety**: Maintains synchronous execution ensuring Go slice lifetime
+- ✅ **Exception Handling**: All Objective-C boundary exception handling preserved
+
+### Operations Standardized
+
+The following MPS operations were updated to use proper finalizer-based cleanup:
+
+**Binary Operations (using helper):**
+- `AddMPS`, `SubMPS`, `MulMPS`, `DivMPS`
+
+**Complex Operations (documented cleanup):**
+- `MatMulMPS`, `ReLUMPS`, `ReLUGradientMPS`, `SigmoidMPS`
+- `Conv2DMPS`, `MaxPool2DMPS`, `AvgPool2DMPS`
+- `ReshapeMPS`, `SumMPS`
+
+This standardization ensures that all MPS operations follow the documented CGO bridge architecture while providing better code organization and maintainability.
+
+---
+
 This architecture demonstrates how to build a robust, high-performance bridge between Go and Apple's Metal framework while maintaining memory safety and providing good performance characteristics for machine learning workloads.

@@ -28,17 +28,35 @@ tasks:
   docs:
     desc: "Produce simple documentation in packages"
     cmds:
-      - task: docs-tensor
-      - task: docs-metal_bridge
+      - task: docs-async
+      - task: docs-cgo_bridge
+      - task: docs-engine
+      - task: docs-memory
+      - task: docs-optimizer
       - task: docs-training
 
-  docs-tensor:
-    dir: ./tensor
+  docs-async:
+    dir: ./async
     cmds:
       - godocdown -output docs.md
 
-  docs-metal_bridge:
-    dir: ./metal_bridge
+  docs-cgo_bridge:
+    dir: ./cgo_bridge
+    cmds:
+      - godocdown -output docs.md
+
+  docs-engine:
+    dir: ./engine
+    cmds:
+      - godocdown -output docs.md
+
+  docs-memory:
+    dir: ./memory
+    cmds:
+      - godocdown -output docs.md
+
+  docs-optimizer:
+    dir: ./optimizer
     cmds:
       - godocdown -output docs.md
 
