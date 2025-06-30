@@ -2932,3 +2932,4 @@ int copy_int32_array_to_metal_buffer(uintptr_t buffer_ptr, int* data, int num_el
         return result;
     }
 }
+
