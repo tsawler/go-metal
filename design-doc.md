@@ -739,7 +739,7 @@ Training Interface:
 
 ### Production Validation Results
 
-- **SGD Training:** 20,000+ batch/s with real loss convergence (0.693034 → 0.693158)
+- **SGD Training:** 20,000+ batch/s with real loss computation (0.693034 → 0.693158 over 3 steps)
 - **Adam Training:** Excellent convergence (0.693147 → 0.693102) with proper momentum tracking
 - **Architecture:** Direct CGO approach maintained with zero performance regression
 
