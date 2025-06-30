@@ -12,9 +12,6 @@
 - **`async/`** - Async data loading and command buffer pooling
 - **`training/`** - User-facing training APIs
 
-### ❌ **UNUSED/LEGACY COMPONENTS:**
-- **`metal_bridge/`** - Legacy wrapper layer (replaced by direct CGO approach)
-- **`legacy/`** - Historical implementations with performance issues
 
 ### 🎯 **ARCHITECTURE PRINCIPLES:**
 1. **Direct CGO Calls** - Single function call per training step (vs 170+ in old approach)
@@ -107,12 +104,6 @@ func (mm *MemoryManager) ReleaseBuffer(buffer unsafe.Pointer) {
 **Problem:** Command buffer pooling uses placeholder operations
 **Impact:** Async command optimization not functional
 **Status:** 🚧 FRAMEWORK COMPLETE - Implementation pending
-
-### 8. **Legacy Code Cleanup** (LOW PRIORITY)
-**Files:** `metal_bridge/` directory (entire directory unused)
-**Problem:** Legacy metal_bridge wrapper layer is no longer used by current implementation
-**Impact:** Code maintenance overhead, potential confusion
-**Status:** 🔄 SAFE TO REMOVE - Current implementation uses direct CGO via cgo_bridge/
 
 ## 🎯 IMMEDIATE ACTION PLAN
 
