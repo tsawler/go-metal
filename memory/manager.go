@@ -93,6 +93,10 @@ type MemoryManager struct {
 	
 	// Pool size tiers (in bytes)
 	poolSizes   []int
+	
+	// Buffer size tracking
+	bufferSizes     map[unsafe.Pointer]int // Maps buffer pointer to its allocated size
+	bufferSizesMutex sync.RWMutex         // Protects bufferSizes map
 }
 
 // PoolKey represents a key for the buffer pool map
@@ -109,9 +113,10 @@ var defaultPoolSizes = []int{
 // NewMemoryManager creates a new memory manager
 func NewMemoryManager(device unsafe.Pointer) *MemoryManager {
 	return &MemoryManager{
-		pools:     make(map[PoolKey]*BufferPool),
-		device:    device,
-		poolSizes: defaultPoolSizes,
+		pools:       make(map[PoolKey]*BufferPool),
+		device:      device,
+		poolSizes:   defaultPoolSizes,
+		bufferSizes: make(map[unsafe.Pointer]int),
 	}
 }
 
@@ -124,7 +129,17 @@ func (mm *MemoryManager) GetBuffer(size int, device DeviceType) (unsafe.Pointer,
 	// Get or create the pool
 	pool := mm.getOrCreatePool(key)
 	
-	return pool.Get()
+	buffer, err := pool.Get()
+	if err != nil {
+		return nil, err
+	}
+	
+	// Track the buffer size
+	mm.bufferSizesMutex.Lock()
+	mm.bufferSizes[buffer] = poolSize
+	mm.bufferSizesMutex.Unlock()
+	
+	return buffer, nil
 }
 
 // ReturnBuffer returns a buffer to the appropriate pool
@@ -146,6 +161,11 @@ func (mm *MemoryManager) ReturnBuffer(buffer unsafe.Pointer, size int, device De
 		// No pool exists, just deallocate
 		deallocateMetalBuffer(buffer)
 	}
+	
+	// Clean up buffer size tracking
+	mm.bufferSizesMutex.Lock()
+	delete(mm.bufferSizes, buffer)
+	mm.bufferSizesMutex.Unlock()
 }
 
 // findPoolSize finds the smallest pool size that can accommodate the request
@@ -271,14 +291,29 @@ func (mm *MemoryManager) AllocateBuffer(size int) unsafe.Pointer {
 	if err != nil {
 		return nil
 	}
+	// Size tracking is already done in GetBuffer
 	return buffer
 }
 
 // ReleaseBuffer is a simple interface for external packages
 func (mm *MemoryManager) ReleaseBuffer(buffer unsafe.Pointer) {
-	// Estimate size based on typical usage - in real implementation,
-	// this would track buffer sizes
-	mm.ReturnBuffer(buffer, 4194304, GPU) // 4MB default
+	if buffer == nil {
+		return
+	}
+	
+	// Look up the actual buffer size
+	mm.bufferSizesMutex.RLock()
+	size, exists := mm.bufferSizes[buffer]
+	mm.bufferSizesMutex.RUnlock()
+	
+	if !exists {
+		// Buffer not tracked - this shouldn't happen in normal operation
+		// Use a reasonable default size and log a warning
+		size = 4194304 // 4MB default as fallback
+		fmt.Printf("Warning: releasing untracked buffer %p, using default size %d\n", buffer, size)
+	}
+	
+	mm.ReturnBuffer(buffer, size, GPU)
 }
 
 // Mock functions for testing when Metal device is not available

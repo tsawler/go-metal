@@ -177,9 +177,9 @@ func (adam *AdamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 
 	adam.StepCount++
 
-	// Execute Adam step using optimized Metal compute kernel
-	// This replaces 170+ individual tensor operations with a single GPU kernel call
-	err := cgo_bridge.ExecuteAdamStep(
+	// Execute Adam step using MPSGraph for optimal GPU performance
+	// This uses Apple's optimized MPSGraph Adam operations instead of CPU fallback
+	err := cgo_bridge.ExecuteAdamStepMPSGraph(
 		adam.device,
 		adam.WeightBuffers,
 		gradientBuffers,

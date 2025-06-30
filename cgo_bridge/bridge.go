@@ -65,8 +65,28 @@ int execute_adam_step(
     int step_count
 );
 
+// MPSGraph-based Adam optimizer for optimal GPU performance
+int execute_adam_step_mpsgraph(
+    uintptr_t device,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* momentum_buffers,
+    uintptr_t* variance_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float beta1,
+    float beta2,
+    float epsilon,
+    float weight_decay,
+    int step_count
+);
+
 // Utility functions for buffer operations
 int zero_metal_buffer(uintptr_t device, uintptr_t buffer, int size);
+
+// MPSGraph-based buffer zeroing for GPU-only buffers
+int zero_metal_buffer_mpsgraph(uintptr_t device, uintptr_t buffer, int size);
 
 // Data transfer functions
 int copy_data_to_metal_buffer(uintptr_t buffer, void* data, int size);
@@ -304,7 +324,69 @@ func DestroyTrainingEngine(engine unsafe.Pointer) {
 	}
 }
 
-// ExecuteAdamStep executes a single Adam optimization step on GPU
+// ExecuteAdamStepMPSGraph executes a single Adam optimization step using MPSGraph for optimal GPU performance
+func ExecuteAdamStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	varianceBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	beta1 float32,
+	beta2 float32,
+	epsilon float32,
+	weightDecay float32,
+	stepCount int,
+) error {
+	if len(weightBuffers) != len(gradientBuffers) ||
+		len(weightBuffers) != len(momentumBuffers) ||
+		len(weightBuffers) != len(varianceBuffers) ||
+		len(weightBuffers) != len(bufferSizes) {
+		return fmt.Errorf("all buffer arrays must have the same length")
+	}
+
+	numWeights := len(weightBuffers)
+
+	// Convert Go slices to C arrays
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cMomentumBuffers := make([]C.uintptr_t, numWeights)
+	cVarianceBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		cMomentumBuffers[i] = C.uintptr_t(uintptr(momentumBuffers[i]))
+		cVarianceBuffers[i] = C.uintptr_t(uintptr(varianceBuffers[i]))
+		cBufferSizes[i] = C.int(bufferSizes[i])
+	}
+
+	result := C.execute_adam_step_mpsgraph(
+		C.uintptr_t(uintptr(device)),
+		&cWeightBuffers[0],
+		&cGradientBuffers[0],
+		&cMomentumBuffers[0],
+		&cVarianceBuffers[0],
+		C.int(numWeights),
+		&cBufferSizes[0],
+		C.float(learningRate),
+		C.float(beta1),
+		C.float(beta2),
+		C.float(epsilon),
+		C.float(weightDecay),
+		C.int(stepCount),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("Adam MPSGraph step failed with error code: %d", result)
+	}
+
+	return nil
+}
+
+// ExecuteAdamStep executes a single Adam optimization step on GPU (legacy CPU-based implementation)
 func ExecuteAdamStep(
 	device unsafe.Pointer,
 	weightBuffers []unsafe.Pointer,
@@ -408,7 +490,7 @@ func ExecuteTrainingStepHybridWithGradients(
 	return float32(lossOut), nil
 }
 
-// ZeroMetalBuffer zeros a Metal buffer
+// ZeroMetalBuffer zeros a Metal buffer (uses CPU for accessible buffers, MPSGraph for GPU-only)
 func ZeroMetalBuffer(device unsafe.Pointer, buffer unsafe.Pointer, size int) error {
 	result := C.zero_metal_buffer(
 		C.uintptr_t(uintptr(device)),
@@ -418,6 +500,21 @@ func ZeroMetalBuffer(device unsafe.Pointer, buffer unsafe.Pointer, size int) err
 
 	if result != 0 {
 		return fmt.Errorf("failed to zero buffer with error code: %d", result)
+	}
+
+	return nil
+}
+
+// ZeroMetalBufferMPSGraph zeros a Metal buffer using MPSGraph (works for all buffer types)
+func ZeroMetalBufferMPSGraph(device unsafe.Pointer, buffer unsafe.Pointer, size int) error {
+	result := C.zero_metal_buffer_mpsgraph(
+		C.uintptr_t(uintptr(device)),
+		C.uintptr_t(uintptr(buffer)),
+		C.int(size),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("failed to zero buffer using MPSGraph with error code: %d", result)
 	}
 
 	return nil
