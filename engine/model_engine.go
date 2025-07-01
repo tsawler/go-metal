@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/layers"
@@ -16,6 +17,114 @@ type ModelTrainingEngine struct {
 	modelSpec       *layers.ModelSpec
 	parameterTensors []*memory.Tensor
 	compiledForModel bool
+	isDynamicEngine  bool // True if using dynamic graph engine, false if using hybrid fallback
+}
+
+// NewModelTrainingEngineDynamic creates a model-based training engine with dynamic graph support
+// This supports any model architecture by building the MPSGraph dynamically from layer specs
+func NewModelTrainingEngineDynamic(
+	modelSpec *layers.ModelSpec,
+	config cgo_bridge.TrainingConfig,
+) (*ModelTrainingEngine, error) {
+	// Validate model compatibility
+	if err := modelSpec.ValidateModelForTrainingEngine(); err != nil {
+		return nil, fmt.Errorf("model validation failed: %v", err)
+	}
+	
+	// Convert model to dynamic layer specifications
+	dynamicSpecs, err := modelSpec.ConvertToDynamicLayerSpecs()
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert model to dynamic specs: %v", err)
+	}
+	
+	// Convert to CGO-compatible format
+	cgoLayerSpecs := make([]cgo_bridge.LayerSpecC, len(dynamicSpecs))
+	for i, spec := range dynamicSpecs {
+		cgoLayerSpecs[i] = cgo_bridge.LayerSpecC{
+			LayerType:       spec.LayerType,
+			Name:            spec.NameBytes,
+			InputShape:      spec.InputShape,
+			InputShapeLen:   spec.InputShapeLen,
+			OutputShape:     spec.OutputShape,
+			OutputShapeLen:  spec.OutputShapeLen,
+			ParamInt:        spec.ParamInt,
+			ParamFloat:      spec.ParamFloat,
+			ParamIntCount:   spec.ParamIntCount,
+			ParamFloatCount: spec.ParamFloatCount,
+		}
+	}
+	
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Metal device: %v", err)
+	}
+	
+	// Initialize global memory manager (required for parameter tensor creation)
+	memory.InitializeGlobalMemoryManager(device)
+	
+	// Create TRUE dynamic training engine using the actual dynamic implementation
+	dynamicEnginePtr, err := cgo_bridge.CreateTrainingEngineDynamic(
+		device,
+		config,
+		cgoLayerSpecs,
+		modelSpec.InputShape,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dynamic training engine: %v", err)
+	}
+	
+	// Create a wrapper MPSTrainingEngine to maintain compatibility
+	baseEngine := &MPSTrainingEngine{
+		device:        device,
+		engine:        dynamicEnginePtr,
+		config:        config,
+		initialized:   true,
+		isDynamic:     true, // This is a dynamic engine
+		adamOptimizer: nil, // Dynamic engine handles optimization externally
+	}
+	
+	// For Adam optimizer, initialize the external optimizer state
+	if config.OptimizerType == cgo_bridge.Adam {
+		adamConfig := optimizer.AdamConfig{
+			LearningRate: config.LearningRate,
+			Beta1:        config.Beta1,
+			Beta2:        config.Beta2,
+			Epsilon:      config.Epsilon,
+			WeightDecay:  config.WeightDecay,
+		}
+		
+		// Get all parameter shapes for Adam initialization (dynamic engine uses all parameters)
+		paramShapes := modelSpec.ParameterShapes
+		adamOptimizer, err := optimizer.NewAdamOptimizer(
+			adamConfig,
+			paramShapes,
+			memory.GetGlobalMemoryManager(),
+			device,
+		)
+		if err != nil {
+			baseEngine.Cleanup()
+			return nil, fmt.Errorf("failed to create Adam optimizer for dynamic engine: %v", err)
+		}
+		baseEngine.adamOptimizer = adamOptimizer
+	}
+	
+	// Create parameter tensors for the model
+	paramTensors, err := modelSpec.CreateParameterTensors()
+	if err != nil {
+		baseEngine.Cleanup()
+		return nil, fmt.Errorf("failed to create parameter tensors: %v", err)
+	}
+	
+	modelEngine := &ModelTrainingEngine{
+		MPSTrainingEngine: baseEngine,
+		modelSpec:         modelSpec,
+		parameterTensors:  paramTensors,
+		compiledForModel:  true, // Dynamic engine compiles during creation
+		isDynamicEngine:   true, // Flag to identify dynamic engines
+	}
+	
+	return modelEngine, nil
 }
 
 // NewModelTrainingEngine creates a model-based training engine
@@ -47,6 +156,7 @@ func NewModelTrainingEngine(
 		modelSpec:         modelSpec,
 		parameterTensors:  paramTensors,
 		compiledForModel:  false,
+		isDynamicEngine:   false, // Using hybrid fallback engine
 	}
 	
 	// Initialize parameters with proper values
@@ -105,6 +215,7 @@ func NewModelTrainingEngineWithAdam(
 		modelSpec:         modelSpec,
 		parameterTensors:  paramTensors,
 		compiledForModel:  false,
+		isDynamicEngine:   false, // Using hybrid fallback engine
 	}
 	
 	// Initialize parameters with proper values
@@ -384,20 +495,69 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdam(
 		return 0, fmt.Errorf("model not compiled for execution")
 	}
 	
-	// Use the existing Adam training step with FC parameters only
-	// The hybrid architecture expects only FC parameters to be passed to the engine
-	// (MPS convolution handles its own weights internally)
-	fcParameters := mte.getFCLayerParameters()
-	if len(fcParameters) == 0 {
-		return 0, fmt.Errorf("no FC layer parameters found")
+	if mte.isDynamicEngine {
+		// Dynamic engine uses external Adam optimization with gradient extraction
+		return mte.executeAdamStepDynamic(inputTensor, labelTensor)
+	} else {
+		// Hybrid fallback engine uses built-in Adam optimization
+		fcParameters := mte.getFCLayerParameters()
+		if len(fcParameters) == 0 {
+			return 0, fmt.Errorf("no FC layer parameters found")
+		}
+		
+		// Execute using proven Adam architecture
+		return mte.MPSTrainingEngine.ExecuteStepHybridFullWithAdam(
+			inputTensor,
+			labelTensor,
+			fcParameters,
+		)
+	}
+}
+
+// executeAdamStepDynamic executes Adam optimization for dynamic engines using the dedicated dynamic training step
+func (mte *ModelTrainingEngine) executeAdamStepDynamic(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	// The dynamic engine has its own complete graph with loss computation
+	// Use the dedicated dynamic training step function that computes real loss
+	
+	// Get all parameter tensors for the dynamic engine (it uses all parameters, not just FC)
+	allParameters := mte.parameterTensors
+	if len(allParameters) == 0 {
+		return 0, fmt.Errorf("no parameter tensors found for dynamic engine")
 	}
 	
-	// Execute using proven Adam architecture
-	return mte.MPSTrainingEngine.ExecuteStepHybridFullWithAdam(
-		inputTensor,
-		labelTensor,
-		fcParameters,
+	// Convert parameter tensors to weight buffers for CGO call
+	weightBuffers := make([]unsafe.Pointer, len(allParameters))
+	for i, tensor := range allParameters {
+		if tensor == nil {
+			return 0, fmt.Errorf("parameter tensor %d is nil", i)
+		}
+		weightBuffers[i] = tensor.MetalBuffer()
+	}
+	
+	// Get batch size from input tensor shape
+	inputShape := inputTensor.Shape()
+	if len(inputShape) == 0 {
+		return 0, fmt.Errorf("input tensor has no shape")
+	}
+	batchSize := inputShape[0]
+	
+	// Use the dedicated dynamic training step with real loss computation
+	return cgo_bridge.ExecuteTrainingStepDynamic(
+		mte.MPSTrainingEngine.engine,
+		inputTensor.MetalBuffer(),
+		labelTensor.MetalBuffer(),
+		weightBuffers,
+		mte.config.LearningRate,
+		batchSize,
 	)
+}
+
+// getAllParameterTensors returns all parameter tensors for dynamic inference
+func (mte *ModelTrainingEngine) getAllParameterTensors() []*memory.Tensor {
+	return mte.parameterTensors
 }
 
 // getFCLayerParameters extracts the fully connected layer parameters for hybrid execution
@@ -503,4 +663,80 @@ func (mte *ModelTrainingEngine) Cleanup() {
 	}
 	
 	mte.compiledForModel = false
+}
+
+// ExecuteInference performs forward-only pass returning model predictions
+// Conforms to design requirements: single CGO call, GPU-resident, shared resources
+func (mte *ModelTrainingEngine) ExecuteInference(
+	inputTensor *memory.Tensor,
+	batchSize int,
+) (*cgo_bridge.InferenceResult, error) {
+	// Validate model is compiled
+	if !mte.compiledForModel {
+		return nil, fmt.Errorf("model not compiled for execution")
+	}
+	
+	// Validate input tensor
+	if inputTensor == nil {
+		return nil, fmt.Errorf("input tensor is nil")
+	}
+	
+	if batchSize <= 0 {
+		return nil, fmt.Errorf("invalid batch size: %d", batchSize)
+	}
+	
+	// Extract parameters based on engine type
+	var weightBuffers []unsafe.Pointer
+	if mte.MPSTrainingEngine.isDynamic {
+		// Dynamic engines need ALL parameters in order
+		allParameters := mte.getAllParameterTensors()
+		if len(allParameters) == 0 {
+			return nil, fmt.Errorf("no parameters found for dynamic inference")
+		}
+		
+		weightBuffers = make([]unsafe.Pointer, len(allParameters))
+		for i, tensor := range allParameters {
+			if tensor == nil {
+				return nil, fmt.Errorf("parameter tensor %d is nil", i)
+			}
+			weightBuffers[i] = tensor.MetalBuffer()
+		}
+	} else {
+		// Hybrid engines only need FC layer parameters
+		fcParameters := mte.getFCLayerParameters()
+		if len(fcParameters) == 0 {
+			return nil, fmt.Errorf("no FC layer parameters found for inference")
+		}
+		
+		weightBuffers = make([]unsafe.Pointer, len(fcParameters))
+		for i, tensor := range fcParameters {
+			if tensor == nil {
+				return nil, fmt.Errorf("FC parameter tensor %d is nil", i)
+			}
+			weightBuffers[i] = tensor.MetalBuffer()
+		}
+	}
+	
+	// Calculate output dimensions from model spec
+	outputShape := mte.modelSpec.OutputShape
+	if len(outputShape) < 2 {
+		return nil, fmt.Errorf("invalid model output shape: %v", outputShape)
+	}
+	numClasses := outputShape[len(outputShape)-1] // Last dimension is number of classes
+	
+	// Single CGO call for complete inference (design compliant)
+	result, err := cgo_bridge.ExecuteInference(
+		mte.MPSTrainingEngine.engine,
+		inputTensor.MetalBuffer(),
+		weightBuffers,
+		batchSize,
+		numClasses,
+		mte.MPSTrainingEngine.isDynamic, // Pass dynamic engine flag
+	)
+	
+	if err != nil {
+		return nil, fmt.Errorf("inference execution failed: %v", err)
+	}
+	
+	return result, nil
 }

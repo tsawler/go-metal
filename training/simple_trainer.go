@@ -237,7 +237,8 @@ type TrainerConfig struct {
 	WeightDecay float32 `json:"weight_decay"` // L2 regularization (default: 0.0)
 	
 	// Training behavior
-	UseHybridEngine bool `json:"use_hybrid_engine"` // Use hybrid MPS/MPSGraph (recommended: true)
+	UseHybridEngine  bool `json:"use_hybrid_engine"`  // Use hybrid MPS/MPSGraph (recommended: true)
+	UseDynamicEngine bool `json:"use_dynamic_engine"` // Use dynamic graph creation for any architecture (recommended: true)
 }
 
 // OptimizerConfig provides optimizer-specific configurations

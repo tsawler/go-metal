@@ -291,16 +291,21 @@ func (mb *ModelBuilder) computeDenseInfo(layer *LayerSpec, inputShape []int) ([]
 		useBias = bias
 	}
 
-	// Compute input size from last dimension
-	inputSize := inputShape[len(inputShape)-1]
+	// Compute input size by flattening all dimensions except batch
+	// For 2D input [batch, features]: input_size = features
+	// For 4D input [batch, channels, height, width]: input_size = channels * height * width
+	inputSize := 1
+	for i := 1; i < len(inputShape); i++ {
+		inputSize *= inputShape[i]
+	}
 
 	// Update layer parameters with computed input size
 	layer.Parameters["input_size"] = inputSize
 
-	// Output shape: same as input but last dimension becomes outputSize
-	outputShape := make([]int, len(inputShape))
-	copy(outputShape, inputShape)
-	outputShape[len(outputShape)-1] = outputSize
+	// Output shape: Dense layer always outputs 2D [batch, outputSize]
+	// regardless of input dimensionality (handles automatic flattening)
+	batchSize := inputShape[0]
+	outputShape := []int{batchSize, outputSize}
 
 	// Parameter shapes: weights + optional bias
 	var paramShapes [][]int
@@ -515,4 +520,282 @@ func (ms *ModelSpec) GetTrainingEngineConfig() (map[string]interface{}, error) {
 	}
 
 	return config, nil
+}
+
+// SerializeForCGO converts ModelSpec to CGO-compatible format
+func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
+	if !ms.Compiled {
+		return nil, fmt.Errorf("model must be compiled before serialization")
+	}
+	
+	// Convert input and output shapes
+	inputShape := make([]int32, len(ms.InputShape))
+	for i, dim := range ms.InputShape {
+		inputShape[i] = int32(dim)
+	}
+	
+	outputShape := make([]int32, len(ms.OutputShape))
+	for i, dim := range ms.OutputShape {
+		outputShape[i] = int32(dim)
+	}
+	
+	// Convert layers
+	layers := make([]LayerSpecC, len(ms.Layers))
+	for i, layer := range ms.Layers {
+		cLayer := LayerSpecC{
+			LayerType: int32(layer.Type),
+			Name:      layer.Name,
+		}
+		
+		// Convert input shape
+		if len(layer.InputShape) > 0 {
+			cLayer.InputShape = make([]int32, len(layer.InputShape))
+			for j, dim := range layer.InputShape {
+				cLayer.InputShape[j] = int32(dim)
+			}
+		}
+		
+		// Convert output shape
+		if len(layer.OutputShape) > 0 {
+			cLayer.OutputShape = make([]int32, len(layer.OutputShape))
+			for j, dim := range layer.OutputShape {
+				cLayer.OutputShape[j] = int32(dim)
+			}
+		}
+		
+		// Convert layer-specific parameters based on type
+		switch layer.Type {
+		case Conv2D:
+			// Conv2D parameters: input_channels, output_channels, kernel_size, stride, padding, use_bias
+			cLayer.ParamInt = []int32{
+				int32(getIntParam(layer.Parameters, "input_channels", 0)),
+				int32(getIntParam(layer.Parameters, "output_channels", 0)),
+				int32(getIntParam(layer.Parameters, "kernel_size", 0)),
+				int32(getIntParam(layer.Parameters, "stride", 1)),
+				int32(getIntParam(layer.Parameters, "padding", 0)),
+			}
+			if getBoolParam(layer.Parameters, "use_bias", false) {
+				cLayer.ParamInt = append(cLayer.ParamInt, 1)
+			} else {
+				cLayer.ParamInt = append(cLayer.ParamInt, 0)
+			}
+			
+		case Dense:
+			// Dense parameters: input_size, output_size, use_bias
+			cLayer.ParamInt = []int32{
+				int32(getIntParam(layer.Parameters, "input_size", 0)),
+				int32(getIntParam(layer.Parameters, "output_size", 0)),
+			}
+			if getBoolParam(layer.Parameters, "use_bias", false) {
+				cLayer.ParamInt = append(cLayer.ParamInt, 1)
+			} else {
+				cLayer.ParamInt = append(cLayer.ParamInt, 0)
+			}
+			
+		case Softmax:
+			// Softmax parameters: axis
+			cLayer.ParamInt = []int32{
+				int32(getIntParam(layer.Parameters, "axis", -1)),
+			}
+			
+		case ReLU:
+			// ReLU has no parameters
+			break
+			
+		default:
+			return nil, fmt.Errorf("unsupported layer type for serialization: %s", layer.Type.String())
+		}
+		
+		layers[i] = cLayer
+	}
+	
+	return &ModelSpecC{
+		Layers:      layers,
+		InputShape:  inputShape,
+		OutputShape: outputShape,
+	}, nil
+}
+
+// Helper functions for parameter extraction
+func getIntParam(params map[string]interface{}, key string, defaultValue int) int {
+	if val, exists := params[key]; exists {
+		if intVal, ok := val.(int); ok {
+			return intVal
+		}
+	}
+	return defaultValue
+}
+
+func getBoolParam(params map[string]interface{}, key string, defaultValue bool) bool {
+	if val, exists := params[key]; exists {
+		if boolVal, ok := val.(bool); ok {
+			return boolVal
+		}
+	}
+	return defaultValue
+}
+
+// ModelSpecC represents a CGO-compatible model specification
+// This needs to be defined here to avoid circular imports
+type ModelSpecC struct {
+	Layers      []LayerSpecC
+	InputShape  []int32
+	OutputShape []int32
+}
+
+type LayerSpecC struct {
+	LayerType   int32
+	Name        string
+	InputShape  []int32
+	OutputShape []int32
+	ParamInt    []int32
+	ParamFloat  []float32
+}
+
+// ConvertToDynamicLayerSpecs converts ModelSpec to dynamic engine layer specifications
+// This is used by the true dynamic engine implementation for any architecture support
+func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
+	if !ms.Compiled {
+		return nil, fmt.Errorf("model must be compiled before conversion to dynamic specs")
+	}
+
+	specs := make([]DynamicLayerSpec, len(ms.Layers))
+	currentShape := ms.InputShape
+
+	for i, layer := range ms.Layers {
+		spec := DynamicLayerSpec{
+			Name: layer.Name,
+		}
+
+		// Copy name as bytes for C compatibility
+		nameBytes := []byte(layer.Name)
+		copy(spec.NameBytes[:], nameBytes)
+
+		// Set input shape
+		spec.InputShape, spec.InputShapeLen = copyShapeToArray(currentShape)
+
+		switch layer.Type {
+		case Dense:
+			spec.LayerType = 0 // Dense = 0 in C
+			
+			inputSize := getIntParam(layer.Parameters, "input_size", 0)
+			outputSize := getIntParam(layer.Parameters, "output_size", 0)
+			useBias := getBoolParam(layer.Parameters, "use_bias", true)
+			
+			spec.ParamInt[0] = int32(inputSize)
+			spec.ParamInt[1] = int32(outputSize)
+			spec.ParamInt[2] = boolToInt32(useBias)
+			spec.ParamIntCount = 3
+			
+			// Update current shape for next layer
+			currentShape = []int{currentShape[0], outputSize}
+
+		case Conv2D:
+			spec.LayerType = 1 // Conv2D = 1 in C
+			
+			inputChannels := getIntParam(layer.Parameters, "input_channels", 0)
+			outputChannels := getIntParam(layer.Parameters, "output_channels", 0)
+			kernelSize := getIntParam(layer.Parameters, "kernel_size", 3)
+			stride := getIntParam(layer.Parameters, "stride", 1)
+			padding := getIntParam(layer.Parameters, "padding", 0)
+			useBias := getBoolParam(layer.Parameters, "use_bias", true)
+			
+			spec.ParamInt[0] = int32(inputChannels)
+			spec.ParamInt[1] = int32(outputChannels)
+			spec.ParamInt[2] = int32(kernelSize)
+			spec.ParamInt[3] = int32(stride)
+			spec.ParamInt[4] = int32(padding)
+			spec.ParamInt[5] = boolToInt32(useBias)
+			spec.ParamIntCount = 6
+			
+			// Calculate output spatial dimensions
+			if len(currentShape) >= 4 {
+				inputH := currentShape[2]
+				inputW := currentShape[3]
+				outputH := (inputH + 2*padding - kernelSize) / stride + 1
+				outputW := (inputW + 2*padding - kernelSize) / stride + 1
+				currentShape = []int{currentShape[0], outputChannels, outputH, outputW}
+			}
+
+		case ReLU:
+			spec.LayerType = 2 // ReLU = 2 in C
+			spec.ParamIntCount = 0
+			spec.ParamFloatCount = 0
+			// Shape unchanged for ReLU
+
+		case Softmax:
+			spec.LayerType = 3 // Softmax = 3 in C
+			
+			axis := getIntParam(layer.Parameters, "axis", -1)
+			spec.ParamInt[0] = int32(axis)
+			spec.ParamIntCount = 1
+			// Shape unchanged for Softmax
+
+		default:
+			return nil, fmt.Errorf("unsupported layer type for dynamic conversion: %s", layer.Type.String())
+		}
+
+		// Set output shape
+		spec.OutputShape, spec.OutputShapeLen = copyShapeToArray(currentShape)
+		specs[i] = spec
+	}
+
+	return specs, nil
+}
+
+// DynamicLayerSpec represents a layer specification compatible with the dynamic engine
+type DynamicLayerSpec struct {
+	LayerType       int32
+	Name            string
+	NameBytes       [64]byte  // C-compatible name storage
+	InputShape      [4]int32
+	InputShapeLen   int32
+	OutputShape     [4]int32
+	OutputShapeLen  int32
+	ParamInt        [8]int32
+	ParamFloat      [8]float32
+	ParamIntCount   int32
+	ParamFloatCount int32
+}
+
+// Helper functions
+func copyShapeToArray(shape []int) ([4]int32, int32) {
+	var arr [4]int32
+	count := int32(len(shape))
+	if count > 4 {
+		count = 4
+	}
+	for i := 0; i < int(count); i++ {
+		arr[i] = int32(shape[i])
+	}
+	return arr, count
+}
+
+func boolToInt32(b bool) int32 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// ConvertToCGOLayerSpecs converts DynamicLayerSpec array to CGO-compatible format
+func ConvertToCGOLayerSpecs(dynamicSpecs []DynamicLayerSpec) []interface{} {
+	// We need to import the cgo_bridge package to use LayerSpecC
+	// For now, return interface{} and handle conversion in the engine
+	specs := make([]interface{}, len(dynamicSpecs))
+	for i, spec := range dynamicSpecs {
+		specs[i] = map[string]interface{}{
+			"layer_type":        spec.LayerType,
+			"name_bytes":        spec.NameBytes,
+			"input_shape":       spec.InputShape,
+			"input_shape_len":   spec.InputShapeLen,
+			"output_shape":      spec.OutputShape,
+			"output_shape_len":  spec.OutputShapeLen,
+			"param_int":         spec.ParamInt,
+			"param_float":       spec.ParamFloat,
+			"param_int_count":   spec.ParamIntCount,
+			"param_float_count": spec.ParamFloatCount,
+		}
+	}
+	return specs
 }

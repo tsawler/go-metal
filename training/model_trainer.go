@@ -50,8 +50,12 @@ func NewModelTrainer(
 	var modelEngine *engine.ModelTrainingEngine
 	var err error
 	
-	if config.OptimizerType == cgo_bridge.Adam {
-		// Create with Adam optimizer
+	// Choose engine type based on configuration
+	if config.UseDynamicEngine {
+		// Use new dynamic engine for any architecture
+		modelEngine, err = engine.NewModelTrainingEngineDynamic(modelSpec, bridgeConfig)
+	} else if config.OptimizerType == cgo_bridge.Adam {
+		// Create with Adam optimizer (legacy hybrid approach)
 		adamConfig := map[string]interface{}{
 			"learning_rate": config.LearningRate,
 			"beta1":         config.Beta1,
@@ -62,7 +66,7 @@ func NewModelTrainer(
 		
 		modelEngine, err = engine.NewModelTrainingEngineWithAdam(modelSpec, bridgeConfig, adamConfig)
 	} else {
-		// Create with SGD optimizer
+		// Create with SGD optimizer (legacy hybrid approach)
 		modelEngine, err = engine.NewModelTrainingEngine(modelSpec, bridgeConfig)
 	}
 	
@@ -356,4 +360,83 @@ func validateTrainerConfig(config TrainerConfig) error {
 	}
 	
 	return nil
+}
+
+// InferBatch performs inference on a batch of data
+// Conforms to design requirements: single CGO call, GPU-resident, shared resources
+func (mt *ModelTrainer) InferBatch(
+	inputData []float32,
+	inputShape []int,
+) (*cgo_bridge.InferenceResult, error) {
+	// Validate inputs
+	if len(inputData) == 0 {
+		return nil, fmt.Errorf("input data is empty")
+	}
+	
+	if len(inputShape) < 2 {
+		return nil, fmt.Errorf("input shape must have at least 2 dimensions, got %v", inputShape)
+	}
+	
+	batchSize := inputShape[0]
+	if batchSize <= 0 {
+		return nil, fmt.Errorf("invalid batch size: %d", batchSize)
+	}
+	
+	// Create input tensor and copy data to GPU (GPU-resident everything principle)
+	inputTensor, err := memory.NewTensor(inputShape, memory.Float32, memory.GPU)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create input tensor: %v", err)
+	}
+	defer inputTensor.Release()
+	
+	// Copy input data to GPU (minimal CPU-GPU transfers)
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(
+		inputTensor.MetalBuffer(), 
+		inputData,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy input data to GPU: %v", err)
+	}
+	
+	// Execute inference using single CGO call (design compliant)
+	return mt.modelEngine.ExecuteInference(inputTensor, batchSize)
+}
+
+// CalculateAccuracy computes accuracy from inference results and true labels
+// Uses CPU-based argmax for final scalar metric (design compliant)
+func (mt *ModelTrainer) CalculateAccuracy(
+	predictions []float32,
+	trueLabels []int32,
+	batchSize int,
+	numClasses int,
+) float64 {
+	if len(predictions) != batchSize*numClasses {
+		return 0.0 // Invalid predictions array
+	}
+	
+	if len(trueLabels) != batchSize {
+		return 0.0 // Invalid labels array
+	}
+	
+	correctPredictions := 0
+	
+	for i := 0; i < batchSize; i++ {
+		// Find predicted class (argmax) - CPU computation for scalar result
+		maxIdx := 0
+		maxVal := predictions[i*numClasses]
+		
+		for j := 1; j < numClasses; j++ {
+			if predictions[i*numClasses+j] > maxVal {
+				maxVal = predictions[i*numClasses+j]
+				maxIdx = j
+			}
+		}
+		
+		// Check if prediction matches true label
+		if int32(maxIdx) == trueLabels[i] {
+			correctPredictions++
+		}
+	}
+	
+	return float64(correctPredictions) / float64(batchSize)
 }

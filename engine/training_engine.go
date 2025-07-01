@@ -16,6 +16,7 @@ type MPSTrainingEngine struct {
 	engine       unsafe.Pointer           // Native training engine
 	config       cgo_bridge.TrainingConfig
 	initialized  bool
+	isDynamic    bool                     // True if using dynamic engine, false for hybrid
 	adamOptimizer *optimizer.AdamOptimizerState // Optional Adam optimizer
 }
 
@@ -41,6 +42,7 @@ func NewMPSTrainingEngine(config cgo_bridge.TrainingConfig) (*MPSTrainingEngine,
 		engine:        engine,
 		config:        config,
 		initialized:   true,
+		isDynamic:     false, // Regular hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
 	}, nil
 }
@@ -68,6 +70,7 @@ func NewMPSTrainingEngineConstantWeights(config cgo_bridge.TrainingConfig) (*MPS
 		engine:        engine,
 		config:        config,
 		initialized:   true,
+		isDynamic:     false, // Constant weights hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
 	}, nil
 }
@@ -95,6 +98,7 @@ func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig) (*MPSTrainingE
 		engine:        engine,
 		config:        config,
 		initialized:   true,
+		isDynamic:     false, // Constant weights hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
 	}, nil
 }

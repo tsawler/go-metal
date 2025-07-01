@@ -223,6 +223,114 @@ func (e *MPSTrainingEngine) UpdateAdamLearningRate(newLR float32) error
 ```
 UpdateAdamLearningRate updates the Adam optimizer learning rate
 
+#### type ModelTrainingEngine
+
+```go
+type ModelTrainingEngine struct {
+	*MPSTrainingEngine
+}
+```
+
+ModelTrainingEngine extends the existing MPSTrainingEngine with layer-based
+model support This maintains the proven single-CGO-call architecture while
+adding layer abstraction
+
+#### func  NewModelTrainingEngine
+
+```go
+func NewModelTrainingEngine(
+	modelSpec *layers.ModelSpec,
+	config cgo_bridge.TrainingConfig,
+) (*ModelTrainingEngine, error)
+```
+NewModelTrainingEngine creates a model-based training engine This integrates
+with the existing high-performance TrainingEngine architecture
+
+#### func  NewModelTrainingEngineDynamic
+
+```go
+func NewModelTrainingEngineDynamic(
+	modelSpec *layers.ModelSpec,
+	config cgo_bridge.TrainingConfig,
+) (*ModelTrainingEngine, error)
+```
+NewModelTrainingEngineDynamic creates a model-based training engine with dynamic
+graph support This supports any model architecture by building the MPSGraph
+dynamically from layer specs
+
+#### func  NewModelTrainingEngineWithAdam
+
+```go
+func NewModelTrainingEngineWithAdam(
+	modelSpec *layers.ModelSpec,
+	config cgo_bridge.TrainingConfig,
+	adamConfig map[string]interface{},
+) (*ModelTrainingEngine, error)
+```
+NewModelTrainingEngineWithAdam creates a model-based training engine with Adam
+optimizer
+
+#### func (*ModelTrainingEngine) Cleanup
+
+```go
+func (mte *ModelTrainingEngine) Cleanup()
+```
+Cleanup releases all resources including model parameters
+
+#### func (*ModelTrainingEngine) ExecuteInference
+
+```go
+func (mte *ModelTrainingEngine) ExecuteInference(
+	inputTensor *memory.Tensor,
+	batchSize int,
+) (*cgo_bridge.InferenceResult, error)
+```
+ExecuteInference performs forward-only pass returning model predictions Conforms
+to design requirements: single CGO call, GPU-resident, shared resources
+
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStep
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStep(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	learningRate float32,
+) (float32, error)
+```
+ExecuteModelTrainingStep executes a complete model training step This maintains
+the single-CGO-call principle while supporting flexible layer models
+
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepWithAdam
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdam(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error)
+```
+ExecuteModelTrainingStepWithAdam executes model training with Adam optimizer
+
+#### func (*ModelTrainingEngine) GetModelSpec
+
+```go
+func (mte *ModelTrainingEngine) GetModelSpec() *layers.ModelSpec
+```
+GetModelSpec returns the model specification
+
+#### func (*ModelTrainingEngine) GetModelSummary
+
+```go
+func (mte *ModelTrainingEngine) GetModelSummary() string
+```
+GetModelSummary returns a human-readable model summary
+
+#### func (*ModelTrainingEngine) GetParameterTensors
+
+```go
+func (mte *ModelTrainingEngine) GetParameterTensors() []*memory.Tensor
+```
+GetParameterTensors returns all model parameter tensors
+
 #### type TrainingStep
 
 ```go

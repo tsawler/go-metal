@@ -103,6 +103,64 @@ int execute_training_step_hybrid_with_gradients(
     int num_weights,
     float* loss_out
 );
+
+// Forward-only inference that returns predictions
+int execute_inference_hybrid(
+    uintptr_t engine,
+    uintptr_t input_buffer,
+    uintptr_t* weight_buffers,
+    int num_weights,
+    float* predictions_out,
+    int batch_size,
+    int num_classes
+);
+
+// Dynamic inference using the same graph as training (forward pass only)
+int execute_inference_dynamic(
+    uintptr_t engine,
+    uintptr_t input_buffer,
+    uintptr_t* weight_buffers,
+    int num_weights,
+    float* predictions_out,
+    int batch_size,
+    int num_classes
+);
+
+// Dynamic graph creation from model specification
+typedef struct {
+    int layer_type;          // 0=Dense, 1=Conv2D, 2=ReLU, 3=Softmax
+    char name[64];           // Layer name
+    int input_shape[4];      // Input dimensions [batch, channels, height, width]
+    int input_shape_len;     // Number of valid dimensions
+    int output_shape[4];     // Output dimensions
+    int output_shape_len;    // Number of valid dimensions
+    
+    // Layer-specific parameters
+    int param_int[8];        // Integer parameters (e.g., kernel_size, stride, padding)
+    float param_float[8];    // Float parameters (e.g., dropout_rate)
+    int param_int_count;     // Number of valid int parameters
+    int param_float_count;   // Number of valid float parameters
+} layer_spec_c_t;
+
+uintptr_t create_training_engine_dynamic(
+    uintptr_t device,
+    training_config_t* config,
+    layer_spec_c_t* layers,
+    int num_layers,
+    int* input_shape,
+    int input_shape_len
+);
+
+int execute_training_step_dynamic(
+    uintptr_t engine,
+    uintptr_t input_buffer,
+    uintptr_t label_buffer,
+    uintptr_t* weight_buffers,
+    int num_weights,
+    float learning_rate,
+    int batch_size,
+    float* loss_out
+);
 */
 import "C"
 import (
@@ -575,4 +633,221 @@ func CopyDataToMetalBuffer(buffer unsafe.Pointer, data []byte) error {
 	}
 
 	return nil
+}
+
+// InferenceResult contains model predictions and metadata
+type InferenceResult struct {
+	Predictions []float32 // Model output logits/probabilities [batch_size * num_classes]
+	BatchSize   int       // Actual batch size processed
+	OutputShape []int     // Shape of prediction tensor [batch_size, num_classes]
+	Success     bool      // Inference execution status
+}
+
+// ExecuteInference performs forward-only pass and returns predictions
+// Conforms to design requirements: single CGO call, GPU-resident, shared resources
+func ExecuteInference(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	batchSize int,
+	numClasses int,
+	isDynamic bool,
+) (*InferenceResult, error) {
+	// Validate inputs
+	if engine == nil || inputBuffer == nil {
+		return nil, fmt.Errorf("engine or input buffer is nil")
+	}
+	
+	if batchSize <= 0 || numClasses <= 0 {
+		return nil, fmt.Errorf("invalid batch size (%d) or num classes (%d)", batchSize, numClasses)
+	}
+
+	// Allocate output buffer for predictions (CPU-accessible for result extraction)
+	predictionsSize := batchSize * numClasses
+	predictions := make([]float32, predictionsSize)
+
+	// Convert Go slice to C array for weight buffers
+	var cWeightBuffers *C.uintptr_t
+	if len(weightBuffers) > 0 {
+		cWeights := make([]C.uintptr_t, len(weightBuffers))
+		for i, buf := range weightBuffers {
+			cWeights[i] = C.uintptr_t(uintptr(buf))
+		}
+		cWeightBuffers = &cWeights[0]
+	}
+
+	// Single CGO call for complete inference (design compliant)
+	// Choose between hybrid and dynamic inference based on engine type
+	var result C.int
+	if isDynamic {
+		result = C.execute_inference_dynamic(
+			C.uintptr_t(uintptr(engine)),
+			C.uintptr_t(uintptr(inputBuffer)),
+			cWeightBuffers,
+			C.int(len(weightBuffers)),
+			(*C.float)(unsafe.Pointer(&predictions[0])),
+			C.int(batchSize),
+			C.int(numClasses),
+		)
+	} else {
+		result = C.execute_inference_hybrid(
+			C.uintptr_t(uintptr(engine)),
+			C.uintptr_t(uintptr(inputBuffer)),
+			cWeightBuffers,
+			C.int(len(weightBuffers)),
+			(*C.float)(unsafe.Pointer(&predictions[0])),
+			C.int(batchSize),
+			C.int(numClasses),
+		)
+	}
+
+	if result != 0 {
+		return nil, fmt.Errorf("inference execution failed with error code: %d", result)
+	}
+
+	return &InferenceResult{
+		Predictions: predictions,
+		BatchSize:   batchSize,
+		OutputShape: []int{batchSize, numClasses},
+		Success:     true,
+	}, nil
+}
+
+// LayerSpecC represents a C-compatible layer specification
+type LayerSpecC struct {
+	LayerType       int32
+	Name            [64]byte  // Fixed-size array for C compatibility
+	InputShape      [4]int32
+	InputShapeLen   int32
+	OutputShape     [4]int32
+	OutputShapeLen  int32
+	ParamInt        [8]int32
+	ParamFloat      [8]float32
+	ParamIntCount   int32
+	ParamFloatCount int32
+}
+
+// CreateTrainingEngineDynamic creates a training engine with dynamic graph from model specification
+func CreateTrainingEngineDynamic(
+	device unsafe.Pointer,
+	config TrainingConfig,
+	layerSpecs []LayerSpecC,
+	inputShape []int,
+) (unsafe.Pointer, error) {
+	if len(layerSpecs) == 0 {
+		return nil, fmt.Errorf("no layer specifications provided")
+	}
+	
+	if len(inputShape) == 0 {
+		return nil, fmt.Errorf("no input shape provided")
+	}
+
+	// Convert Go training config to C
+	cConfig := C.training_config_t{
+		learning_rate:  C.float(config.LearningRate),
+		beta1:         C.float(config.Beta1),
+		beta2:         C.float(config.Beta2),
+		weight_decay:  C.float(config.WeightDecay),
+		epsilon:       C.float(config.Epsilon),
+		optimizer_type: C.int(config.OptimizerType),
+	}
+
+	// Convert Go layer specs to C array
+	cLayerSpecs := make([]C.layer_spec_c_t, len(layerSpecs))
+	for i, spec := range layerSpecs {
+		cLayerSpecs[i] = C.layer_spec_c_t{
+			layer_type:        C.int(spec.LayerType),
+			input_shape_len:   C.int(spec.InputShapeLen),
+			output_shape_len:  C.int(spec.OutputShapeLen),
+			param_int_count:   C.int(spec.ParamIntCount),
+			param_float_count: C.int(spec.ParamFloatCount),
+		}
+
+		// Copy name (null-terminated string)
+		nameLen := 0
+		for j, b := range spec.Name {
+			if b == 0 {
+				break
+			}
+			cLayerSpecs[i].name[j] = C.char(b)
+			nameLen = j + 1
+		}
+		if nameLen < 64 {
+			cLayerSpecs[i].name[nameLen] = 0 // Ensure null termination
+		}
+
+		// Copy arrays
+		for j := 0; j < int(spec.InputShapeLen) && j < 4; j++ {
+			cLayerSpecs[i].input_shape[j] = C.int(spec.InputShape[j])
+		}
+		for j := 0; j < int(spec.OutputShapeLen) && j < 4; j++ {
+			cLayerSpecs[i].output_shape[j] = C.int(spec.OutputShape[j])
+		}
+		for j := 0; j < int(spec.ParamIntCount) && j < 8; j++ {
+			cLayerSpecs[i].param_int[j] = C.int(spec.ParamInt[j])
+		}
+		for j := 0; j < int(spec.ParamFloatCount) && j < 8; j++ {
+			cLayerSpecs[i].param_float[j] = C.float(spec.ParamFloat[j])
+		}
+	}
+
+	// Convert input shape to C array
+	cInputShape := make([]C.int, len(inputShape))
+	for i, dim := range inputShape {
+		cInputShape[i] = C.int(dim)
+	}
+
+	// Call C function to create dynamic engine
+	engine := C.create_training_engine_dynamic(
+		C.uintptr_t(uintptr(device)),
+		&cConfig,
+		&cLayerSpecs[0],
+		C.int(len(layerSpecs)),
+		&cInputShape[0],
+		C.int(len(inputShape)),
+	)
+
+	if engine == 0 {
+		return nil, fmt.Errorf("failed to create dynamic training engine")
+	}
+
+	return unsafe.Pointer(uintptr(engine)), nil
+}
+
+// ExecuteTrainingStepDynamic executes a training step using dynamic engine with real loss computation
+func ExecuteTrainingStepDynamic(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	learningRate float32,
+	batchSize int,
+) (float32, error) {
+	// Convert weight buffers to C array
+	var cWeightBuffers *C.uintptr_t
+	if len(weightBuffers) > 0 {
+		cWeights := make([]C.uintptr_t, len(weightBuffers))
+		for i, buf := range weightBuffers {
+			cWeights[i] = C.uintptr_t(uintptr(buf))
+		}
+		cWeightBuffers = &cWeights[0]
+	}
+
+	var lossOut C.float
+	result := C.execute_training_step_dynamic(
+		C.uintptr_t(uintptr(engine)),
+		C.uintptr_t(uintptr(inputBuffer)),
+		C.uintptr_t(uintptr(labelBuffer)),
+		cWeightBuffers,
+		C.int(len(weightBuffers)),
+		C.float(learningRate),
+		C.int(batchSize),
+		&lossOut,
+	)
+
+	if result != 0 {
+		return 0, fmt.Errorf("dynamic training step failed with error code: %d", result)
+	}
+
+	return float32(lossOut), nil
 }

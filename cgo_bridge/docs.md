@@ -55,6 +55,19 @@ func CreateTrainingEngineConstantWeights(device unsafe.Pointer, config TrainingC
 CreateTrainingEngineConstantWeights creates a training engine with constant
 weights to avoid MPSGraph assertion
 
+#### func  CreateTrainingEngineDynamic
+
+```go
+func CreateTrainingEngineDynamic(
+	device unsafe.Pointer,
+	config TrainingConfig,
+	layerSpecs []LayerSpecC,
+	inputShape []int,
+) (unsafe.Pointer, error)
+```
+CreateTrainingEngineDynamic creates a training engine with dynamic graph from
+model specification
+
 #### func  CreateTrainingEngineHybrid
 
 ```go
@@ -94,7 +107,29 @@ func ExecuteAdamStep(
 	stepCount int,
 ) error
 ```
-ExecuteAdamStep executes a single Adam optimization step on GPU
+ExecuteAdamStep executes a single Adam optimization step on GPU (legacy
+CPU-based implementation)
+
+#### func  ExecuteAdamStepMPSGraph
+
+```go
+func ExecuteAdamStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	varianceBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	beta1 float32,
+	beta2 float32,
+	epsilon float32,
+	weightDecay float32,
+	stepCount int,
+) error
+```
+ExecuteAdamStepMPSGraph executes a single Adam optimization step using MPSGraph
+for optimal GPU performance
 
 #### func  ExecuteTrainingStep
 
@@ -107,6 +142,21 @@ func ExecuteTrainingStep(
 ) (float32, error)
 ```
 ExecuteTrainingStep executes a complete training step
+
+#### func  ExecuteTrainingStepDynamic
+
+```go
+func ExecuteTrainingStepDynamic(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	learningRate float32,
+	batchSize int,
+) (float32, error)
+```
+ExecuteTrainingStepDynamic executes a training step using dynamic engine with
+real loss computation
 
 #### func  ExecuteTrainingStepHybrid
 
@@ -154,7 +204,16 @@ returns gradients
 ```go
 func ZeroMetalBuffer(device unsafe.Pointer, buffer unsafe.Pointer, size int) error
 ```
-ZeroMetalBuffer zeros a Metal buffer
+ZeroMetalBuffer zeros a Metal buffer (uses CPU for accessible buffers, MPSGraph
+for GPU-only)
+
+#### func  ZeroMetalBufferMPSGraph
+
+```go
+func ZeroMetalBufferMPSGraph(device unsafe.Pointer, buffer unsafe.Pointer, size int) error
+```
+ZeroMetalBufferMPSGraph zeros a Metal buffer using MPSGraph (works for all
+buffer types)
 
 #### type DeviceType
 
@@ -171,6 +230,52 @@ const (
 	PersistentGPU
 )
 ```
+
+#### type InferenceResult
+
+```go
+type InferenceResult struct {
+	Predictions []float32 // Model output logits/probabilities [batch_size * num_classes]
+	BatchSize   int       // Actual batch size processed
+	OutputShape []int     // Shape of prediction tensor [batch_size, num_classes]
+	Success     bool      // Inference execution status
+}
+```
+
+InferenceResult contains model predictions and metadata
+
+#### func  ExecuteInference
+
+```go
+func ExecuteInference(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	batchSize int,
+	numClasses int,
+) (*InferenceResult, error)
+```
+ExecuteInference performs forward-only pass and returns predictions Conforms to
+design requirements: single CGO call, GPU-resident, shared resources
+
+#### type LayerSpecC
+
+```go
+type LayerSpecC struct {
+	LayerType       int32
+	Name            [64]byte // Fixed-size array for C compatibility
+	InputShape      [4]int32
+	InputShapeLen   int32
+	OutputShape     [4]int32
+	OutputShapeLen  int32
+	ParamInt        [8]int32
+	ParamFloat      [8]float32
+	ParamIntCount   int32
+	ParamFloatCount int32
+}
+```
+
+LayerSpecC represents a C-compatible layer specification
 
 #### type OptimizerType
 

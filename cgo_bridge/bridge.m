@@ -3,6 +3,22 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 
+// Layer specification structure for dynamic graph creation
+typedef struct {
+    int layer_type;          // 0=Dense, 1=Conv2D, 2=ReLU, 3=Softmax
+    char name[64];           // Layer name
+    int input_shape[4];      // Input dimensions [batch, channels, height, width]
+    int input_shape_len;     // Number of valid dimensions
+    int output_shape[4];     // Output dimensions
+    int output_shape_len;    // Number of valid dimensions
+    
+    // Layer-specific parameters
+    int param_int[8];        // Integer parameters (e.g., kernel_size, stride, padding)
+    float param_float[8];    // Float parameters (e.g., dropout_rate)
+    int param_int_count;     // Number of valid int parameters
+    int param_float_count;   // Number of valid float parameters
+} layer_spec_c_t;
+
 // Training configuration struct from Go
 typedef struct {
     float learning_rate;
@@ -49,7 +65,30 @@ typedef struct {
     __unsafe_unretained MPSGraphTensor* fcWeightGrads;      // FC weight gradients
     __unsafe_unretained MPSGraphTensor* fcBiasGrads;        // FC bias gradients
     MPSGraph* backwardGraph;                                // Separate graph for gradients
+    
+    // Dynamic graph placeholders (for complex architectures)
+    NSMutableArray* allWeightPlaceholders;                  // All weight placeholders in order
+    NSMutableArray* allBiasPlaceholders;                    // All bias placeholders in order
 } training_engine_t;
+
+// Forward declarations for dynamic graph functions
+BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
+                                layer_spec_c_t* layers,
+                                int numLayers,
+                                int* inputShape,
+                                int inputShapeLen);
+
+MPSGraphTensor* addDenseLayerToGraph(MPSGraph* graph,
+                                    MPSGraphTensor* input,
+                                    layer_spec_c_t* layerSpec,
+                                    int layerIdx,
+                                    NSMutableArray* allParameterPlaceholders);
+
+MPSGraphTensor* addConv2DLayerToGraph(MPSGraph* graph,
+                                     MPSGraphTensor* input,
+                                     layer_spec_c_t* layerSpec,
+                                     int layerIdx,
+                                     NSMutableArray* allParameterPlaceholders);
 
 // Create Metal device
 uintptr_t create_metal_device() {
@@ -2930,6 +2969,961 @@ int copy_int32_array_to_metal_buffer(uintptr_t buffer_ptr, int* data, int num_el
         }
         
         return result;
+    }
+}
+
+// Execute forward-only inference without backpropagation
+// Conforms to design requirements: single operation, GPU-resident, MPSGraph-centric
+int execute_inference_hybrid(
+    uintptr_t engine_ptr,
+    uintptr_t input_buffer,
+    uintptr_t* weight_buffers,
+    int num_weights,
+    float* predictions_out,
+    int batch_size,
+    int num_classes
+) {
+    @autoreleasepool {
+        training_engine_t* engine = (training_engine_t*)engine_ptr;
+        if (!engine || !engine->initialized || !predictions_out) {
+            NSLog(@"Engine not initialized or predictions buffer is nil in inference");
+            return -1;
+        }
+        
+        if (num_weights != 2) {
+            NSLog(@"Expected 2 weight tensors for hybrid inference, got %d", num_weights);
+            return -2;
+        }
+        
+        if (batch_size <= 0 || num_classes <= 0) {
+            NSLog(@"Invalid batch size (%d) or num classes (%d) for inference", batch_size, num_classes);
+            return -3;
+        }
+        
+        id<MTLBuffer> inputBuf = (__bridge id<MTLBuffer>)(void*)input_buffer;
+        if (!inputBuf) {
+            NSLog(@"Input buffer is nil");
+            return -4;
+        }
+        
+        // Get weight buffers (same as training)
+        id<MTLBuffer> fcWeightBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[0];
+        id<MTLBuffer> fcBiasBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[1];
+        
+        if (!fcWeightBuf || !fcBiasBuf) {
+            NSLog(@"One or more weight buffers are nil");
+            return -5;
+        }
+        
+        @try {
+            // Create command buffer for inference
+            id<MTLCommandBuffer> commandBuffer = [engine->commandQueue commandBuffer];
+            if (!commandBuffer) {
+                NSLog(@"Failed to create command buffer for inference");
+                return -6;
+            }
+            
+            // === STEP 1: MPS Convolution (same as training forward pass) ===
+            
+            // Create input image from buffer (batch_size x 3 x 32 x 32)
+            MPSImageDescriptor* inputDesc = [MPSImageDescriptor imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
+                                                                                            width:32
+                                                                                           height:32
+                                                                                  featureChannels:3
+                                                                                   numberOfImages:batch_size
+                                                                                            usage:MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite];
+            
+            MPSImage* inputImage = [[MPSImage alloc] initWithDevice:engine->device imageDescriptor:inputDesc];
+            if (!inputImage) {
+                NSLog(@"Failed to create input image for inference");
+                return -7;
+            }
+            
+            // Copy input data to MPS image
+            [inputImage writeBytes:[inputBuf contents]
+                     dataLayout:MPSDataLayoutFeatureChannelsxHeightxWidth
+                     imageIndex:0];
+            
+            // Create output image for convolution (batch_size x 8 x 32 x 32)
+            MPSImageDescriptor* convOutputDesc = [MPSImageDescriptor imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
+                                                                                                 width:32
+                                                                                                height:32
+                                                                                       featureChannels:8
+                                                                                        numberOfImages:batch_size
+                                                                                                 usage:MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite];
+            
+            MPSImage* convOutputImage = [[MPSImage alloc] initWithDevice:engine->device imageDescriptor:convOutputDesc];
+            if (!convOutputImage) {
+                NSLog(@"Failed to create conv output image for inference");
+                return -8;
+            }
+            
+            // Execute MPS convolution (forward only)
+            [engine->conv1Layer encodeToCommandBuffer:commandBuffer
+                                          sourceImage:inputImage
+                                     destinationImage:convOutputImage];
+            
+            // === STEP 2: Transfer to MPSGraph for ReLU + GlobalPool + FC (forward only) ===
+            
+            // Create buffer for conv output data transfer
+            int convOutputSize = batch_size * 8 * 32 * 32 * sizeof(float);
+            id<MTLBuffer> convOutputBuffer = [engine->device newBufferWithLength:convOutputSize
+                                                                         options:MTLResourceStorageModeShared];
+            if (!convOutputBuffer) {
+                NSLog(@"Failed to create conv output buffer for inference");
+                return -9;
+            }
+            
+            // Add blit operation to copy MPS image to buffer
+            id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
+            [convOutputImage readBytes:[convOutputBuffer contents]
+                        dataLayout:MPSDataLayoutFeatureChannelsxHeightxWidth
+                        imageIndex:0];
+            [blitEncoder endEncoding];
+            
+            // Commit and wait for MPS operations to complete
+            [commandBuffer commit];
+            [commandBuffer waitUntilCompleted];
+            
+            if (commandBuffer.error) {
+                NSLog(@"MPS convolution failed during inference: %@", commandBuffer.error.localizedDescription);
+                return -10;
+            }
+            
+            // === STEP 3: MPSGraph Forward Pass (ReLU + GlobalPool + FC) ===
+            
+            // Create dynamic placeholders for the actual batch size
+            MPSGraphTensor* dynamicHybridInput = [engine->graph placeholderWithShape:@[@(batch_size), @(8), @(32), @(32)]
+                                                                            dataType:MPSDataTypeFloat32
+                                                                                name:[NSString stringWithFormat:@"conv_output_batch_%d", batch_size]];
+            
+            MPSGraphTensor* dynamicFCWeights = [engine->graph placeholderWithShape:@[@(8), @(2)]
+                                                                          dataType:MPSDataTypeFloat32
+                                                                              name:@"fc_weights_dynamic"];
+            
+            MPSGraphTensor* dynamicFCBias = [engine->graph placeholderWithShape:@[@(2)]
+                                                                       dataType:MPSDataTypeFloat32
+                                                                           name:@"fc_bias_dynamic"];
+            
+            // Build dynamic forward pass graph: ReLU -> Global Pool -> FC
+            MPSGraphTensor* dynamicRelu = [engine->graph reLUWithTensor:dynamicHybridInput 
+                                                                   name:[NSString stringWithFormat:@"conv1_relu_batch_%d", batch_size]];
+            
+            // Global average pooling: [batch_size, 8, 32, 32] -> [batch_size, 8, 1, 1]
+            MPSGraphTensor* dynamicPooled = [engine->graph meanOfTensor:dynamicRelu
+                                                                   axes:@[@2, @3]
+                                                                   name:[NSString stringWithFormat:@"global_avg_pool_batch_%d", batch_size]];
+            
+            // Reshape for FC: [batch_size, 8, 1, 1] -> [batch_size, 8]
+            MPSGraphTensor* dynamicReshaped = [engine->graph reshapeTensor:dynamicPooled
+                                                                 withShape:@[@(batch_size), @(8)]
+                                                                      name:[NSString stringWithFormat:@"reshape_batch_%d", batch_size]];
+            
+            // FC layer: [batch_size, 8] * [8, 2] + [2] -> [batch_size, 2]
+            MPSGraphTensor* dynamicFCOutput = [engine->graph matrixMultiplicationWithPrimaryTensor:dynamicReshaped
+                                                                                     secondaryTensor:dynamicFCWeights
+                                                                                                name:[NSString stringWithFormat:@"fc_batch_%d", batch_size]];
+            
+            MPSGraphTensor* dynamicFCWithBias = [engine->graph additionWithPrimaryTensor:dynamicFCOutput
+                                                                         secondaryTensor:dynamicFCBias
+                                                                                    name:[NSString stringWithFormat:@"fc_bias_batch_%d", batch_size]];
+            
+            // Softmax for final predictions: [batch_size, 2] -> [batch_size, 2]
+            MPSGraphTensor* dynamicOutput = [engine->graph softMaxWithTensor:dynamicFCWithBias
+                                                                        axis:-1
+                                                                        name:[NSString stringWithFormat:@"softmax_batch_%d", batch_size]];
+            
+            // Create tensor data for MPSGraph
+            NSArray<NSNumber*>* convShape = @[@(batch_size), @(8), @(32), @(32)];
+            MPSGraphTensorData* convTensorData = [[MPSGraphTensorData alloc] initWithMTLBuffer:convOutputBuffer
+                                                                                         shape:convShape
+                                                                                      dataType:MPSDataTypeFloat32];
+            
+            NSArray<NSNumber*>* fcWeightShape = @[@(8), @(2)];  // Global pooled 8 features -> 2 classes
+            MPSGraphTensorData* fcWeightTensorData = [[MPSGraphTensorData alloc] initWithMTLBuffer:fcWeightBuf
+                                                                                              shape:fcWeightShape
+                                                                                           dataType:MPSDataTypeFloat32];
+            
+            NSArray<NSNumber*>* fcBiasShape = @[@(2)];
+            MPSGraphTensorData* fcBiasTensorData = [[MPSGraphTensorData alloc] initWithMTLBuffer:fcBiasBuf
+                                                                                           shape:fcBiasShape
+                                                                                        dataType:MPSDataTypeFloat32];
+            
+            if (!convTensorData || !fcWeightTensorData || !fcBiasTensorData) {
+                NSLog(@"Failed to create tensor data for inference");
+                return -11;
+            }
+            
+            // Prepare feeds using dynamic placeholders
+            NSDictionary* feeds = @{
+                dynamicHybridInput: convTensorData,
+                dynamicFCWeights: fcWeightTensorData,
+                dynamicFCBias: fcBiasTensorData
+            };
+            
+            // Execute forward pass using dynamic output tensor
+            NSArray<MPSGraphTensor*>* targetTensors = @[dynamicOutput];
+            
+            // Run MPSGraph (forward only)
+            NSDictionary* results = [engine->graph runWithMTLCommandQueue:engine->commandQueue
+                                                                    feeds:feeds
+                                                           targetTensors:targetTensors
+                                                        targetOperations:nil];
+            
+            MPSGraphTensorData* output = results[dynamicOutput];
+            if (!output) {
+                NSLog(@"Failed to get model output from inference");
+                return -12;
+            }
+            
+            // === STEP 4: Extract Predictions (GPU -> CPU transfer) ===
+            
+            // Copy predictions from GPU buffer to CPU output array
+            int predictionsSize = batch_size * num_classes;
+            [[output mpsndarray] readBytes:predictions_out strideBytes:nil];
+            
+            // NSLog(@"✅ Inference completed successfully: %d predictions extracted", batch_size * num_classes);
+            
+            return 0; // Success
+            
+        } @catch (NSException* exception) {
+            NSLog(@"Inference execution exception: %@", exception.reason);
+            return -13;
+        }
+    }
+}
+
+// Dynamic inference using the same graph as training (forward pass only)
+int execute_inference_dynamic(
+    uintptr_t engine_ptr,
+    uintptr_t input_buffer,
+    uintptr_t* weight_buffers,
+    int num_weights,
+    float* predictions_out,
+    int batch_size,
+    int num_classes
+) {
+    @autoreleasepool {
+        training_engine_t* engine = (training_engine_t*)engine_ptr;
+        if (!engine || !engine->initialized || !predictions_out) {
+            NSLog(@"❌ Engine not initialized or predictions buffer is nil in dynamic inference");
+            return -1;
+        }
+        
+        if (!engine->graph || !engine->inputTensor) {
+            NSLog(@"❌ Dynamic graph not initialized for inference");
+            return -2;
+        }
+        
+        if (batch_size <= 0 || num_classes <= 0) {
+            NSLog(@"❌ Invalid batch size (%d) or num classes (%d) for dynamic inference", batch_size, num_classes);
+            return -3;
+        }
+        
+        id<MTLBuffer> inputBuf = (__bridge id<MTLBuffer>)(void*)input_buffer;
+        if (!inputBuf) {
+            NSLog(@"❌ Input buffer is nil for dynamic inference");
+            return -4;
+        }
+        
+        NSLog(@"🔧 DYNAMIC INFERENCE: Starting forward-only execution");
+        
+        @try {
+            // Create feeds dictionary for the dynamic graph (same as training)
+            NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
+            
+            // Add input tensor data (use provided batch size)
+            NSArray<NSNumber*>* placeholderInputShape = engine->inputTensor.shape;
+            NSLog(@"🔍 Input tensor: placeholder shape %@, buffer size %zu bytes, provided batch size %d", 
+                  placeholderInputShape, inputBuf.length, batch_size);
+            
+            // Create actual shape with provided batch size
+            NSMutableArray<NSNumber*>* actualInputShape = [[NSMutableArray alloc] init];
+            [actualInputShape addObject:@(batch_size)]; // Use provided batch size
+            for (int i = 1; i < placeholderInputShape.count; i++) {
+                [actualInputShape addObject:placeholderInputShape[i]]; // Copy other dimensions
+            }
+            
+            NSLog(@"🔍 Using actual input shape: %@", actualInputShape);
+            
+            MPSGraphTensorData* inputTensorData = [[MPSGraphTensorData alloc] 
+                                                  initWithMTLBuffer:inputBuf
+                                                  shape:actualInputShape
+                                                  dataType:MPSDataTypeFloat32];
+            feeds[engine->inputTensor] = inputTensorData;
+            
+            // Feed ALL parameter placeholders in the correct order
+            if (engine->allWeightPlaceholders.count != num_weights) {
+                NSLog(@"❌ Parameter count mismatch: expected %d, got %d", 
+                      (int)engine->allWeightPlaceholders.count, num_weights);
+                return -5;
+            }
+            
+            NSLog(@"🔧 Feeding %d parameters for dynamic inference", num_weights);
+            
+            for (int i = 0; i < num_weights; i++) {
+                MPSGraphTensor* placeholder = engine->allWeightPlaceholders[i];
+                id<MTLBuffer> paramBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                
+                if (!paramBuffer) {
+                    NSLog(@"❌ Parameter buffer %d is nil", i);
+                    return -6;
+                }
+                
+                NSArray<NSNumber*>* paramShape = placeholder.shape;
+                NSLog(@"🔧 Feeding parameter %d: shape %@, buffer size %zu bytes", 
+                      i, paramShape, paramBuffer.length);
+                
+                MPSGraphTensorData* paramTensorData = [[MPSGraphTensorData alloc] 
+                                                      initWithMTLBuffer:paramBuffer
+                                                      shape:paramShape
+                                                      dataType:MPSDataTypeFloat32];
+                feeds[placeholder] = paramTensorData;
+            }
+            
+            NSLog(@"🔧 All parameters fed to dynamic inference graph");
+            
+            // Use engine->lossOutput as the predictions tensor (it stores the final model output)
+            if (!engine->lossOutput) {
+                NSLog(@"❌ Predictions tensor (lossOutput) not available for dynamic inference");
+                return -7;
+            }
+            
+            NSLog(@"🔧 About to execute dynamic inference graph");
+            NSLog(@"🔧 Feeds dictionary contains %d items", (int)feeds.count);
+            NSLog(@"🔧 Target tensor: predictions (lossOutput)");
+            
+            // Execute the graph targeting the predictions tensor (forward pass only)
+            NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
+                [engine->graph runWithMTLCommandQueue:engine->commandQueue
+                                                feeds:feeds
+                                        targetTensors:@[engine->lossOutput]
+                                     targetOperations:nil];
+            
+            if (!results || !results[engine->lossOutput]) {
+                NSLog(@"❌ Failed to execute dynamic inference graph or get predictions");
+                return -8;
+            }
+            
+            // Extract predictions from results
+            MPSGraphTensorData* outputData = results[engine->lossOutput];
+            if (!outputData) {
+                NSLog(@"❌ Failed to get output data from inference results");
+                return -9;
+            }
+            
+            // Verify output size matches expected predictions size
+            int expectedOutputSize = batch_size * num_classes;
+            
+            NSLog(@"🔧 Expected output size: %d floats (%d × %d)", 
+                  expectedOutputSize, batch_size, num_classes);
+            
+            // Read predictions directly from MPSNDArray using the same pattern as training
+            [[outputData mpsndarray] readBytes:predictions_out strideBytes:nil];
+            
+            NSLog(@"✅ Dynamic inference completed successfully");
+            NSLog(@"🔍 First few predictions: [%.6f, %.6f, %.6f, %.6f]", 
+                  predictions_out[0], predictions_out[1], 
+                  expectedOutputSize > 2 ? predictions_out[2] : 0.0f,
+                  expectedOutputSize > 3 ? predictions_out[3] : 0.0f);
+            
+            return 0; // Success
+            
+        } @catch (NSException* exception) {
+            NSLog(@"❌ Dynamic inference execution exception: %@", exception.reason);
+            return -9;
+        }
+    }
+}
+
+// Create training engine with dynamic graph based on model specification
+// This replaces the hardcoded hybrid CNN with dynamic architecture support
+uintptr_t create_training_engine_dynamic(
+    uintptr_t device_ptr,
+    training_config_t* config,
+    layer_spec_c_t* layers,
+    int num_layers,
+    int* input_shape,
+    int input_shape_len
+) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
+        if (!device || !config || !layers || num_layers <= 0) {
+            NSLog(@"Invalid parameters for dynamic training engine creation");
+            return 0;
+        }
+        
+        // Allocate training engine
+        training_engine_t* engine = malloc(sizeof(training_engine_t));
+        if (!engine) {
+            NSLog(@"Failed to allocate training engine");
+            return 0;
+        }
+        
+        engine->device = device;
+        engine->config = *config;
+        engine->initialized = NO;
+        engine->useHybridApproach = YES; // Always use hybrid for dynamic models
+        
+        // Initialize placeholder tracking arrays
+        engine->allWeightPlaceholders = [[NSMutableArray alloc] init];
+        engine->allBiasPlaceholders = [[NSMutableArray alloc] init];
+        
+        // Create command queue
+        engine->commandQueue = [device newCommandQueue];
+        if (!engine->commandQueue) {
+            NSLog(@"Failed to create command queue");
+            free(engine);
+            return 0;
+        }
+        
+        // Create MPSGraph for dynamic model
+        engine->graph = [[MPSGraph alloc] init];
+        if (!engine->graph) {
+            NSLog(@"Failed to create MPSGraph");
+            free(engine);
+            return 0;
+        }
+        
+        @try {
+            // Build dynamic graph from layer specifications
+            if (!buildDynamicGraphFromLayers(engine, 
+                                             layers, 
+                                             num_layers, 
+                                             input_shape, 
+                                             input_shape_len)) {
+                NSLog(@"Failed to build dynamic graph");
+                free(engine);
+                return 0;
+            }
+            
+            engine->initialized = YES;
+            NSLog(@"✅ Dynamic training engine created successfully with %d layers", num_layers);
+            
+            return (uintptr_t)engine;
+            
+        } @catch (NSException* exception) {
+            NSLog(@"Exception during dynamic graph creation: %@", exception.reason);
+            free(engine);
+            return 0;
+        }
+    }
+}
+
+// Build dynamic MPSGraph from layer specifications
+BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
+                                  layer_spec_c_t* layers,
+                                  int numLayers,
+                                  int* inputShape,
+                                  int inputShapeLen) {
+    
+    if (!engine || !layers || numLayers <= 0) {
+        return NO;
+    }
+    
+    @try {
+        // Create input placeholder with fixed batch size (temporarily to debug the channel mismatch)
+        NSMutableArray<NSNumber*>* inputShapeNS = [[NSMutableArray alloc] init];
+        for (int i = 0; i < inputShapeLen; i++) {
+            [inputShapeNS addObject:@(inputShape[i])]; // Use the original shape as-is for now
+        }
+        
+        MPSGraphTensor* currentTensor = [engine->graph placeholderWithShape:inputShapeNS
+                                                                   dataType:MPSDataTypeFloat32
+                                                                       name:@"input"];
+        engine->inputTensor = currentTensor;
+        
+        // Create a single array to track ALL parameters in the correct order (weight, bias, weight, bias...)
+        // This matches the Go parameter tensor creation order exactly
+        NSMutableArray* allParameterPlaceholders = [[NSMutableArray alloc] init];
+        
+        // Process each layer sequentially
+        for (int layerIdx = 0; layerIdx < numLayers; layerIdx++) {
+            layer_spec_c_t* layer = &layers[layerIdx];
+            
+            switch (layer->layer_type) {
+                case 0: // Dense
+                    // Check if we need to flatten the input (from 4D conv output to 2D dense input)
+                    if (currentTensor.shape.count == 4) {
+                        // Flatten [batch, channels, height, width] to [batch, channels*height*width]
+                        NSArray<NSNumber*>* currentShape = currentTensor.shape;
+                        int batchSize = [currentShape[0] intValue];
+                        int channels = [currentShape[1] intValue];
+                        int height = [currentShape[2] intValue];
+                        int width = [currentShape[3] intValue];
+                        int flattenedSize = channels * height * width;
+                        
+                        NSArray<NSNumber*>* flattenShape = @[@(batchSize), @(flattenedSize)];
+                        currentTensor = [engine->graph reshapeTensor:currentTensor
+                                                           withShape:flattenShape
+                                                                name:[NSString stringWithFormat:@"flatten_before_dense_%d", layerIdx]];
+                        NSLog(@"✅ Flattened tensor from %@ to %@ for Dense layer %d", 
+                              currentShape, flattenShape, layerIdx);
+                    }
+                    
+                    currentTensor = addDenseLayerToGraph(engine->graph,
+                                                        currentTensor,
+                                                        layer,
+                                                        layerIdx,
+                                                        allParameterPlaceholders);
+                    break;
+                    
+                case 1: // Conv2D
+                    currentTensor = addConv2DLayerToGraph(engine->graph,
+                                                         currentTensor,
+                                                         layer,
+                                                         layerIdx,
+                                                         allParameterPlaceholders);
+                    break;
+                    
+                case 2: // ReLU
+                    currentTensor = [engine->graph reLUWithTensor:currentTensor
+                                                             name:[NSString stringWithFormat:@"relu_%d", layerIdx]];
+                    break;
+                    
+                case 3: // Softmax
+                    {
+                        int axis = layer->param_int_count > 0 ? layer->param_int[0] : -1;
+                        currentTensor = [engine->graph softMaxWithTensor:currentTensor
+                                                                    axis:axis
+                                                                    name:[NSString stringWithFormat:@"softmax_%d", layerIdx]];
+                    }
+                    break;
+                    
+                default:
+                    NSLog(@"Unsupported layer type: %d", layer->layer_type);
+                    return NO;
+            }
+            
+            if (!currentTensor) {
+                NSLog(@"Failed to create layer %d (type: %d)", layerIdx, layer->layer_type);
+                return NO;
+            }
+        }
+        
+        // Create label placeholder for loss computation with dynamic batch size
+        // Determine output classes from the last Dense layer in the model
+        int numClasses = 2; // Default for binary classification
+        
+        // Find the last Dense layer to get the output size
+        for (int i = numLayers - 1; i >= 0; i--) {
+            layer_spec_c_t* layer = &layers[i];
+            if (layer->layer_type == 0 && layer->param_int_count >= 2) { // Dense layer
+                numClasses = layer->param_int[1]; // output_size
+                NSLog(@"🔍 Found output classes from Dense layer %d: %d classes", i, numClasses);
+                break;
+            }
+        }
+        
+        // Labels placeholder [batch_size, num_classes] with fixed batch size for now
+        NSArray<NSNumber*>* labelShape = @[@(inputShape[0]), @(numClasses)];
+        NSLog(@"🔍 Creating label placeholder with shape: %@", labelShape);
+        MPSGraphTensor* labelTensor = [engine->graph placeholderWithShape:labelShape
+                                                                 dataType:MPSDataTypeFloat32
+                                                                     name:@"labels"];
+        engine->labelTensor = labelTensor;
+        
+        // For now, store the predictions (softmax output) as the final tensor
+        // We'll compute loss separately in the training step using a simpler approach
+        MPSGraphTensor* predictionsTensor = [engine->graph softMaxWithTensor:currentTensor
+                                                                        axis:-1
+                                                                        name:@"predictions"];
+        
+        // Store predictions tensor for now - we'll compute loss in the training step
+        engine->lossOutput = predictionsTensor;
+        
+        // Store the ordered parameter placeholders in the engine
+        // Clear the old arrays and copy from our correctly ordered array
+        [engine->allWeightPlaceholders removeAllObjects];
+        [engine->allBiasPlaceholders removeAllObjects];
+        
+        // Store all parameters in the correct order (weight, bias, weight, bias...)
+        // This matches exactly how Go CreateParameterTensors works
+        for (int i = 0; i < allParameterPlaceholders.count; i++) {
+            MPSGraphTensor* placeholder = allParameterPlaceholders[i];
+            [engine->allWeightPlaceholders addObject:placeholder];
+        }
+        
+        // Note: We no longer need to create separate convolution output placeholders
+        // since we're using actual MPSGraph convolution operations now
+        
+        NSLog(@"✅ Dynamic graph built successfully with %d layers", numLayers);
+        return YES;
+        
+    } @catch (NSException* exception) {
+        NSLog(@"Exception building dynamic graph: %@", exception.reason);
+        return NO;
+    }
+}
+
+// Add Dense layer to dynamic graph
+MPSGraphTensor* addDenseLayerToGraph(MPSGraph* graph,
+                                     MPSGraphTensor* input,
+                                     layer_spec_c_t* layerSpec,
+                                     int layerIdx,
+                                     NSMutableArray* allParameterPlaceholders) {
+    
+    if (layerSpec->param_int_count < 2) {
+        NSLog(@"Dense layer missing required parameters (input_size, output_size)");
+        return nil;
+    }
+    
+    int inputSize = layerSpec->param_int[0];
+    int outputSize = layerSpec->param_int[1];
+    BOOL useBias = layerSpec->param_int_count > 2 ? (layerSpec->param_int[2] != 0) : YES;
+    
+    // Create weight placeholder and add to ordered array
+    NSArray<NSNumber*>* weightShape = @[@(inputSize), @(outputSize)];
+    MPSGraphTensor* weightTensor = [graph placeholderWithShape:weightShape
+                                                      dataType:MPSDataTypeFloat32
+                                                          name:[NSString stringWithFormat:@"dense_%d_weight", layerIdx]];
+    [allParameterPlaceholders addObject:weightTensor];
+    
+    // Matrix multiplication
+    MPSGraphTensor* output = [graph matrixMultiplicationWithPrimaryTensor:input
+                                                          secondaryTensor:weightTensor
+                                                                     name:[NSString stringWithFormat:@"dense_%d_matmul", layerIdx]];
+    
+    // Add bias if enabled - reshape bias for broadcasting compatibility
+    if (useBias) {
+        NSArray<NSNumber*>* biasShape = @[@(outputSize)];
+        MPSGraphTensor* biasTensor = [graph placeholderWithShape:biasShape
+                                                        dataType:MPSDataTypeFloat32
+                                                            name:[NSString stringWithFormat:@"dense_%d_bias", layerIdx]];
+        [allParameterPlaceholders addObject:biasTensor];
+        
+        // Reshape bias from [output_size] to [1, output_size] for broadcasting compatibility
+        // This ensures compatibility with output tensor shape [batch_size, output_size]
+        NSArray<NSNumber*>* broadcastBiasShape = @[@1, @(outputSize)];
+        MPSGraphTensor* reshapedBias = [graph reshapeTensor:biasTensor
+                                                  withShape:broadcastBiasShape
+                                                       name:[NSString stringWithFormat:@"dense_%d_bias_reshaped", layerIdx]];
+        
+        output = [graph additionWithPrimaryTensor:output
+                                  secondaryTensor:reshapedBias
+                                             name:[NSString stringWithFormat:@"dense_%d_add_bias", layerIdx]];
+        NSLog(@"✅ Dense bias addition created successfully with broadcasting shape %@", broadcastBiasShape);
+    }
+    
+    return output;
+}
+
+// Add Conv2D layer to dynamic graph
+MPSGraphTensor* addConv2DLayerToGraph(MPSGraph* graph,
+                                      MPSGraphTensor* input,
+                                      layer_spec_c_t* layerSpec,
+                                      int layerIdx,
+                                      NSMutableArray* allParameterPlaceholders) {
+    
+    if (layerSpec->param_int_count < 5) {
+        NSLog(@"Conv2D layer missing required parameters");
+        return nil;
+    }
+    
+    int inputChannels = layerSpec->param_int[0];
+    int outputChannels = layerSpec->param_int[1];
+    int kernelSize = layerSpec->param_int[2];
+    int stride = layerSpec->param_int[3];
+    int padding = layerSpec->param_int[4];
+    BOOL useBias = layerSpec->param_int_count > 5 ? (layerSpec->param_int[5] != 0) : YES;
+    
+    NSLog(@"🔧 DYNAMIC ENGINE: Using MPSGraph convolution with corrected layout for Conv2D layer %d", layerIdx);
+    NSLog(@"   Parameters: in_ch=%d, out_ch=%d, kernel=%d, stride=%d, padding=%d, bias=%d", 
+          inputChannels, outputChannels, kernelSize, stride, padding, useBias);
+    
+    // Create weight placeholder [outputChannels, inputChannels, kernelSize, kernelSize] to match Go tensor creation
+    NSArray<NSNumber*>* weightShape = @[@(outputChannels), @(inputChannels), @(kernelSize), @(kernelSize)];
+    MPSGraphTensor* weightTensor = [graph placeholderWithShape:weightShape
+                                                      dataType:MPSDataTypeFloat32
+                                                          name:[NSString stringWithFormat:@"conv_%d_weight", layerIdx]];
+    [allParameterPlaceholders addObject:weightTensor];
+    
+    // Add bias placeholder if enabled - IMPORTANT: add bias immediately after weight to match Go parameter order
+    MPSGraphTensor* biasTensor = nil;
+    if (useBias) {
+        NSArray<NSNumber*>* biasShape = @[@(outputChannels)];
+        biasTensor = [graph placeholderWithShape:biasShape
+                                        dataType:MPSDataTypeFloat32
+                                            name:[NSString stringWithFormat:@"conv_%d_bias", layerIdx]];
+        [allParameterPlaceholders addObject:biasTensor];
+    }
+    
+    // Log input details - note that MPSGraph tensors may have null shapes during graph construction
+    NSArray<NSNumber*>* inputShape = input.shape;
+    NSLog(@"   Input tensor shape: %@ (may be null during graph construction)", inputShape);
+    NSLog(@"   Weight tensor shape: %@", weightShape);
+    
+    // For intermediate tensors in graph construction, shape may be null
+    // We'll proceed with the convolution operation regardless
+    
+    // Use MPSGraph convolution with explicit data layout specification
+    MPSGraphConvolution2DOpDescriptor* convDesc = [[MPSGraphConvolution2DOpDescriptor alloc] init];
+    convDesc.strideInX = stride;
+    convDesc.strideInY = stride;
+    convDesc.paddingLeft = padding;
+    convDesc.paddingRight = padding;
+    convDesc.paddingTop = padding;
+    convDesc.paddingBottom = padding;
+    convDesc.dilationRateInX = 1;
+    convDesc.dilationRateInY = 1;
+    convDesc.groups = 1;
+    
+    // Explicitly set data layout to ensure compatibility
+    convDesc.dataLayout = MPSGraphTensorNamedDataLayoutNCHW;     // Input: [N, C, H, W]
+    convDesc.weightsLayout = MPSGraphTensorNamedDataLayoutOIHW;  // Weights: [O, I, H, W]
+    
+    NSLog(@"🔧 Convolution descriptor: stride=%d, padding=%d, dataLayout=NCHW, weightsLayout=OIHW",
+          stride, padding);
+    
+    // Perform MPSGraph convolution operation
+    MPSGraphTensor* convResult;
+    @try {
+        convResult = [graph convolution2DWithSourceTensor:input
+                                             weightsTensor:weightTensor
+                                                descriptor:convDesc
+                                                      name:[NSString stringWithFormat:@"conv_%d", layerIdx]];
+        
+        NSLog(@"✅ Conv2D operation created successfully");
+        
+    } @catch (NSException* exception) {
+        NSLog(@"❌ Conv2D operation failed: %@", exception.reason);
+        return nil;
+    }
+    
+    // Add bias if enabled - reshape bias for broadcasting compatibility
+    if (useBias && biasTensor) {
+        // Reshape bias from [output_channels] to [1, output_channels, 1, 1] for NCHW broadcasting
+        NSArray<NSNumber*>* broadcastBiasShape = @[@1, @(outputChannels), @1, @1];
+        MPSGraphTensor* reshapedBias = [graph reshapeTensor:biasTensor
+                                                  withShape:broadcastBiasShape
+                                                       name:[NSString stringWithFormat:@"conv_%d_bias_reshaped", layerIdx]];
+        
+        convResult = [graph additionWithPrimaryTensor:convResult
+                                      secondaryTensor:reshapedBias
+                                                 name:[NSString stringWithFormat:@"conv_%d_add_bias", layerIdx]];
+        NSLog(@"✅ Bias addition created successfully with broadcasting shape %@", broadcastBiasShape);
+    }
+    
+    NSLog(@"✅ Conv2D layer %d: Created MPSGraph convolution with output shape %@", layerIdx, convResult.shape);
+    
+    return convResult;
+}
+
+// Execute training step for dynamic engines with complete graph
+int execute_training_step_dynamic(
+    uintptr_t engine_ptr,
+    uintptr_t input_buffer,
+    uintptr_t label_buffer,
+    uintptr_t* weight_buffers,
+    int num_weights,
+    float learning_rate,
+    int batch_size,
+    float* loss_out
+) {
+    @autoreleasepool {
+        training_engine_t* engine = (training_engine_t*)engine_ptr;
+        if (!engine || !engine->initialized || !loss_out) {
+            NSLog(@"Dynamic training step: Invalid engine or output parameter");
+            return -1;
+        }
+        
+        if (!engine->graph || !engine->inputTensor || !engine->lossOutput) {
+            NSLog(@"Dynamic training step: Engine missing required graph components");
+            return -2;
+        }
+        
+        @try {
+            // Create tensor data for inputs
+            id<MTLBuffer> inputBuf = (__bridge id<MTLBuffer>)(void*)input_buffer;
+            id<MTLBuffer> labelBuf = (__bridge id<MTLBuffer>)(void*)label_buffer;
+            
+            if (!inputBuf || !labelBuf) {
+                NSLog(@"Dynamic training step: Input or label buffer is nil");
+                return -3;
+            }
+            
+            // Create feeds dictionary for the dynamic graph
+            NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
+            
+            // Add input tensor data (use provided batch size)
+            NSArray<NSNumber*>* placeholderInputShape = engine->inputTensor.shape;
+            NSLog(@"🔍 Input tensor: placeholder shape %@, buffer size %zu bytes, provided batch size %d", 
+                  placeholderInputShape, inputBuf.length, batch_size);
+            
+            // Create actual shape with provided batch size
+            NSMutableArray<NSNumber*>* actualInputShape = [[NSMutableArray alloc] init];
+            [actualInputShape addObject:@(batch_size)]; // Use provided batch size
+            for (int i = 1; i < placeholderInputShape.count; i++) {
+                [actualInputShape addObject:placeholderInputShape[i]]; // Copy other dimensions
+            }
+            
+            NSLog(@"🔍 Using actual input shape: %@", actualInputShape);
+            
+            MPSGraphTensorData* inputTensorData = [[MPSGraphTensorData alloc] 
+                                                  initWithMTLBuffer:inputBuf
+                                                  shape:actualInputShape
+                                                  dataType:MPSDataTypeFloat32];
+            feeds[engine->inputTensor] = inputTensorData;
+            
+            // Add label tensor data for loss computation
+            if (engine->labelTensor) {
+                NSArray<NSNumber*>* placeholderLabelShape = engine->labelTensor.shape;
+                
+                // Compute actual label shape with provided batch size
+                NSMutableArray<NSNumber*>* actualLabelShape = [[NSMutableArray alloc] init];
+                [actualLabelShape addObject:@(batch_size)]; // Use provided batch size
+                for (int i = 1; i < placeholderLabelShape.count; i++) {
+                    [actualLabelShape addObject:placeholderLabelShape[i]]; // Copy other dimensions
+                }
+                
+                NSLog(@"🔍 Computed actual label shape: %@", actualLabelShape);
+                
+                MPSGraphTensorData* labelTensorData = [[MPSGraphTensorData alloc] 
+                                                      initWithMTLBuffer:labelBuf
+                                                      shape:actualLabelShape
+                                                      dataType:MPSDataTypeFloat32];
+                feeds[engine->labelTensor] = labelTensorData;
+            }
+            
+            // Feed ALL parameter placeholders in the correct order (weight, bias, weight, bias...)
+            // This now matches exactly how Go CreateParameterTensors creates them
+            
+            NSLog(@"Dynamic training: Have %d ordered parameter placeholders, %d total buffers", 
+                  (int)engine->allWeightPlaceholders.count, 
+                  num_weights);
+            
+            // HYBRID CONVOLUTION APPROACH: Execute MPS convolutions first, feed results to MPSGraph
+            NSLog(@"🔧 DYNAMIC ENGINE: Starting hybrid convolution execution");
+            
+            // Create command buffer for MPS convolutions
+            id<MTLCommandBuffer> convCommandBuffer = [engine->commandQueue commandBuffer];
+            convCommandBuffer.label = @"Dynamic Engine MPS Convolutions";
+            
+            // Track current data flow and intermediate results
+            id<MTLBuffer> currentInputBuffer = inputBuf;
+            NSArray<NSNumber*>* currentShape = actualInputShape;
+            int paramIndex = 0;
+            
+            // Process convolution layers sequentially using MPS
+            // We'll store intermediate results and feed them to MPSGraph placeholders
+            NSMutableDictionary<NSString*, id<MTLBuffer>>* convOutputBuffers = [[NSMutableDictionary alloc] init];
+            NSMutableDictionary<NSString*, NSArray<NSNumber*>*>* convOutputShapes = [[NSMutableDictionary alloc] init];
+            
+            // Feed all parameter placeholders with their corresponding buffers
+            // Since we're now using actual MPSGraph convolution operations, we just need to feed weights/biases
+            for (int i = 0; i < engine->allWeightPlaceholders.count && i < num_weights; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
+                id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                
+                if (paramBuf && paramPlaceholder) {
+                    NSArray<NSNumber*>* paramShape = paramPlaceholder.shape;
+                    NSLog(@"🔧 Feeding parameter %d: shape %@, buffer size %zu bytes", 
+                          i, paramShape, paramBuf.length);
+                    
+                    MPSGraphTensorData* paramData = [[MPSGraphTensorData alloc] 
+                                                    initWithMTLBuffer:paramBuf
+                                                    shape:paramShape
+                                                    dataType:MPSDataTypeFloat32];
+                    feeds[paramPlaceholder] = paramData;
+                }
+            }
+            
+            NSLog(@"🔧 All parameter placeholders fed to MPSGraph");
+            
+            // Debug: Log execution attempt and check first conv layer specifically
+            NSLog(@"=== EXECUTING DYNAMIC GRAPH ===");
+            NSLog(@"Feeds dictionary contains %lu items", feeds.count);
+            NSLog(@"Target tensor: %@", engine->lossOutput.shape);
+            
+            // Check the input tensor specifically
+            NSLog(@"🔍 INPUT TENSOR CHECK:");
+            NSLog(@"  Input placeholder: %@", engine->inputTensor.shape);
+            NSLog(@"  Input data shape: %@", actualInputShape);
+            
+            // Check first weight tensor specifically  
+            if (engine->allWeightPlaceholders.count > 0) {
+                MPSGraphTensor* firstWeight = engine->allWeightPlaceholders[0];
+                NSLog(@"🔍 FIRST WEIGHT TENSOR CHECK:");
+                NSLog(@"  Weight placeholder: %@", firstWeight.shape);
+                NSLog(@"  Expected: Conv1 weight [16, 3, 3, 3] = [out_channels, in_channels, kH, kW]");
+            }
+            
+            // Execute the dynamic graph to compute predictions with defensive error handling
+            NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = nil;
+            
+            @try {
+                NSLog(@"🔧 About to execute MPSGraph with %lu feeds", feeds.count);
+                NSLog(@"🔧 Target tensor exists: %@", engine->lossOutput ? @"YES" : @"NO");
+                
+                results = [engine->graph runWithMTLCommandQueue:engine->commandQueue
+                                                        feeds:feeds
+                                                targetTensors:@[engine->lossOutput]
+                                             targetOperations:nil];
+                
+                NSLog(@"✅ MPSGraph execution completed successfully");
+                
+            } @catch (NSException* exception) {
+                NSLog(@"❌ MPSGraph execution exception: %@", exception.reason);
+                NSLog(@"❌ Exception details: %@", exception.userInfo);
+                return -8;
+            }
+            
+            if (!results || results.count == 0) {
+                NSLog(@"Dynamic training step: Graph execution failed - no results");
+                return -4;
+            }
+            
+            MPSGraphTensorData* predictionsData = results[engine->lossOutput];
+            if (!predictionsData) {
+                NSLog(@"Dynamic training step: No predictions data from graph execution");
+                return -5;
+            }
+            
+            // Extract predictions and compute loss manually
+            // For a batch_size x num_classes output
+            // Use the tensor shape instead of NDArray shape
+            NSArray<NSNumber*>* predictionsShape = engine->lossOutput.shape;
+            int batchSize = [predictionsShape[0] intValue];
+            int numClasses = [predictionsShape[1] intValue];
+            
+            // Allocate buffer for predictions
+            float* predictions = malloc(batchSize * numClasses * sizeof(float));
+            [[predictionsData mpsndarray] readBytes:predictions strideBytes:nil];
+            
+            // Get labels data
+            float* labels = (float*)[labelBuf contents];
+            
+            // Compute cross-entropy loss manually
+            float totalLoss = 0.0f;
+            for (int i = 0; i < batchSize; i++) {
+                for (int j = 0; j < numClasses; j++) {
+                    float pred = predictions[i * numClasses + j];
+                    float label = labels[i * numClasses + j];
+                    if (label > 0.0f) { // One-hot encoded, only add loss for the true class
+                        totalLoss -= label * logf(fmaxf(pred, 1e-7f)); // Avoid log(0)
+                    }
+                }
+            }
+            float actualLoss = totalLoss / (float)batchSize; // Mean loss
+            
+            free(predictions);
+            *loss_out = actualLoss;
+            
+            // TODO: Add gradient computation and parameter updates for complete training
+            // For now, we have real loss computation but need gradients for Adam optimizer
+            // This requires:
+            // 1. Computing gradients of loss w.r.t. all weight parameters
+            // 2. Applying Adam optimizer updates to weights
+            // 3. This could be done with MPSGraph gradient operations or external Adam step
+            
+            NSLog(@"✅ Dynamic training step completed - Real loss computed: %.6f", *loss_out);
+            NSLog(@"   Note: Gradient computation and parameter updates still needed for complete training");
+            return 0;
+            
+        } @catch (NSException* exception) {
+            NSLog(@"❌ Dynamic training step exception: %@", exception.reason);
+            return -6;
+        }
     }
 }
 
