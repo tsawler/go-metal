@@ -218,6 +218,22 @@ func (mt *ModelTrainer) GetModelSummary() string {
 	return mt.modelEngine.GetModelSummary()
 }
 
+// CreateTrainingSession creates a training session with progress visualization
+func (mt *ModelTrainer) CreateTrainingSession(
+	modelName string,
+	epochs int,
+	stepsPerEpoch int,
+	validationSteps int,
+) *TrainingSession {
+	return NewTrainingSession(mt, modelName, epochs, stepsPerEpoch, validationSteps)
+}
+
+// PrintModelArchitecture prints the model architecture in PyTorch style
+func (mt *ModelTrainer) PrintModelArchitecture(modelName string) {
+	printer := NewModelArchitecturePrinter(modelName)
+	printer.PrintArchitecture(mt.modelSpec)
+}
+
 // Cleanup releases all resources
 func (mt *ModelTrainer) Cleanup() {
 	if mt.modelEngine != nil {

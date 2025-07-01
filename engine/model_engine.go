@@ -2,11 +2,11 @@ package engine
 
 import (
 	"fmt"
-	"unsafe"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/layers"
 	"github.com/tsawler/go-metal/memory"
+	"github.com/tsawler/go-metal/optimizer"
 )
 
 // ModelTrainingEngine extends the existing MPSTrainingEngine with layer-based model support
@@ -70,15 +70,54 @@ func NewModelTrainingEngineWithAdam(
 	config cgo_bridge.TrainingConfig,
 	adamConfig map[string]interface{},
 ) (*ModelTrainingEngine, error) {
-	// Create base model engine
-	modelEngine, err := NewModelTrainingEngine(modelSpec, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create base model engine: %v", err)
+	// Validate model first
+	if err := modelSpec.ValidateModelForTrainingEngine(); err != nil {
+		return nil, fmt.Errorf("model validation failed: %v", err)
 	}
 	
-	// Configure Adam optimizer with model parameter shapes
-	// TODO: Integration with existing Adam optimizer
-	// For now, the base engine handles this through the existing mechanism
+	// Convert adamConfig to proper AdamConfig struct
+	optAdamConfig := optimizer.AdamConfig{
+		LearningRate: config.LearningRate,
+		Beta1:        config.Beta1,
+		Beta2:        config.Beta2,
+		Epsilon:      config.Epsilon,
+		WeightDecay:  config.WeightDecay,
+	}
+	
+	// Get only FC layer parameter shapes for Adam (hybrid architecture)
+	fcParameterShapes := getFCParameterShapes(modelSpec)
+	
+	// Create base training engine with Adam for FC parameters only
+	baseEngine, err := NewMPSTrainingEngineWithAdam(config, optAdamConfig, fcParameterShapes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Adam training engine: %v", err)
+	}
+	
+	// Create parameter tensors for the model
+	paramTensors, err := modelSpec.CreateParameterTensors()
+	if err != nil {
+		baseEngine.Cleanup()
+		return nil, fmt.Errorf("failed to create parameter tensors: %v", err)
+	}
+	
+	modelEngine := &ModelTrainingEngine{
+		MPSTrainingEngine: baseEngine,
+		modelSpec:         modelSpec,
+		parameterTensors:  paramTensors,
+		compiledForModel:  false,
+	}
+	
+	// Initialize parameters with proper values
+	if err := modelEngine.initializeModelParameters(); err != nil {
+		modelEngine.Cleanup()
+		return nil, fmt.Errorf("failed to initialize model parameters: %v", err)
+	}
+	
+	// Compile model for execution
+	if err := modelEngine.compileForExecution(); err != nil {
+		modelEngine.Cleanup()
+		return nil, fmt.Errorf("failed to compile model for execution: %v", err)
+	}
 	
 	return modelEngine, nil
 }
@@ -145,7 +184,7 @@ func (mte *ModelTrainingEngine) initializeDenseParameters(
 	// Initialize bias tensor (if present)
 	if useBias {
 		biasTensor := mte.parameterTensors[*paramIndex]
-		err := biasTensor.Zero()
+		err := cgo_bridge.ZeroMetalBuffer(mte.MPSTrainingEngine.GetDevice(), biasTensor.MetalBuffer(), biasTensor.Size())
 		if err != nil {
 			return fmt.Errorf("failed to zero bias: %v", err)
 		}
@@ -188,7 +227,7 @@ func (mte *ModelTrainingEngine) initializeConv2DParameters(
 	// Initialize bias tensor (if present)
 	if useBias {
 		biasTensor := mte.parameterTensors[*paramIndex]
-		err := biasTensor.Zero()
+		err := cgo_bridge.ZeroMetalBuffer(mte.MPSTrainingEngine.GetDevice(), biasTensor.MetalBuffer(), biasTensor.Size())
 		if err != nil {
 			return fmt.Errorf("failed to zero conv bias: %v", err)
 		}
@@ -256,14 +295,9 @@ func (mte *ModelTrainingEngine) initializeNormal(tensor *memory.Tensor, mean, st
 // compileForExecution configures the TrainingEngine for this specific model
 // This is where we bridge the layer specification with the existing high-performance engine
 func (mte *ModelTrainingEngine) compileForExecution() error {
-	// Generate TrainingEngine configuration from model specification
-	engineConfig, err := mte.modelSpec.GetTrainingEngineConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get training engine config: %v", err)
-	}
-	
 	// For now, we use the existing hybrid CNN architecture
 	// TODO: Extend CGO bridge to accept generic layer configurations
+	// TODO: Use model specification to configure the engine
 	
 	// Validate that our model matches the expected hybrid CNN structure
 	// (This ensures compatibility with the existing 20k+ batch/s engine)
@@ -283,8 +317,8 @@ func (mte *ModelTrainingEngine) validateHybridCNNCompatibility() error {
 	// 3. Dense layer (handled by MPSGraph)
 	// 4. Softmax/Loss (handled by MPSGraph)
 	
-	layers := mte.modelSpec.Layers
-	if len(layers) < 3 {
+	modelLayerSpecs := mte.modelSpec.Layers
+	if len(modelLayerSpecs) < 3 {
 		return fmt.Errorf("hybrid CNN requires at least 3 layers (Conv2D, activation, Dense)")
 	}
 	
@@ -292,7 +326,7 @@ func (mte *ModelTrainingEngine) validateHybridCNNCompatibility() error {
 	hasConv := false
 	hasDense := false
 	
-	for _, layer := range layers {
+	for _, layer := range modelLayerSpecs {
 		switch layer.Type {
 		case layers.Conv2D:
 			hasConv = true
@@ -350,7 +384,9 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdam(
 		return 0, fmt.Errorf("model not compiled for execution")
 	}
 	
-	// Use the existing Adam training step
+	// Use the existing Adam training step with FC parameters only
+	// The hybrid architecture expects only FC parameters to be passed to the engine
+	// (MPS convolution handles its own weights internally)
 	fcParameters := mte.getFCLayerParameters()
 	if len(fcParameters) == 0 {
 		return 0, fmt.Errorf("no FC layer parameters found")
@@ -398,6 +434,42 @@ func (mte *ModelTrainingEngine) getFCLayerParameters() []*memory.Tensor {
 	}
 	
 	return fcParams
+}
+
+// getFCParameterShapes extracts the parameter shapes for FC layers only
+func getFCParameterShapes(modelSpec *layers.ModelSpec) [][]int {
+	var fcShapes [][]int
+	paramIndex := 0
+	
+	// Find the first Dense layer and return its parameter shapes
+	for _, layerSpec := range modelSpec.Layers {
+		switch layerSpec.Type {
+		case layers.Dense:
+			// Dense layer has weight + optional bias
+			fcShapes = append(fcShapes, modelSpec.ParameterShapes[paramIndex]) // weights
+			paramIndex++
+			
+			if useBias, exists := layerSpec.Parameters["use_bias"].(bool); exists && useBias {
+				fcShapes = append(fcShapes, modelSpec.ParameterShapes[paramIndex]) // bias
+				paramIndex++
+			}
+			
+			return fcShapes // Return first Dense layer parameter shapes
+			
+		case layers.Conv2D:
+			// Skip Conv2D parameters (handled by MPS)
+			paramIndex++ // weights
+			if useBias, exists := layerSpec.Parameters["use_bias"].(bool); exists && useBias {
+				paramIndex++ // bias
+			}
+			
+		case layers.ReLU, layers.Softmax:
+			// No parameters for activation layers
+			continue
+		}
+	}
+	
+	return fcShapes
 }
 
 // GetModelSpec returns the model specification

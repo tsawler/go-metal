@@ -186,7 +186,7 @@ uintptr_t create_training_engine(uintptr_t device_ptr, training_config_t* config
         
         // Skip compilation - use direct graph execution instead
         // This avoids the isStaticMPSType assertion that occurs during compilation
-        NSLog(@"Successfully created MPSGraph for intermediate CNN forward pass (direct execution)");
+        // NSLog(@"Successfully created MPSGraph for intermediate CNN forward pass (direct execution)");
         engine->initialized = YES;
         engine->useConstantWeights = NO; // Default to placeholder approach
         
@@ -323,7 +323,7 @@ uintptr_t create_training_engine_constant_weights(uintptr_t device_ptr, training
         
         engine->lossOutput = loss;
         
-        NSLog(@"Successfully created MPSGraph with CONSTANT WEIGHTS for CNN");
+        // NSLog(@"Successfully created MPSGraph with CONSTANT WEIGHTS for CNN");
         engine->initialized = YES;
         
         return (uintptr_t)engine;
@@ -508,9 +508,9 @@ uintptr_t create_training_engine_hybrid(uintptr_t device_ptr, training_config_t*
         engine->fcWeightGrads = gradientDict[engine->fcWeights];
         engine->fcBiasGrads = gradientDict[engine->fcBias];
         
-        NSLog(@"Successfully created HYBRID MPS/MPSGraph training engine");
-        NSLog(@"  - MPS Convolution: 3->8 channels, 3x3 kernel");
-        NSLog(@"  - MPSGraph: ReLU -> GlobalPool -> FC -> Loss + Gradients");
+        // NSLog(@"Successfully created HYBRID MPS/MPSGraph training engine");
+        // NSLog(@"  - MPS Convolution: 3->8 channels, 3x3 kernel");
+        // NSLog(@"  - MPSGraph: ReLU -> GlobalPool -> FC -> Loss + Gradients");
         engine->initialized = YES;
         
         return (uintptr_t)engine;
@@ -575,7 +575,7 @@ int execute_training_step_hybrid(
             [fcBiasBuf didModifyRange:NSMakeRange(0, fcBiasBuf.length)];
             
             // === STEP 1: MPS Convolution ===
-            NSLog(@"🔄 Step 1: Executing MPS convolution");
+            // NSLog(@"🔄 Step 1: Executing MPS convolution");
             
             // Create input MPSImage [32, 3, 32, 32] -> [3, 32, 32] per image
             MPSImageDescriptor* inputDesc = [MPSImageDescriptor imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
@@ -626,7 +626,7 @@ int execute_training_step_hybrid(
                             imageIndex:0];
             
             // === STEP 3: MPSGraph execution (post-convolution) ===
-            NSLog(@"🔄 Step 3: Executing MPSGraph for ReLU + Pool + FC + Loss");
+            // NSLog(@"🔄 Step 3: Executing MPSGraph for ReLU + Pool + FC + Loss");
             
             // Create tensor data for MPSGraph
             MPSGraphTensorData* convOutputTD = [[MPSGraphTensorData alloc] 
@@ -748,7 +748,7 @@ int execute_training_step_hybrid_full(
             [fcBiasBuf didModifyRange:NSMakeRange(0, fcBiasBuf.length)];
             
             // === STEP 1: MPS Convolution ===
-            NSLog(@"🔄 Step 1: Executing MPS convolution");
+            // NSLog(@"🔄 Step 1: Executing MPS convolution");
             
             // Create input MPSImage [32, 3, 32, 32] -> [3, 32, 32] per image
             MPSImageDescriptor* inputDesc = [MPSImageDescriptor imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
@@ -799,7 +799,7 @@ int execute_training_step_hybrid_full(
                             imageIndex:0];
             
             // === STEP 3: MPSGraph forward + backward pass ===
-            NSLog(@"🔄 Step 3: Executing MPSGraph forward + backward pass");
+            // NSLog(@"🔄 Step 3: Executing MPSGraph forward + backward pass");
             
             // Create tensor data for MPSGraph
             MPSGraphTensorData* convOutputTD = [[MPSGraphTensorData alloc] 
@@ -848,7 +848,7 @@ int execute_training_step_hybrid_full(
                     float lossValue = 0.0f;
                     [[lossData mpsndarray] readBytes:&lossValue strideBytes:nil];
                     *loss_out = lossValue;
-                    NSLog(@"✅ Forward pass complete. Loss: %.6f", *loss_out);
+                    // NSLog(@"✅ Forward pass complete. Loss: %.6f", *loss_out);
                 } else {
                     NSLog(@"❌ Failed to get loss data");
                     return -10;
@@ -2156,8 +2156,8 @@ uintptr_t allocate_metal_buffer(uintptr_t device_ptr, int size, int device_type)
             return 0;
         }
         
-        NSLog(@"Allocated Metal buffer: requested=%d, aligned=%d, actual=%lu", 
-              size, alignedSize, buffer.length);
+        // NSLog(@"Allocated Metal buffer: requested=%d, aligned=%d, actual=%lu", 
+        //       size, alignedSize, buffer.length);
         
         // Return buffer pointer (ARC will manage lifetime)
         return (uintptr_t)(__bridge_retained void*)buffer;
@@ -2239,8 +2239,8 @@ int execute_adam_step_mpsgraph(
             float bias_correction1 = 1.0f - powf(beta1, (float)step_count);
             float bias_correction2 = 1.0f - powf(beta2, (float)step_count);
             
-            NSLog(@"Adam MPSGraph step %d: lr=%.6f, beta1=%.3f, beta2=%.3f, bias_corr1=%.6f, bias_corr2=%.6f",
-                  step_count, learning_rate, beta1, beta2, bias_correction1, bias_correction2);
+            // NSLog(@"Adam MPSGraph step %d: lr=%.6f, beta1=%.3f, beta2=%.3f, bias_corr1=%.6f, bias_corr2=%.6f",
+            //       step_count, learning_rate, beta1, beta2, bias_correction1, bias_correction2);
             
             // Process each weight tensor using MPSGraph
             for (int i = 0; i < num_weights; i++) {
@@ -2729,7 +2729,7 @@ int execute_training_step_hybrid_with_gradients(
             // but extract gradients to provided buffers instead of applying weight updates
             
             // === STEP 1: MPS Convolution ===
-            NSLog(@"🔄 Step 1: Executing MPS convolution");
+            // NSLog(@"🔄 Step 1: Executing MPS convolution");
             
             // Create input MPSImage [32, 3, 32, 32] -> [3, 32, 32] per image
             MPSImageDescriptor* inputDesc = [MPSImageDescriptor imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
@@ -2776,7 +2776,7 @@ int execute_training_step_hybrid_with_gradients(
                             imageIndex:0];
             
             // === STEP 3: MPSGraph forward + backward pass ===
-            NSLog(@"🔄 Step 3: Executing MPSGraph forward + backward pass");
+            // NSLog(@"🔄 Step 3: Executing MPSGraph forward + backward pass");
             
             // Create tensor data for MPSGraph
             MPSGraphTensorData* convOutputTD = [[MPSGraphTensorData alloc] 
@@ -2825,7 +2825,7 @@ int execute_training_step_hybrid_with_gradients(
                     float lossValue = 0.0f;
                     [[lossData mpsndarray] readBytes:&lossValue strideBytes:nil];
                     *loss_out = lossValue;
-                    NSLog(@"✅ Forward pass complete. Loss: %.6f", *loss_out);
+                    // NSLog(@"✅ Forward pass complete. Loss: %.6f", *loss_out);
                 } else {
                     NSLog(@"❌ Failed to get loss data");
                     return -10;
@@ -2844,7 +2844,7 @@ int execute_training_step_hybrid_with_gradients(
                     float* biasGrads = (float*)[fcBiasGradBuf contents];
                     [[biasGradData mpsndarray] readBytes:biasGrads strideBytes:nil];
                     
-                    NSLog(@"✅ Real gradients computed and extracted for Adam optimizer");
+                    // NSLog(@"✅ Real gradients computed and extracted for Adam optimizer");
                 } else {
                     NSLog(@"❌ Failed to get gradient data");
                     return -11;
@@ -2905,8 +2905,8 @@ int copy_float32_array_to_metal_buffer(uintptr_t buffer_ptr, float* data, int nu
         int result = copy_data_to_metal_buffer(buffer_ptr, (void*)data, size_bytes);
         
         if (result == 0) {
-            NSLog(@"Successfully copied %d float32 elements (%d bytes) to Metal buffer", 
-                  num_elements, size_bytes);
+            // NSLog(@"Successfully copied %d float32 elements (%d bytes) to Metal buffer", 
+            //       num_elements, size_bytes);
         }
         
         return result;
@@ -2925,8 +2925,8 @@ int copy_int32_array_to_metal_buffer(uintptr_t buffer_ptr, int* data, int num_el
         int result = copy_data_to_metal_buffer(buffer_ptr, (void*)data, size_bytes);
         
         if (result == 0) {
-            NSLog(@"Successfully copied %d int32 elements (%d bytes) to Metal buffer", 
-                  num_elements, size_bytes);
+            // NSLog(@"Successfully copied %d int32 elements (%d bytes) to Metal buffer", 
+            //       num_elements, size_bytes);
         }
         
         return result;

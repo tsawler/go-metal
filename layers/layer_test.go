@@ -1,10 +1,11 @@
-package layers
+package layers_test
 
 import (
 	"fmt"
 	"testing"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/layers"
 	"github.com/tsawler/go-metal/training"
 )
 
@@ -15,7 +16,7 @@ func TestCompliantLayerSystem(t *testing.T) {
 	// Step 1: Create a model using the layer builder (pure configuration)
 	inputShape := []int{32, 3, 32, 32} // Batch of 32 RGB 32x32 images
 	
-	builder := NewModelBuilder(inputShape)
+	builder := layers.NewModelBuilder(inputShape)
 	model, err := builder.
 		AddConv2D(8, 3, 1, 1, true, "conv1").    // 8 filters, 3x3 kernel, stride=1, padding=1
 		AddReLU("relu1").
@@ -112,7 +113,7 @@ func TestLayerFactoryAndBuilder(t *testing.T) {
 	fmt.Println("\n=== Testing Layer Factory and Builder ===")
 	
 	// Test layer factory
-	factory := NewFactory()
+	factory := layers.NewFactory()
 	
 	// Create layer specifications
 	conv2d := factory.CreateConv2DSpec(3, 16, 3, 1, 1, true, "conv1")
@@ -127,7 +128,7 @@ func TestLayerFactoryAndBuilder(t *testing.T) {
 	
 	// Test model builder
 	inputShape := []int{16, 3, 64, 64} // Larger input for testing
-	builder := NewModelBuilder(inputShape)
+	builder := layers.NewModelBuilder(inputShape)
 	
 	model, err := builder.
 		AddLayer(conv2d).
