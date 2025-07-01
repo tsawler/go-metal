@@ -253,6 +253,7 @@ func ExecuteInference(
 	weightBuffers []unsafe.Pointer,
 	batchSize int,
 	numClasses int,
+	isDynamic bool,
 ) (*InferenceResult, error)
 ```
 ExecuteInference performs forward-only pass and returns predictions Conforms to

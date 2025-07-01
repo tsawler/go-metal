@@ -161,6 +161,18 @@ int execute_training_step_dynamic(
     int batch_size,
     float* loss_out
 );
+
+int execute_training_step_dynamic_with_gradients(
+    uintptr_t engine,
+    uintptr_t input_buffer,
+    uintptr_t label_buffer,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    int num_weights,
+    float learning_rate,
+    int batch_size,
+    float* loss_out
+);
 */
 import "C"
 import (
@@ -847,6 +859,62 @@ func ExecuteTrainingStepDynamic(
 
 	if result != 0 {
 		return 0, fmt.Errorf("dynamic training step failed with error code: %d", result)
+	}
+
+	return float32(lossOut), nil
+}
+
+// ExecuteTrainingStepDynamicWithGradients executes a dynamic training step with real gradient computation
+func ExecuteTrainingStepDynamicWithGradients(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	learningRate float32,
+	batchSize int,
+) (float32, error) {
+	// Validate input parameters
+	if len(weightBuffers) != len(gradientBuffers) {
+		return 0, fmt.Errorf("weight buffer count (%d) must match gradient buffer count (%d)", 
+			len(weightBuffers), len(gradientBuffers))
+	}
+	
+	// Convert weight buffers to C array
+	var cWeightBuffers *C.uintptr_t
+	if len(weightBuffers) > 0 {
+		cWeights := make([]C.uintptr_t, len(weightBuffers))
+		for i, buf := range weightBuffers {
+			cWeights[i] = C.uintptr_t(uintptr(buf))
+		}
+		cWeightBuffers = &cWeights[0]
+	}
+	
+	// Convert gradient buffers to C array
+	var cGradientBuffers *C.uintptr_t
+	if len(gradientBuffers) > 0 {
+		cGradients := make([]C.uintptr_t, len(gradientBuffers))
+		for i, buf := range gradientBuffers {
+			cGradients[i] = C.uintptr_t(uintptr(buf))
+		}
+		cGradientBuffers = &cGradients[0]
+	}
+
+	var lossOut C.float
+	result := C.execute_training_step_dynamic_with_gradients(
+		C.uintptr_t(uintptr(engine)),
+		C.uintptr_t(uintptr(inputBuffer)),
+		C.uintptr_t(uintptr(labelBuffer)),
+		cWeightBuffers,
+		cGradientBuffers,
+		C.int(len(weightBuffers)),
+		C.float(learningRate),
+		C.int(batchSize),
+		&lossOut,
+	)
+
+	if result != 0 {
+		return 0, fmt.Errorf("dynamic gradient training step failed with error code: %d", result)
 	}
 
 	return float32(lossOut), nil

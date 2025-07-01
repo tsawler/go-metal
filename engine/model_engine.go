@@ -2,6 +2,8 @@ package engine
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
 	"unsafe"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
@@ -373,11 +375,11 @@ func (mte *ModelTrainingEngine) initializeUniform(tensor *memory.Tensor, min, ma
 		totalElements *= dim
 	}
 	
-	// Generate random data (simplified - would use proper random generation)
+	// Generate proper random data
 	data := make([]float32, totalElements)
 	for i := range data {
-		// Simple uniform distribution (should use proper random number generator)
-		data[i] = min + (max-min)*0.5 // Placeholder - use actual random values
+		// Proper uniform distribution using rand.Float32()
+		data[i] = min + (max-min)*rand.Float32()
 	}
 	
 	// Copy to GPU tensor
@@ -392,11 +394,26 @@ func (mte *ModelTrainingEngine) initializeNormal(tensor *memory.Tensor, mean, st
 		totalElements *= dim
 	}
 	
-	// Generate random data (simplified - would use proper random generation)
+	// Generate proper normal distribution using Box-Muller transform
 	data := make([]float32, totalElements)
-	for i := range data {
-		// Simple normal distribution (should use proper random number generator)
-		data[i] = mean // Placeholder - use actual normal random values
+	for i := 0; i < totalElements; i += 2 {
+		// Box-Muller transform for normal distribution
+		u1 := rand.Float32()
+		u2 := rand.Float32()
+		
+		// Avoid log(0)
+		if u1 < 1e-8 {
+			u1 = 1e-8
+		}
+		
+		z0 := float32(math.Sqrt(-2.0*math.Log(float64(u1))) * math.Cos(2.0*math.Pi*float64(u2)))
+		z1 := float32(math.Sqrt(-2.0*math.Log(float64(u1))) * math.Sin(2.0*math.Pi*float64(u2)))
+		
+		// Apply mean and standard deviation
+		data[i] = mean + std*z0
+		if i+1 < totalElements {
+			data[i+1] = mean + std*z1
+		}
 	}
 	
 	// Copy to GPU tensor
@@ -514,13 +531,12 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdam(
 	}
 }
 
-// executeAdamStepDynamic executes Adam optimization for dynamic engines using the dedicated dynamic training step
+// executeAdamStepDynamic executes Adam optimization for dynamic engines using forward+backward+Adam pattern
 func (mte *ModelTrainingEngine) executeAdamStepDynamic(
 	inputTensor *memory.Tensor,
 	labelTensor *memory.Tensor,
 ) (float32, error) {
-	// The dynamic engine has its own complete graph with loss computation
-	// Use the dedicated dynamic training step function that computes real loss
+	// FIXED: Use proper forward+backward+Adam optimization pattern instead of incomplete C function
 	
 	// Get all parameter tensors for the dynamic engine (it uses all parameters, not just FC)
 	allParameters := mte.parameterTensors
@@ -544,15 +560,68 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamic(
 	}
 	batchSize := inputShape[0]
 	
-	// Use the dedicated dynamic training step with real loss computation
-	return cgo_bridge.ExecuteTrainingStepDynamic(
-		mte.MPSTrainingEngine.engine,
+	// FIXED: Use actual gradient computation instead of dummy gradients
+	// This replaces the entire forward+dummy gradient approach with real gradient computation
+	
+	// Step 1: Set weight buffers in Adam optimizer
+	if mte.MPSTrainingEngine.adamOptimizer == nil {
+		return 0, fmt.Errorf("Adam optimizer not initialized for dynamic engine")
+	}
+	
+	err := mte.MPSTrainingEngine.adamOptimizer.SetWeightBuffers(weightBuffers)
+	if err != nil {
+		return 0, fmt.Errorf("failed to set weight buffers in Adam optimizer: %v", err)
+	}
+	
+	// Step 2: Create gradient tensors with same shapes as parameters
+	gradientBuffers := make([]unsafe.Pointer, len(allParameters))
+	gradientTensors := make([]*memory.Tensor, len(allParameters))
+	
+	for i, paramTensor := range allParameters {
+		// Create gradient tensor with same shape as parameter
+		gradTensor, err := memory.NewTensor(paramTensor.Shape(), memory.Float32, memory.GPU)
+		if err != nil {
+			// Cleanup previously created tensors
+			for j := 0; j < i; j++ {
+				gradientTensors[j].Release()
+			}
+			return 0, fmt.Errorf("failed to create gradient tensor %d: %v", i, err)
+		}
+		gradientTensors[i] = gradTensor
+		gradientBuffers[i] = gradTensor.MetalBuffer()
+	}
+	
+	// Cleanup gradient tensors after use
+	defer func() {
+		for _, gradTensor := range gradientTensors {
+			if gradTensor != nil {
+				gradTensor.Release()
+			}
+		}
+	}()
+	
+	// Step 3: Compute ACTUAL loss and gradients using MPSGraph automatic differentiation
+	actualLoss, err := cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
+		unsafe.Pointer(mte.MPSTrainingEngine.engine),
 		inputTensor.MetalBuffer(),
 		labelTensor.MetalBuffer(),
 		weightBuffers,
-		mte.config.LearningRate,
+		gradientBuffers,
+		0.001, // learning rate (not used in gradient computation, only for legacy interface)
 		batchSize,
 	)
+	if err != nil {
+		return 0, fmt.Errorf("gradient computation failed: %v", err)
+	}
+	
+	// Step 4: Apply Adam optimization with REAL gradients
+	err = mte.MPSTrainingEngine.adamOptimizer.Step(gradientBuffers)
+	if err != nil {
+		return 0, fmt.Errorf("Adam optimization step failed: %v", err)
+	}
+	
+	// Return actual computed loss
+	return actualLoss, nil
 }
 
 // getAllParameterTensors returns all parameter tensors for dynamic inference
