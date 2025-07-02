@@ -31,6 +31,10 @@ type AdamOptimizerState struct {
 
 	// Buffer sizes for proper cleanup
 	bufferSizes []int
+	
+	// RESOURCE LEAK FIX: Command buffer pooling
+	commandPool unsafe.Pointer  // Optional command buffer pool for Metal operations
+	usePooling  bool           // Whether to use command buffer pooling
 }
 
 // AdamConfig holds configuration for Adam optimizer
@@ -177,22 +181,42 @@ func (adam *AdamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 
 	adam.StepCount++
 
-	// Execute Adam step using MPSGraph for optimal GPU performance
-	// This uses Apple's optimized MPSGraph Adam operations instead of CPU fallback
-	err := cgo_bridge.ExecuteAdamStepMPSGraph(
-		adam.device,
-		adam.WeightBuffers,
-		gradientBuffers,
-		adam.MomentumBuffers,
-		adam.VarianceBuffers,
-		adam.bufferSizes,
-		adam.LearningRate,
-		adam.Beta1,
-		adam.Beta2,
-		adam.Epsilon,
-		adam.WeightDecay,
-		int(adam.StepCount),
-	)
+	// RESOURCE LEAK FIX: Use pooled version if command pooling is enabled
+	var err error
+	if adam.usePooling && adam.commandPool != nil {
+		// Use pooled command buffers to prevent Metal resource accumulation
+		err = cgo_bridge.ExecuteAdamStepMPSGraphPooled(
+			adam.device,
+			adam.WeightBuffers,
+			gradientBuffers,
+			adam.MomentumBuffers,
+			adam.VarianceBuffers,
+			adam.bufferSizes,
+			adam.LearningRate,
+			adam.Beta1,
+			adam.Beta2,
+			adam.Epsilon,
+			adam.WeightDecay,
+			int(adam.StepCount),
+			adam.commandPool,
+		)
+	} else {
+		// Fallback to non-pooled version
+		err = cgo_bridge.ExecuteAdamStepMPSGraph(
+			adam.device,
+			adam.WeightBuffers,
+			gradientBuffers,
+			adam.MomentumBuffers,
+			adam.VarianceBuffers,
+			adam.bufferSizes,
+			adam.LearningRate,
+			adam.Beta1,
+			adam.Beta2,
+			adam.Epsilon,
+			adam.WeightDecay,
+			int(adam.StepCount),
+		)
+	}
 
 	if err != nil {
 		return fmt.Errorf("Adam step execution failed: %v", err)
@@ -221,6 +245,13 @@ func pow(x, y float32) float32 {
 // UpdateLearningRate updates the learning rate (useful for learning rate scheduling)
 func (adam *AdamOptimizerState) UpdateLearningRate(newLR float32) {
 	adam.LearningRate = newLR
+}
+
+// SetCommandPool enables command buffer pooling for Metal operations
+// RESOURCE LEAK FIX: Allows Adam optimizer to use pooled command buffers
+func (adam *AdamOptimizerState) SetCommandPool(commandPool unsafe.Pointer) {
+	adam.commandPool = commandPool
+	adam.usePooling = (commandPool != nil)
 }
 
 // GetStep returns the current step count

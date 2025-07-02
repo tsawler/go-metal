@@ -82,6 +82,13 @@ func DeallocateMetalBuffer(buffer unsafe.Pointer)
 ```
 DeallocateMetalBuffer deallocates a Metal buffer
 
+#### func  DestroyMetalDevice
+
+```go
+func DestroyMetalDevice(device unsafe.Pointer)
+```
+DestroyMetalDevice destroys a Metal device
+
 #### func  DestroyTrainingEngine
 
 ```go
@@ -157,6 +164,22 @@ func ExecuteTrainingStepDynamic(
 ```
 ExecuteTrainingStepDynamic executes a training step using dynamic engine with
 real loss computation
+
+#### func  ExecuteTrainingStepDynamicWithGradients
+
+```go
+func ExecuteTrainingStepDynamicWithGradients(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	learningRate float32,
+	batchSize int,
+) (float32, error)
+```
+ExecuteTrainingStepDynamicWithGradients executes a dynamic training step with
+real gradient computation
 
 #### func  ExecuteTrainingStepHybrid
 

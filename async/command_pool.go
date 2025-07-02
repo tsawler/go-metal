@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"unsafe"
+	
+	"github.com/tsawler/go-metal/cgo_bridge"
 )
 
 // CommandBuffer represents a Metal command buffer wrapper
@@ -62,20 +64,19 @@ func NewCommandBufferPool(commandQueue unsafe.Pointer, maxBuffers int) (*Command
 
 // createBuffer creates a new command buffer
 func (cbp *CommandBufferPool) createBuffer() (*CommandBuffer, error) {
-	// Note: In a complete implementation, this would create an actual MTLCommandBuffer
-	// For now, we'll use a placeholder approach since the Metal CGO integration
-	// would be handled in the cgo_bridge package
-	
 	cbp.mutex.Lock()
 	id := cbp.nextID
 	cbp.nextID++
 	cbp.mutex.Unlock()
 	
-	// TODO: Call CGO function to create MTLCommandBuffer from queue
-	// buffer := cgo_bridge.CreateCommandBuffer(cbp.commandQueue)
+	// IMPLEMENTED: Create actual MTLCommandBuffer using CGO bridge
+	buffer, err := cgo_bridge.CreateCommandBuffer(cbp.commandQueue)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Metal command buffer: %v", err)
+	}
 	
 	return &CommandBuffer{
-		buffer: nil, // Placeholder - would be actual MTLCommandBuffer pointer
+		buffer: buffer,
 		inUse:  false,
 		id:     id,
 	}, nil
@@ -133,17 +134,27 @@ func (cbp *CommandBufferPool) ExecuteAsync(buffer *CommandBuffer, completion fun
 		return fmt.Errorf("command buffer is not marked as in use")
 	}
 	
-	// TODO: Implement actual Metal command buffer execution
-	// This would involve:
-	// 1. Adding completion handler to command buffer
-	// 2. Committing command buffer for execution
-	// 3. Setting up callback to return buffer to pool when done
-	
-	// For now, simulate async execution
+	// IMPLEMENTED: Actual Metal command buffer execution
 	go func() {
-		// Simulate some work
+		var err error
+		
+		// Setup autorelease pool for Metal resource management
+		cgo_bridge.SetupAutoreleasePool()
+		defer cgo_bridge.DrainAutoreleasePool()
+		
+		// Commit command buffer for execution
+		if commitErr := cgo_bridge.CommitCommandBuffer(buffer.buffer); commitErr != nil {
+			err = fmt.Errorf("failed to commit command buffer: %v", commitErr)
+		} else {
+			// Wait for completion
+			if waitErr := cgo_bridge.WaitCommandBufferCompletion(buffer.buffer); waitErr != nil {
+				err = fmt.Errorf("command buffer execution failed: %v", waitErr)
+			}
+		}
+		
+		// Call completion handler
 		if completion != nil {
-			completion(nil)
+			completion(err)
 		}
 		
 		// Return buffer to pool
@@ -233,8 +244,8 @@ func (cbp *CommandBufferPool) Cleanup() {
 	// Release all buffers
 	for _, buffer := range cbp.buffers {
 		if buffer.buffer != nil {
-			// TODO: Call CGO function to release MTLCommandBuffer
-			// cgo_bridge.ReleaseCommandBuffer(buffer.buffer)
+			// IMPLEMENTED: Release MTLCommandBuffer using CGO bridge
+			cgo_bridge.ReleaseCommandBuffer(buffer.buffer)
 			buffer.buffer = nil
 		}
 	}

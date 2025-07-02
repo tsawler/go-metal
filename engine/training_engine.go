@@ -18,6 +18,10 @@ type MPSTrainingEngine struct {
 	initialized  bool
 	isDynamic    bool                     // True if using dynamic engine, false for hybrid
 	adamOptimizer *optimizer.AdamOptimizerState // Optional Adam optimizer
+	
+	// RESOURCE LEAK FIX: Command buffer pooling support
+	commandQueue unsafe.Pointer           // MTLCommandQueue for command buffer creation
+	useCommandPooling bool                // Flag to enable command buffer pooling
 }
 
 // NewMPSTrainingEngine creates a new training engine
@@ -37,6 +41,13 @@ func NewMPSTrainingEngine(config cgo_bridge.TrainingConfig) (*MPSTrainingEngine,
 		return nil, fmt.Errorf("failed to create training engine: %v", err)
 	}
 	
+	// RESOURCE LEAK FIX: Initialize command queue for command buffer pooling
+	commandQueue, err := cgo_bridge.CreateCommandQueue(device)
+	if err != nil {
+		cgo_bridge.DestroyTrainingEngine(engine)
+		return nil, fmt.Errorf("failed to create command queue: %v", err)
+	}
+	
 	return &MPSTrainingEngine{
 		device:        device,
 		engine:        engine,
@@ -44,6 +55,10 @@ func NewMPSTrainingEngine(config cgo_bridge.TrainingConfig) (*MPSTrainingEngine,
 		initialized:   true,
 		isDynamic:     false, // Regular hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
+		
+		// RESOURCE LEAK FIX: Command buffer pooling support
+		commandQueue:      commandQueue,
+		useCommandPooling: true, // Enable command pooling by default
 	}, nil
 }
 
@@ -65,6 +80,13 @@ func NewMPSTrainingEngineConstantWeights(config cgo_bridge.TrainingConfig) (*MPS
 		return nil, fmt.Errorf("failed to create constant weights training engine: %v", err)
 	}
 	
+	// RESOURCE LEAK FIX: Initialize command queue for command buffer pooling
+	commandQueue, err := cgo_bridge.CreateCommandQueue(device)
+	if err != nil {
+		cgo_bridge.DestroyTrainingEngine(engine)
+		return nil, fmt.Errorf("failed to create command queue: %v", err)
+	}
+	
 	return &MPSTrainingEngine{
 		device:        device,
 		engine:        engine,
@@ -72,6 +94,10 @@ func NewMPSTrainingEngineConstantWeights(config cgo_bridge.TrainingConfig) (*MPS
 		initialized:   true,
 		isDynamic:     false, // Constant weights hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
+		
+		// RESOURCE LEAK FIX: Command buffer pooling support
+		commandQueue:      commandQueue,
+		useCommandPooling: true, // Enable command pooling by default
 	}, nil
 }
 
@@ -93,6 +119,13 @@ func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig) (*MPSTrainingE
 		return nil, fmt.Errorf("failed to create hybrid training engine: %v", err)
 	}
 	
+	// RESOURCE LEAK FIX: Initialize command queue for command buffer pooling
+	commandQueue, err := cgo_bridge.CreateCommandQueue(device)
+	if err != nil {
+		cgo_bridge.DestroyTrainingEngine(engine)
+		return nil, fmt.Errorf("failed to create command queue: %v", err)
+	}
+	
 	return &MPSTrainingEngine{
 		device:        device,
 		engine:        engine,
@@ -100,6 +133,10 @@ func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig) (*MPSTrainingE
 		initialized:   true,
 		isDynamic:     false, // Constant weights hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
+		
+		// RESOURCE LEAK FIX: Command buffer pooling support
+		commandQueue:      commandQueue,
+		useCommandPooling: true, // Enable command pooling by default
 	}, nil
 }
 
@@ -120,6 +157,12 @@ func NewMPSTrainingEngineWithAdam(config cgo_bridge.TrainingConfig, adamConfig o
 	}
 
 	engine.adamOptimizer = adamOpt
+	
+	// RESOURCE LEAK FIX: Enable command buffer pooling in Adam optimizer
+	if engine.useCommandPooling && engine.commandQueue != nil {
+		adamOpt.SetCommandPool(engine.commandQueue)
+	}
+	
 	return engine, nil
 }
 
@@ -184,9 +227,9 @@ func (e *MPSTrainingEngine) ExecuteStepHybrid(
 		return 0, fmt.Errorf("input or label tensor is nil")
 	}
 	
-	// Hybrid approach expects only FC weights (conv weights are built-in)
-	if len(weightTensors) != 2 {
-		return 0, fmt.Errorf("hybrid approach expects 2 weight tensors (FC weights + bias), got %d", len(weightTensors))
+	// Hybrid approach expects FC1 and FC2 weights (conv weights are built-in)
+	if len(weightTensors) != 4 {
+		return 0, fmt.Errorf("hybrid approach expects 4 weight tensors (FC1 weights, FC1 bias, FC2 weights, FC2 bias), got %d", len(weightTensors))
 	}
 	
 	// Extract Metal buffer pointers
@@ -232,9 +275,9 @@ func (e *MPSTrainingEngine) ExecuteStepHybridFull(
 		return 0, fmt.Errorf("input or label tensor is nil")
 	}
 	
-	// Hybrid approach expects only FC weights (conv weights are built-in)
-	if len(weightTensors) != 2 {
-		return 0, fmt.Errorf("hybrid approach expects 2 weight tensors (FC weights + bias), got %d", len(weightTensors))
+	// Hybrid approach expects FC1 and FC2 weights (conv weights are built-in)
+	if len(weightTensors) != 4 {
+		return 0, fmt.Errorf("hybrid approach expects 4 weight tensors (FC1 weights, FC1 bias, FC2 weights, FC2 bias), got %d", len(weightTensors))
 	}
 	
 	// Extract Metal buffer pointers
@@ -249,14 +292,30 @@ func (e *MPSTrainingEngine) ExecuteStepHybridFull(
 		weightBuffers[i] = tensor.MetalBuffer()
 	}
 	
-	// Execute hybrid full training step via CGO
-	loss, err := cgo_bridge.ExecuteTrainingStepHybridFull(
-		e.engine,
-		inputBuffer,
-		labelBuffer,
-		weightBuffers,
-		learningRate,
-	)
+	// RESOURCE LEAK FIX: Use command buffer pooled version if pooling is enabled
+	var loss float32
+	var err error
+	
+	if e.useCommandPooling && e.commandQueue != nil {
+		// Use pooled version with command queue for resource leak prevention
+		loss, err = cgo_bridge.ExecuteTrainingStepHybridFullPooled(
+			e.engine,
+			inputBuffer,
+			labelBuffer,
+			weightBuffers,
+			learningRate,
+			e.commandQueue, // Pass command queue as pool for now
+		)
+	} else {
+		// Fallback to original version
+		loss, err = cgo_bridge.ExecuteTrainingStepHybridFull(
+			e.engine,
+			inputBuffer,
+			labelBuffer,
+			weightBuffers,
+			learningRate,
+		)
+	}
 	
 	if err != nil {
 		return 0, fmt.Errorf("hybrid full training step execution failed: %v", err)
@@ -285,9 +344,9 @@ func (e *MPSTrainingEngine) ExecuteStepHybridFullWithAdam(
 		return 0, fmt.Errorf("input or label tensor is nil")
 	}
 
-	// Hybrid approach expects only FC weights (conv weights are built-in)
-	if len(weightTensors) != 2 {
-		return 0, fmt.Errorf("hybrid approach expects 2 weight tensors (FC weights + bias), got %d", len(weightTensors))
+	// Hybrid approach expects FC1 and FC2 weights (conv weights are built-in)
+	if len(weightTensors) != 4 {
+		return 0, fmt.Errorf("hybrid approach expects 4 weight tensors (FC1 weights, FC1 bias, FC2 weights, FC2 bias), got %d", len(weightTensors))
 	}
 
 	// Extract Metal buffer pointers
@@ -329,14 +388,29 @@ func (e *MPSTrainingEngine) ExecuteStepHybridFullWithAdam(
 		}
 	}()
 
-	// Execute forward + backward pass to get loss and gradients
-	loss, err := cgo_bridge.ExecuteTrainingStepHybridWithGradients(
-		e.engine,
-		inputBuffer,
-		labelBuffer,
-		weightBuffers,
-		gradientBuffers,
-	)
+	// RESOURCE LEAK FIX: Use pooled version if command pooling is enabled
+	var loss float32
+	var err error
+	
+	if e.useCommandPooling && e.commandQueue != nil {
+		loss, err = cgo_bridge.ExecuteTrainingStepHybridWithGradientsPooled(
+			e.engine,
+			inputBuffer,
+			labelBuffer,
+			weightBuffers,
+			gradientBuffers,
+			e.commandQueue, // Pass command queue as pool
+		)
+	} else {
+		// Fallback to non-pooled version
+		loss, err = cgo_bridge.ExecuteTrainingStepHybridWithGradients(
+			e.engine,
+			inputBuffer,
+			labelBuffer,
+			weightBuffers,
+			gradientBuffers,
+		)
+	}
 	
 	if err != nil {
 		return 0, fmt.Errorf("forward+backward pass failed: %v", err)
@@ -449,6 +523,17 @@ func (e *MPSTrainingEngine) Cleanup() {
 		cgo_bridge.DestroyTrainingEngine(e.engine)
 		e.engine = nil
 		e.initialized = false
+	}
+
+	// RESOURCE LEAK FIX: Release command queue before device cleanup
+	if e.commandQueue != nil {
+		cgo_bridge.ReleaseCommandQueue(e.commandQueue)
+		e.commandQueue = nil
+	}
+
+	if e.device != nil {
+		cgo_bridge.DestroyMetalDevice(e.device)
+		e.device = nil
 	}
 }
 

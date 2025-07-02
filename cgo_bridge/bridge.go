@@ -16,6 +16,7 @@ typedef struct {
 
 // Forward declarations for CGO functions
 uintptr_t create_metal_device();
+void destroy_metal_device(uintptr_t device);
 uintptr_t create_training_engine(uintptr_t device, training_config_t* config);
 uintptr_t create_training_engine_constant_weights(uintptr_t device, training_config_t* config);
 uintptr_t create_training_engine_hybrid(uintptr_t device, training_config_t* config);
@@ -42,6 +43,17 @@ int execute_training_step_hybrid_full(
     uintptr_t* weight_buffers,
     int num_weights,
     float learning_rate,
+    float* loss_out
+);
+// RESOURCE LEAK FIX: Command buffer pooled version for Metal resource management
+int execute_training_step_hybrid_full_pooled(
+    uintptr_t engine,
+    uintptr_t input_buffer,
+    uintptr_t label_buffer,
+    uintptr_t* weight_buffers,
+    int num_weights,
+    float learning_rate,
+    uintptr_t command_pool,
     float* loss_out
 );
 uintptr_t allocate_metal_buffer(uintptr_t device, int size, int device_type);
@@ -80,6 +92,35 @@ int execute_adam_step_mpsgraph(
     float epsilon,
     float weight_decay,
     int step_count
+);
+// RESOURCE LEAK FIX: Command buffer pooled version for Metal resource management
+int execute_adam_step_mpsgraph_pooled(
+    uintptr_t device,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* momentum_buffers,
+    uintptr_t* variance_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float beta1,
+    float beta2,
+    float epsilon,
+    float weight_decay,
+    int step_count,
+    uintptr_t command_pool
+);
+
+// RESOURCE LEAK FIX: Pooled version for Adam gradient computation
+int execute_training_step_hybrid_with_gradients_pooled(
+    uintptr_t engine,
+    uintptr_t input_buffer,
+    uintptr_t label_buffer,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    int num_weights,
+    uintptr_t command_pool,
+    float* loss_out
 );
 
 // Utility functions for buffer operations
@@ -173,6 +214,20 @@ int execute_training_step_dynamic_with_gradients(
     int batch_size,
     float* loss_out
 );
+
+// Command Buffer Management Functions for Resource Leak Prevention
+uintptr_t create_command_queue(uintptr_t device);
+void release_command_queue(uintptr_t command_queue);
+uintptr_t create_command_buffer(uintptr_t command_queue);
+void release_command_buffer(uintptr_t command_buffer);
+int commit_command_buffer(uintptr_t command_buffer);
+int wait_command_buffer_completion(uintptr_t command_buffer);
+void setup_autorelease_pool();
+void drain_autorelease_pool();
+
+// RESOURCE LEAK FIX: Command buffer pool management functions for Metal level
+uintptr_t get_command_buffer_from_pool(uintptr_t command_pool);
+void return_command_buffer_to_pool(uintptr_t command_pool, uintptr_t command_buffer);
 */
 import "C"
 import (
@@ -214,6 +269,13 @@ func CreateMetalDevice() (unsafe.Pointer, error) {
 		return nil, fmt.Errorf("failed to create Metal device")
 	}
 	return unsafe.Pointer(uintptr(device)), nil
+}
+
+// DestroyMetalDevice destroys a Metal device
+func DestroyMetalDevice(device unsafe.Pointer) {
+	if device != nil {
+		C.destroy_metal_device(C.uintptr_t(uintptr(device)))
+	}
 }
 
 // CreateTrainingEngine creates a training engine
@@ -918,4 +980,291 @@ func ExecuteTrainingStepDynamicWithGradients(
 	}
 
 	return float32(lossOut), nil
+}
+
+// Command Buffer Management Functions
+
+// CreateCommandQueue creates a Metal command queue for the given device
+func CreateCommandQueue(device unsafe.Pointer) (unsafe.Pointer, error) {
+	if device == nil {
+		return nil, fmt.Errorf("device cannot be nil")
+	}
+	
+	commandQueue := C.create_command_queue(C.uintptr_t(uintptr(device)))
+	if commandQueue == 0 {
+		return nil, fmt.Errorf("failed to create command queue")
+	}
+	
+	return unsafe.Pointer(uintptr(commandQueue)), nil
+}
+
+// ReleaseCommandQueue releases a Metal command queue
+func ReleaseCommandQueue(commandQueue unsafe.Pointer) {
+	if commandQueue != nil {
+		C.release_command_queue(C.uintptr_t(uintptr(commandQueue)))
+	}
+}
+
+// CreateCommandBuffer creates a Metal command buffer from the given command queue
+func CreateCommandBuffer(commandQueue unsafe.Pointer) (unsafe.Pointer, error) {
+	if commandQueue == nil {
+		return nil, fmt.Errorf("command queue cannot be nil")
+	}
+	
+	commandBuffer := C.create_command_buffer(C.uintptr_t(uintptr(commandQueue)))
+	if commandBuffer == 0 {
+		return nil, fmt.Errorf("failed to create command buffer")
+	}
+	
+	return unsafe.Pointer(uintptr(commandBuffer)), nil
+}
+
+// ReleaseCommandBuffer releases a Metal command buffer
+func ReleaseCommandBuffer(commandBuffer unsafe.Pointer) {
+	if commandBuffer != nil {
+		C.release_command_buffer(C.uintptr_t(uintptr(commandBuffer)))
+	}
+}
+
+// CommitCommandBuffer commits a command buffer for execution
+func CommitCommandBuffer(commandBuffer unsafe.Pointer) error {
+	if commandBuffer == nil {
+		return fmt.Errorf("command buffer cannot be nil")
+	}
+	
+	result := C.commit_command_buffer(C.uintptr_t(uintptr(commandBuffer)))
+	if result != 0 {
+		return fmt.Errorf("failed to commit command buffer with error code: %d", result)
+	}
+	
+	return nil
+}
+
+// WaitCommandBufferCompletion waits for a command buffer to complete execution
+func WaitCommandBufferCompletion(commandBuffer unsafe.Pointer) error {
+	if commandBuffer == nil {
+		return fmt.Errorf("command buffer cannot be nil")
+	}
+	
+	result := C.wait_command_buffer_completion(C.uintptr_t(uintptr(commandBuffer)))
+	if result != 0 {
+		return fmt.Errorf("command buffer completion failed with error code: %d", result)
+	}
+	
+	return nil
+}
+
+// SetupAutoreleasePool sets up an autorelease pool for Metal resource management
+func SetupAutoreleasePool() {
+	C.setup_autorelease_pool()
+}
+
+// DrainAutoreleasePool drains the autorelease pool to release Metal resources
+func DrainAutoreleasePool() {
+	C.drain_autorelease_pool()
+}
+
+// RESOURCE LEAK FIX: Command buffer pooled training functions
+
+// ExecuteTrainingStepHybridFullPooled executes a hybrid training step using command buffer pooling
+func ExecuteTrainingStepHybridFullPooled(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	learningRate float32,
+	commandPool unsafe.Pointer,
+) (float32, error) {
+	if engine == nil {
+		return 0, fmt.Errorf("engine cannot be nil")
+	}
+	
+	if inputBuffer == nil || labelBuffer == nil {
+		return 0, fmt.Errorf("input or label buffer cannot be nil")
+	}
+	
+	if commandPool == nil {
+		return 0, fmt.Errorf("command pool cannot be nil")
+	}
+	
+	if len(weightBuffers) == 0 {
+		return 0, fmt.Errorf("weight buffers cannot be empty")
+	}
+	
+	// Convert Go slice to C array
+	weightPtrs := make([]C.uintptr_t, len(weightBuffers))
+	for i, ptr := range weightBuffers {
+		weightPtrs[i] = C.uintptr_t(uintptr(ptr))
+	}
+	
+	var loss float32
+	result := C.execute_training_step_hybrid_full_pooled(
+		C.uintptr_t(uintptr(engine)),
+		C.uintptr_t(uintptr(inputBuffer)),
+		C.uintptr_t(uintptr(labelBuffer)),
+		&weightPtrs[0],
+		C.int(len(weightBuffers)),
+		C.float(learningRate),
+		C.uintptr_t(uintptr(commandPool)),
+		(*C.float)(unsafe.Pointer(&loss)),
+	)
+	
+	if result != 0 {
+		return 0, fmt.Errorf("pooled training step failed with error code: %d", result)
+	}
+	
+	return loss, nil
+}
+
+// GetCommandBufferFromPool gets a command buffer from the pool (Metal level interface)
+func GetCommandBufferFromPool(commandPool unsafe.Pointer) (unsafe.Pointer, error) {
+	if commandPool == nil {
+		return nil, fmt.Errorf("command pool cannot be nil")
+	}
+	
+	result := C.get_command_buffer_from_pool(C.uintptr_t(uintptr(commandPool)))
+	if result == 0 {
+		return nil, fmt.Errorf("failed to get command buffer from pool")
+	}
+	
+	return unsafe.Pointer(uintptr(result)), nil
+}
+
+// ReturnCommandBufferToPool returns a command buffer to the pool (Metal level interface)
+func ReturnCommandBufferToPool(commandPool unsafe.Pointer, commandBuffer unsafe.Pointer) {
+	if commandPool == nil || commandBuffer == nil {
+		return
+	}
+	
+	C.return_command_buffer_to_pool(
+		C.uintptr_t(uintptr(commandPool)),
+		C.uintptr_t(uintptr(commandBuffer)),
+	)
+}
+
+// ExecuteTrainingStepHybridWithGradientsPooled executes forward+backward pass with pooled command buffers
+// RESOURCE LEAK FIX: Uses command buffer pooling to prevent Metal resource accumulation
+func ExecuteTrainingStepHybridWithGradientsPooled(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	commandPool unsafe.Pointer,
+) (float32, error) {
+	if engine == nil || inputBuffer == nil || labelBuffer == nil || commandPool == nil {
+		return 0, fmt.Errorf("invalid pointer(s)")
+	}
+	
+	if len(weightBuffers) != len(gradientBuffers) {
+		return 0, fmt.Errorf("weight and gradient buffer count mismatch: %d vs %d", 
+			len(weightBuffers), len(gradientBuffers))
+	}
+	
+	// Convert to C arrays
+	weightBufPtrs := make([]C.uintptr_t, len(weightBuffers))
+	gradBufPtrs := make([]C.uintptr_t, len(gradientBuffers))
+	
+	for i, buf := range weightBuffers {
+		if buf == nil {
+			return 0, fmt.Errorf("weight buffer %d is nil", i)
+		}
+		weightBufPtrs[i] = C.uintptr_t(uintptr(buf))
+	}
+	
+	for i, buf := range gradientBuffers {
+		if buf == nil {
+			return 0, fmt.Errorf("gradient buffer %d is nil", i)
+		}
+		gradBufPtrs[i] = C.uintptr_t(uintptr(buf))
+	}
+	
+	var loss C.float
+	result := C.execute_training_step_hybrid_with_gradients_pooled(
+		C.uintptr_t(uintptr(engine)),
+		C.uintptr_t(uintptr(inputBuffer)),
+		C.uintptr_t(uintptr(labelBuffer)),
+		&weightBufPtrs[0],
+		&gradBufPtrs[0],
+		C.int(len(weightBuffers)),
+		C.uintptr_t(uintptr(commandPool)),
+		&loss,
+	)
+	
+	if result != 0 {
+		return 0, fmt.Errorf("pooled hybrid gradient training step failed with code: %d", result)
+	}
+	
+	return float32(loss), nil
+}
+
+// ExecuteAdamStepMPSGraphPooled performs Adam optimization with pooled command buffers
+// RESOURCE LEAK FIX: Uses command buffer pooling to prevent Metal resource accumulation
+func ExecuteAdamStepMPSGraphPooled(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	varianceBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	beta1 float32,
+	beta2 float32,
+	epsilon float32,
+	weightDecay float32,
+	stepCount int,
+	commandPool unsafe.Pointer,
+) error {
+	if device == nil || commandPool == nil {
+		return fmt.Errorf("device or command pool is nil")
+	}
+	
+	numWeights := len(weightBuffers)
+	if len(gradientBuffers) != numWeights || len(momentumBuffers) != numWeights || 
+	   len(varianceBuffers) != numWeights || len(bufferSizes) != numWeights {
+		return fmt.Errorf("buffer count mismatch")
+	}
+	
+	// Convert to C arrays
+	weightBufPtrs := make([]C.uintptr_t, numWeights)
+	gradBufPtrs := make([]C.uintptr_t, numWeights)
+	momentumBufPtrs := make([]C.uintptr_t, numWeights)
+	varianceBufPtrs := make([]C.uintptr_t, numWeights)
+	bufSizes := make([]C.int, numWeights)
+	
+	for i := 0; i < numWeights; i++ {
+		if weightBuffers[i] == nil || gradientBuffers[i] == nil ||
+		   momentumBuffers[i] == nil || varianceBuffers[i] == nil {
+			return fmt.Errorf("buffer %d is nil", i)
+		}
+		
+		weightBufPtrs[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		gradBufPtrs[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		momentumBufPtrs[i] = C.uintptr_t(uintptr(momentumBuffers[i]))
+		varianceBufPtrs[i] = C.uintptr_t(uintptr(varianceBuffers[i]))
+		bufSizes[i] = C.int(bufferSizes[i])
+	}
+	
+	result := C.execute_adam_step_mpsgraph_pooled(
+		C.uintptr_t(uintptr(device)),
+		&weightBufPtrs[0],
+		&gradBufPtrs[0],
+		&momentumBufPtrs[0],
+		&varianceBufPtrs[0],
+		C.int(numWeights),
+		&bufSizes[0],
+		C.float(learningRate),
+		C.float(beta1),
+		C.float(beta2),
+		C.float(epsilon),
+		C.float(weightDecay),
+		C.int(stepCount),
+		C.uintptr_t(uintptr(commandPool)),
+	)
+	
+	if result != 0 {
+		return fmt.Errorf("pooled Adam step failed with code: %d", result)
+	}
+	
+	return nil
 }

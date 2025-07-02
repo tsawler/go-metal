@@ -127,8 +127,11 @@ func (sbp *StagingBufferPool) ReturnBuffer(buffer *StagingBuffer) {
 	case sbp.available <- buffer:
 		// Successfully returned to pool
 	default:
-		// Pool channel is full, this shouldn't happen but handle gracefully
-		// Buffer will be garbage collected when pool is cleaned up
+		// Pool channel is full, deallocate the buffer to prevent a leak
+		if buffer.buffer != nil { // Check if the underlying Metal buffer pointer is valid
+			sbp.memoryManager.ReleaseBuffer(buffer.buffer) // This calls cgo_bridge.DeallocateMetalBuffer
+			buffer.buffer = nil // Clear the pointer to prevent double-free/use-after-free
+		}
 	}
 }
 
@@ -239,3 +242,4 @@ func (sbp *StagingBufferPool) Cleanup() {
 	
 	sbp.buffers = nil
 }
+
