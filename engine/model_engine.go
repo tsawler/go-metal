@@ -576,7 +576,14 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamic(
 	// Step 2: Create gradient tensors with same shapes as parameters
 	gradientBuffers := make([]unsafe.Pointer, len(allParameters))
 	gradientTensors := make([]*memory.Tensor, len(allParameters))
-	
+	defer func() {
+		for _, gradTensor := range gradientTensors {
+			if gradTensor != nil {
+				gradTensor.Release()
+			}
+		}
+	}()
+
 	for i, paramTensor := range allParameters {
 		// Create gradient tensor with same shape as parameter
 		gradTensor, err := memory.NewTensor(paramTensor.Shape(), memory.Float32, memory.GPU)
@@ -590,16 +597,7 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamic(
 		gradientTensors[i] = gradTensor
 		gradientBuffers[i] = gradTensor.MetalBuffer()
 	}
-	
-	// Cleanup gradient tensors after use
-	defer func() {
-		for _, gradTensor := range gradientTensors {
-			if gradTensor != nil {
-				gradTensor.Release()
-			}
-		}
-	}()
-	
+
 	// Step 3: Compute ACTUAL loss and gradients using MPSGraph automatic differentiation
 	actualLoss, err := cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
 		unsafe.Pointer(mte.MPSTrainingEngine.engine),
@@ -613,7 +611,7 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamic(
 	if err != nil {
 		return 0, fmt.Errorf("gradient computation failed: %v", err)
 	}
-	
+
 	// Step 4: Apply Adam optimization with REAL gradients
 	err = mte.MPSTrainingEngine.adamOptimizer.Step(gradientBuffers)
 	if err != nil {
