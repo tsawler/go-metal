@@ -76,6 +76,13 @@ func NewModelTrainingEngineDynamic(
 		return nil, fmt.Errorf("failed to create dynamic training engine: %v", err)
 	}
 	
+	// RESOURCE LEAK FIX: Initialize command queue for command buffer pooling
+	commandQueue, err := cgo_bridge.CreateCommandQueue(device)
+	if err != nil {
+		cgo_bridge.DestroyTrainingEngine(dynamicEnginePtr)
+		return nil, fmt.Errorf("failed to create command queue: %v", err)
+	}
+
 	// Create a wrapper MPSTrainingEngine to maintain compatibility
 	baseEngine := &MPSTrainingEngine{
 		device:        device,
@@ -84,6 +91,10 @@ func NewModelTrainingEngineDynamic(
 		initialized:   true,
 		isDynamic:     true, // This is a dynamic engine
 		adamOptimizer: nil, // Dynamic engine handles optimization externally
+		
+		// RESOURCE LEAK FIX: Command buffer pooling support
+		commandQueue:      commandQueue,
+		useCommandPooling: true, // Enable command pooling by default
 	}
 	
 	// For Adam optimizer, initialize the external optimizer state
@@ -109,6 +120,11 @@ func NewModelTrainingEngineDynamic(
 			return nil, fmt.Errorf("failed to create Adam optimizer for dynamic engine: %v", err)
 		}
 		baseEngine.adamOptimizer = adamOptimizer
+		
+		// RESOURCE LEAK FIX: Enable command buffer pooling in Adam optimizer
+		if baseEngine.useCommandPooling && baseEngine.commandQueue != nil {
+			adamOptimizer.SetCommandPool(baseEngine.commandQueue)
+		}
 	}
 	
 	// Create parameter tensors for the model
@@ -627,15 +643,35 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamicWithGradients(
 	}
 
 	// Step 3: Compute ACTUAL loss and gradients using MPSGraph automatic differentiation
-	actualLoss, err := cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
-		unsafe.Pointer(mte.MPSTrainingEngine.engine),
-		inputTensor.MetalBuffer(),
-		labelTensor.MetalBuffer(),
-		weightBuffers,
-		gradientBuffers,
-		0.001, // learning rate (not used in gradient computation, only for legacy interface)
-		batchSize,
-	)
+	// RESOURCE LEAK FIX: Use pooled version if command pooling is enabled
+	var actualLoss float32
+	
+	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
+		// Use pooled version with command queue for resource leak prevention
+		// Using pooled version
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradientsPooled(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			batchSize,
+			mte.MPSTrainingEngine.commandQueue, // Pass command queue as pool
+		)
+	} else {
+		// Fallback to original version
+		// Using non-pooled version
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			0.001, // learning rate (not used in gradient computation, only for legacy interface)
+			batchSize,
+		)
+	}
+	
 	if err != nil {
 		return 0, fmt.Errorf("gradient computation failed: %v", err)
 	}
@@ -645,6 +681,9 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamicWithGradients(
 	if err != nil {
 		return 0, fmt.Errorf("Adam optimization step failed: %v", err)
 	}
+	
+	// DEBUG: Log loss to track learning progress
+	// fmt.Printf("DEBUG: Loss after Adam step: %.6f\n", actualLoss)
 	
 	// Return actual computed loss
 	return actualLoss, nil

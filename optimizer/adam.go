@@ -181,27 +181,29 @@ func (adam *AdamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 
 	adam.StepCount++
 
-	// RESOURCE LEAK FIX: Use pooled version if command pooling is enabled
+	// TEMPORARY FIX: Always use non-pooled version until pooled Adam is fixed
+	// The pooled Adam implementation has a critical bug where it creates separate
+	// MPSGraphs for each weight tensor, causing numerical instability and vanishing gradients
 	var err error
-	if adam.usePooling && adam.commandPool != nil {
-		// Use pooled command buffers to prevent Metal resource accumulation
-		err = cgo_bridge.ExecuteAdamStepMPSGraphPooled(
-			adam.device,
-			adam.WeightBuffers,
-			gradientBuffers,
-			adam.MomentumBuffers,
-			adam.VarianceBuffers,
-			adam.bufferSizes,
-			adam.LearningRate,
-			adam.Beta1,
-			adam.Beta2,
-			adam.Epsilon,
-			adam.WeightDecay,
-			int(adam.StepCount),
-			adam.commandPool,
-		)
-	} else {
-		// Fallback to non-pooled version
+	// if adam.usePooling && adam.commandPool != nil {
+	// 	// Use pooled command buffers to prevent Metal resource accumulation
+	// 	err = cgo_bridge.ExecuteAdamStepMPSGraphPooled(
+	// 		adam.device,
+	// 		adam.WeightBuffers,
+	// 		gradientBuffers,
+	// 		adam.MomentumBuffers,
+	// 		adam.VarianceBuffers,
+	// 		adam.bufferSizes,
+	// 		adam.LearningRate,
+	// 		adam.Beta1,
+	// 		adam.Beta2,
+	// 		adam.Epsilon,
+	// 		adam.WeightDecay,
+	// 		int(adam.StepCount),
+	// 		adam.commandPool,
+	// 	)
+	// } else {
+		// Always use non-pooled version for now
 		err = cgo_bridge.ExecuteAdamStepMPSGraph(
 			adam.device,
 			adam.WeightBuffers,
@@ -216,7 +218,7 @@ func (adam *AdamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 			adam.WeightDecay,
 			int(adam.StepCount),
 		)
-	}
+	// }
 
 	if err != nil {
 		return fmt.Errorf("Adam step execution failed: %v", err)

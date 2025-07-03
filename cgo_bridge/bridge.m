@@ -4323,7 +4323,7 @@ int execute_training_step_dynamic_with_gradients(
         }
         
         @try {
-            // NSLog(@"🔍 Dynamic gradient training: batch_size=%d, num_weights=%d", batch_size, num_weights);
+            NSLog(@"🔍 Dynamic gradient training: batch_size=%d, num_weights=%d", batch_size, num_weights);
             
             // Create tensor data for inputs
             id<MTLBuffer> inputBuf = (__bridge id<MTLBuffer>)(void*)input_buffer;
@@ -4511,6 +4511,204 @@ int execute_training_step_dynamic_with_gradients(
                         }
                         
                         // NSLog(@"🔍 Dynamic gradient %d: magnitude=%.6f, elements=%d", i, gradSum, totalElements);
+                    } else {
+                        NSLog(@"❌ Failed to get gradient data for parameter %d", i);
+                        return -7;
+                    }
+                }
+                
+                return 0; // Success - real gradients computed and extracted
+                
+            } else {
+                NSLog(@"❌ MPSGraph gradient execution failed - no results");
+                return -8;
+            }
+            
+        } @catch (NSException* exception) {
+            NSLog(@"❌ Dynamic gradient training exception: %@", exception.reason);
+            return -9;
+        }
+    }
+}
+
+// RESOURCE LEAK FIX: Pooled version of dynamic engine training for command buffer reuse
+int execute_training_step_dynamic_with_gradients_pooled(
+    uintptr_t engine_ptr,
+    uintptr_t input_buffer,
+    uintptr_t label_buffer,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    int num_weights,
+    int batch_size,
+    uintptr_t command_pool,
+    float* loss_out
+) {
+    @autoreleasepool {
+        training_engine_t* engine = (training_engine_t*)engine_ptr;
+        if (!engine || !engine->initialized || !loss_out) {
+            NSLog(@"❌ Engine not initialized in pooled dynamic with gradients");
+            return -1;
+        }
+        
+        if (!engine->graph || !engine->inputTensor || !engine->lossOutput) {
+            NSLog(@"❌ Dynamic gradient training: Engine missing required graph components");
+            return -2;
+        }
+        
+        @try {
+            // Get command buffer from pool instead of creating new one
+            id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)(void*)command_pool;
+            if (!commandQueue) {
+                // Fallback to engine's command queue if pool is not available
+                commandQueue = engine->commandQueue;
+            }
+            
+            // Create tensor data for inputs (these still need to be created per step)
+            id<MTLBuffer> inputBuf = (__bridge id<MTLBuffer>)(void*)input_buffer;
+            id<MTLBuffer> labelBuf = (__bridge id<MTLBuffer>)(void*)label_buffer;
+            
+            if (!inputBuf || !labelBuf) {
+                NSLog(@"❌ Dynamic gradient training: Input or label buffer is nil");
+                return -3;
+            }
+            
+            // Create feeds dictionary for the dynamic graph
+            NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
+            
+            // Add input tensor data
+            NSArray<NSNumber*>* placeholderInputShape = engine->inputTensor.shape;
+            NSMutableArray<NSNumber*>* actualInputShape = [[NSMutableArray alloc] init];
+            [actualInputShape addObject:@(batch_size)]; // Use provided batch size
+            for (int i = 1; i < placeholderInputShape.count; i++) {
+                [actualInputShape addObject:placeholderInputShape[i]];
+            }
+            
+            MPSGraphTensorData* inputTensorData = [[MPSGraphTensorData alloc] 
+                                                  initWithMTLBuffer:inputBuf
+                                                  shape:actualInputShape
+                                                  dataType:MPSDataTypeFloat32];
+            feeds[engine->inputTensor] = inputTensorData;
+            
+            // Add label tensor data for loss computation
+            if (engine->labelTensor) {
+                NSArray<NSNumber*>* placeholderLabelShape = engine->labelTensor.shape;
+                NSMutableArray<NSNumber*>* actualLabelShape = [[NSMutableArray alloc] init];
+                [actualLabelShape addObject:@(batch_size)];
+                for (int i = 1; i < placeholderLabelShape.count; i++) {
+                    [actualLabelShape addObject:placeholderLabelShape[i]];
+                }
+                
+                MPSGraphTensorData* labelTensorData = [[MPSGraphTensorData alloc] 
+                                                      initWithMTLBuffer:labelBuf
+                                                      shape:actualLabelShape
+                                                      dataType:MPSDataTypeFloat32];
+                feeds[engine->labelTensor] = labelTensorData;
+            }
+            
+            // Feed all parameter placeholders with their corresponding buffers
+            for (int i = 0; i < engine->allWeightPlaceholders.count && i < num_weights; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
+                id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                
+                if (paramBuf && paramPlaceholder) {
+                    NSArray<NSNumber*>* paramShape = paramPlaceholder.shape;
+                    MPSGraphTensorData* paramData = [[MPSGraphTensorData alloc] 
+                                                    initWithMTLBuffer:paramBuf
+                                                    shape:paramShape
+                                                    dataType:MPSDataTypeFloat32];
+                    feeds[paramPlaceholder] = paramData;
+                }
+            }
+            
+            // Get actual loss tensor from the graph
+            MPSGraphTensor* actualLoss = engine->lossOutput;
+            
+            if (!actualLoss) {
+                NSLog(@"❌ No loss tensor found in dynamic engine");
+                return -3;
+            }
+            
+            // Compute gradients for ALL parameters using MPSGraph automatic differentiation
+            NSMutableArray<MPSGraphTensor*>* gradientTensors = [[NSMutableArray alloc] init];
+            
+            if (engine->allWeightPlaceholders.count > 0) {
+                // Use MPSGraph's automatic differentiation to compute gradients
+                NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradientDict = 
+                    [engine->graph gradientForPrimaryTensor:actualLoss
+                                                withTensors:engine->allWeightPlaceholders
+                                                       name:@"dynamic_gradients"];
+                
+                // Collect gradients in the same order as weight placeholders
+                for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+                    MPSGraphTensor* gradTensor = gradientDict[paramPlaceholder];
+                    if (gradTensor) {
+                        [gradientTensors addObject:gradTensor];
+                    } else {
+                        NSLog(@"❌ Failed to compute gradient for parameter");
+                        return -4;
+                    }
+                }
+            } else {
+                NSLog(@"❌ No weight placeholders found for gradient computation");
+                return -5;
+            }
+            
+            // Prepare target tensors for execution: actual loss + all gradients
+            NSMutableArray<MPSGraphTensor*>* targetTensors = [[NSMutableArray alloc] init];
+            [targetTensors addObject:actualLoss]; // Actual loss first
+            [targetTensors addObjectsFromArray:gradientTensors]; // Then all gradients
+            
+            // Execute the graph using pooled command queue
+            NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
+                [engine->graph runWithMTLCommandQueue:commandQueue
+                                                feeds:feeds
+                                        targetTensors:targetTensors
+                                     targetOperations:nil];
+            
+            if (results && results.count > 0) {
+                // Extract actual loss
+                MPSGraphTensorData* lossData = results[actualLoss];
+                if (lossData) {
+                    float lossValue = 0.0f;
+                    [[lossData mpsndarray] readBytes:&lossValue strideBytes:nil];
+                    *loss_out = lossValue;
+                    
+                    // DEBUGGING: Log loss value to track gradient vanishing
+                    // NSLog(@"🔍 Loss value: %.6f", lossValue);
+                    
+                    // Check if loss is valid for gradient computation
+                    if (isnan(lossValue) || isinf(lossValue)) {
+                        NSLog(@"❌ Loss is NaN or Inf - this will cause zero gradients!");
+                        return -6;
+                    }
+                } else {
+                    NSLog(@"❌ Failed to get actual loss data");
+                    return -6;
+                }
+                
+                // Extract gradients and copy to provided gradient buffers
+                for (int i = 0; i < gradientTensors.count && i < num_weights; i++) {
+                    MPSGraphTensor* gradTensor = gradientTensors[i];
+                    MPSGraphTensorData* gradData = results[gradTensor];
+                    
+                    if (gradData && gradient_buffers[i]) {
+                        id<MTLBuffer> gradBuf = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                        float* gradPtr = (float*)[gradBuf contents];
+                        [[gradData mpsndarray] readBytes:gradPtr strideBytes:nil];
+                        
+                        // DEBUGGING: Check gradient magnitude for this parameter
+                        NSArray<NSNumber*>* gradShape = gradTensor.shape;
+                        int totalElements = 1;
+                        for (NSNumber* dim in gradShape) {
+                            totalElements *= [dim intValue];
+                        }
+                        
+                        float gradSum = 0.0f;
+                        for (int j = 0; j < totalElements; j++) {
+                            gradSum += fabsf(gradPtr[j]);
+                        }
+                        
+                        // NSLog(@"🔍 Dynamic gradient (pooled) %d: magnitude=%.6f, elements=%d", i, gradSum, totalElements);
                     } else {
                         NSLog(@"❌ Failed to get gradient data for parameter %d", i);
                         return -7;
@@ -5314,7 +5512,8 @@ int execute_adam_step_mpsgraph_pooled(
             
             // Create MPSGraph for Adam optimization
             MPSGraph* adamGraph = [[MPSGraph alloc] init];
-            id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+            // RESOURCE LEAK FIX: Use the pooled command queue instead of creating a new one
+            id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)(void*)command_pool;
             
             // Process each weight tensor
             for (int i = 0; i < num_weights; i++) {
@@ -5436,6 +5635,33 @@ int execute_adam_step_mpsgraph_pooled(
                                                                         feeds:feeds
                                                                 targetTensors:@[updatedWeight, updatedMomentum, updatedVariance]
                                                              targetOperations:nil];
+                
+                // CRITICAL FIX: MPSGraph creates NEW output buffers - we MUST copy results back!
+                if (adamResults) {
+                    // Copy updated weights back to original weight buffer
+                    MPSGraphTensorData* newWeightsData = adamResults[updatedWeight];
+                    if (newWeightsData) {
+                        float* weightPtr = (float*)[weightBuf contents];
+                        [[newWeightsData mpsndarray] readBytes:weightPtr strideBytes:nil];
+                        [weightBuf didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    }
+                    
+                    // Copy updated momentum back
+                    MPSGraphTensorData* newMomentumData = adamResults[updatedMomentum];
+                    if (newMomentumData) {
+                        float* momentumPtr = (float*)[momentumBuf contents];
+                        [[newMomentumData mpsndarray] readBytes:momentumPtr strideBytes:nil];
+                        [momentumBuf didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    }
+                    
+                    // Copy updated variance back
+                    MPSGraphTensorData* newVarianceData = adamResults[updatedVariance];
+                    if (newVarianceData) {
+                        float* variancePtr = (float*)[varianceBuf contents];
+                        [[newVarianceData mpsndarray] readBytes:variancePtr strideBytes:nil];
+                        [varianceBuf didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    }
+                }
             }
             
             [commandBuffer commit];
