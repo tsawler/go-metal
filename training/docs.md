@@ -110,6 +110,14 @@ func (mt *ModelTrainer) CreateTrainingSession(
 ```
 CreateTrainingSession creates a training session with progress visualization
 
+#### func (*ModelTrainer) EnablePersistentBuffers
+
+```go
+func (mt *ModelTrainer) EnablePersistentBuffers(inputShape []int) error
+```
+EnablePersistentBuffers pre-allocates GPU tensors for reuse across training
+steps This reduces allocation overhead and improves performance
+
 #### func (*ModelTrainer) GetModelSpec
 
 ```go
@@ -149,6 +157,17 @@ func (mt *ModelTrainer) PrintModelArchitecture(modelName string)
 ```
 PrintModelArchitecture prints the model architecture in PyTorch style
 
+#### func (*ModelTrainer) SetAccuracyCheckInterval
+
+```go
+func (mt *ModelTrainer) SetAccuracyCheckInterval(interval int)
+```
+SetAccuracyCheckInterval configures how often accuracy is calculated interval=0:
+every step (default, maximum accuracy but higher CGO overhead) interval=10:
+every 10 steps (reduces CGO calls by ~40%, slight accuracy tracking lag)
+interval=50: every 50 steps (reduces CGO calls by ~80%, minimal accuracy
+tracking)
+
 #### func (*ModelTrainer) TrainBatch
 
 ```go
@@ -161,6 +180,61 @@ func (mt *ModelTrainer) TrainBatch(
 ```
 TrainBatch executes a single training step on a batch of data This maintains the
 single-CGO-call principle while supporting flexible layer models
+
+#### func (*ModelTrainer) TrainBatchOptimized
+
+```go
+func (mt *ModelTrainer) TrainBatchOptimized(
+	inputData []float32,
+	inputShape []int,
+	labelData []int32,
+	labelShape []int,
+) (*TrainingResultOptimized, error)
+```
+TrainBatchOptimized executes a training step with batched CGO operations This
+reduces CGO overhead by combining multiple operations into a single call Follows
+design principle: "Single CGO call per training step"
+
+#### func (*ModelTrainer) TrainBatchPersistent
+
+```go
+func (mt *ModelTrainer) TrainBatchPersistent(
+	inputData []float32,
+	inputShape []int,
+	labelData []int32,
+	labelShape []int,
+) (*TrainingResultOptimized, error)
+```
+TrainBatchPersistent executes a training step using persistent GPU buffers This
+provides maximum performance by eliminating per-step tensor allocations
+
+#### func (*ModelTrainer) TrainBatchPersistentWithCommandPool
+
+```go
+func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
+	inputData []float32,
+	inputShape []int,
+	labelData []int32,
+	labelShape []int,
+) (*TrainingResultOptimized, error)
+```
+TrainBatchPersistentWithCommandPool executes a training step using both
+persistent tensors and pooled command buffers for maximum performance and
+resource efficiency
+
+#### func (*ModelTrainer) TrainBatchWithCommandPool
+
+```go
+func (mt *ModelTrainer) TrainBatchWithCommandPool(
+	inputData []float32,
+	inputShape []int,
+	labelData []int32,
+	labelShape []int,
+) (*TrainingResultOptimized, error)
+```
+TrainBatchWithCommandPool executes a training step using pooled command buffers
+This method implements the complete command buffer pooling strategy to prevent
+resource leaks
 
 #### type ModelTrainerFactory
 
@@ -452,6 +526,23 @@ type TrainingResult struct {
 ```
 
 TrainingResult represents the result of a training step
+
+#### type TrainingResultOptimized
+
+```go
+type TrainingResultOptimized struct {
+	Loss        float32
+	Accuracy    float64 // Only valid if HasAccuracy is true
+	HasAccuracy bool    // Whether accuracy was calculated this step
+	BatchSize   int
+	StepTime    time.Duration
+	Success     bool
+	BatchRate   float64 // Batches per second
+}
+```
+
+TrainingResultOptimized represents the result of an optimized training step
+Includes optional accuracy calculation to reduce CGO overhead
 
 #### type TrainingSession
 

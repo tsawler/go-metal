@@ -48,6 +48,7 @@ typedef struct {
     __unsafe_unretained MPSGraphTensor* fc2Weights;    // FC2 weights: 128 -> 2  
     __unsafe_unretained MPSGraphTensor* fc2Bias;       // FC2 bias: 2
     __unsafe_unretained MPSGraphTensor* lossOutput;
+    __unsafe_unretained MPSGraphTensor* predictionsTensor; // Softmax predictions for inference
     
     // SOLUTION: Add constant weight tensors to avoid external data issues
     __unsafe_unretained MPSGraphTensor* conv1WeightsConst;
@@ -2713,11 +2714,45 @@ int execute_adam_step_mpsgraph(
                 MPSGraphTensorData* newVarianceData = results[newVariance];
                 
                 if (newWeightsData && newMomentumData && newVarianceData) {
-                    // Results are already in the original buffers due to in-place operations
-                    // Just need to ensure synchronization
-                    id<MTLCommandBuffer> syncBuffer = [commandQueue commandBuffer];
-                    [syncBuffer commit];
-                    [syncBuffer waitUntilCompleted];
+                    // CRITICAL FIX: MPSGraph creates NEW output buffers, need to copy results back to original buffers
+                    
+                    // Copy updated weights back to original weight buffer
+                    float* weightPtr = (float*)[weightsBuffer contents];
+                    
+                    // DEBUGGING: Check weight changes to verify Adam step is working
+                    float oldWeightSum = 0.0f;
+                    int numElements = size_bytes / sizeof(float);
+                    for (int j = 0; j < MIN(numElements, 32); j++) { // Sample first 32 elements
+                        oldWeightSum += fabsf(weightPtr[j]);
+                    }
+                    
+                    [[newWeightsData mpsndarray] readBytes:weightPtr strideBytes:nil];
+                    [weightsBuffer didModifyRange:NSMakeRange(0, size_bytes)];
+                    
+                    // DEBUGGING: Check if weights actually changed
+                    float newWeightSum = 0.0f;
+                    for (int j = 0; j < MIN(numElements, 32); j++) { // Sample first 32 elements
+                        newWeightSum += fabsf(weightPtr[j]);
+                    }
+                    float weightChange = fabsf(newWeightSum - oldWeightSum);
+                    
+                    // Only log occasionally to avoid spam
+                    static int weightLogCounter = 0;
+                    weightLogCounter++;
+                    // if (i == 0 && weightLogCounter % 20 == 1) { // Log every 20th update for first parameter
+                    //     NSLog(@"🔧 Weight update param %d: old_sum=%.6f, new_sum=%.6f, change=%.6f", 
+                    //           i, oldWeightSum, newWeightSum, weightChange);
+                    // }
+                    
+                    // Copy updated momentum back to momentum buffer  
+                    float* momentumPtr = (float*)[momentumBuffer contents];
+                    [[newMomentumData mpsndarray] readBytes:momentumPtr strideBytes:nil];
+                    [momentumBuffer didModifyRange:NSMakeRange(0, size_bytes)];
+                    
+                    // Copy updated variance back to variance buffer
+                    float* variancePtr = (float*)[varianceBuffer contents];
+                    [[newVarianceData mpsndarray] readBytes:variancePtr strideBytes:nil];
+                    [varianceBuffer didModifyRange:NSMakeRange(0, size_bytes)];
                 } else {
                     NSLog(@"Failed to get results from Adam MPSGraph execution for weight %d", i);
                     return -5;
@@ -3158,14 +3193,22 @@ int execute_training_step_hybrid_with_gradients(
                 MPSGraphTensorData* fc2WeightGradData = results[engine->fc2WeightGrads];
                 MPSGraphTensorData* fc2BiasGradData = results[engine->fc2BiasGrads];
                 
-                if (fc1WeightGradData && fc1BiasGradData) {
-                    // Copy weight gradients to provided buffer
-                    float* weightGrads = (float*)[fc1WeightGradBuf contents];
-                    [[fc1WeightGradData mpsndarray] readBytes:weightGrads strideBytes:nil];
+                if (fc1WeightGradData && fc1BiasGradData && fc2WeightGradData && fc2BiasGradData) {
+                    // Copy FC1 weight gradients to provided buffer
+                    float* fc1WeightGrads = (float*)[fc1WeightGradBuf contents];
+                    [[fc1WeightGradData mpsndarray] readBytes:fc1WeightGrads strideBytes:nil];
                     
-                    // Copy bias gradients to provided buffer
-                    float* biasGrads = (float*)[fc1BiasGradBuf contents];
-                    [[fc1BiasGradData mpsndarray] readBytes:biasGrads strideBytes:nil];
+                    // Copy FC1 bias gradients to provided buffer
+                    float* fc1BiasGrads = (float*)[fc1BiasGradBuf contents];
+                    [[fc1BiasGradData mpsndarray] readBytes:fc1BiasGrads strideBytes:nil];
+                    
+                    // Copy FC2 weight gradients to provided buffer
+                    float* fc2WeightGrads = (float*)[fc2WeightGradBuf contents];
+                    [[fc2WeightGradData mpsndarray] readBytes:fc2WeightGrads strideBytes:nil];
+                    
+                    // Copy FC2 bias gradients to provided buffer
+                    float* fc2BiasGrads = (float*)[fc2BiasGradBuf contents];
+                    [[fc2BiasGradData mpsndarray] readBytes:fc2BiasGrads strideBytes:nil];
                     
                     // NSLog(@"✅ Real gradients computed and extracted for Adam optimizer");
                 } else {
@@ -3605,30 +3648,30 @@ int execute_inference_dynamic(
             
             // Debug: All parameters fed to dynamic inference graph
             
-            // Use engine->lossOutput as the predictions tensor (it stores the final model output)
-            if (!engine->lossOutput) {
-                NSLog(@"❌ Predictions tensor (lossOutput) not available for dynamic inference");
+            // Use engine->predictionsTensor for inference (softmax output)
+            if (!engine->predictionsTensor) {
+                NSLog(@"❌ Predictions tensor not available for dynamic inference");
                 return -7;
             }
             
             // Debug: About to execute dynamic inference graph
             // Debug: Feeds dictionary contains items
-            // Debug: Target tensor is predictions (lossOutput)
+            // Debug: Target tensor is predictions (softmax output)
             
             // Execute the graph targeting the predictions tensor (forward pass only)
             NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
                 [engine->graph runWithMTLCommandQueue:engine->commandQueue
                                                 feeds:feeds
-                                        targetTensors:@[engine->lossOutput]
+                                        targetTensors:@[engine->predictionsTensor]
                                      targetOperations:nil];
             
-            if (!results || !results[engine->lossOutput]) {
+            if (!results || !results[engine->predictionsTensor]) {
                 NSLog(@"❌ Failed to execute dynamic inference graph or get predictions");
                 return -8;
             }
             
             // Extract predictions from results
-            MPSGraphTensorData* outputData = results[engine->lossOutput];
+            MPSGraphTensorData* outputData = results[engine->predictionsTensor];
             if (!outputData) {
                 NSLog(@"❌ Failed to get output data from inference results");
                 return -9;
@@ -3841,14 +3884,25 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                      name:@"labels"];
         engine->labelTensor = labelTensor;
         
-        // For now, store the predictions (softmax output) as the final tensor
-        // We'll compute loss separately in the training step using a simpler approach
+        // CRITICAL FIX: Compute actual cross-entropy loss in the graph for proper gradient flow
+        // Store predictions tensor separately for inference
         MPSGraphTensor* predictionsTensor = [engine->graph softMaxWithTensor:currentTensor
                                                                         axis:-1
                                                                         name:@"predictions"];
         
-        // Store predictions tensor for now - we'll compute loss in the training step
-        engine->lossOutput = predictionsTensor;
+        // Store predictions tensor for inference use
+        engine->predictionsTensor = predictionsTensor;
+        
+        // FIXED: Use MPSGraph's built-in softmax cross-entropy for numerical stability and proper gradients
+        // This computes: -mean(sum(labels * log_softmax(logits))) in a numerically stable way
+        MPSGraphTensor* actualLoss = [engine->graph softMaxCrossEntropyWithSourceTensor:currentTensor
+                                                                           labelsTensor:labelTensor
+                                                                                   axis:-1
+                                                                         reductionType:MPSGraphLossReductionTypeMean
+                                                                                  name:@"cross_entropy_loss"];
+        
+        // Store ACTUAL LOSS for gradient computation (not predictions)
+        engine->lossOutput = actualLoss;
         
         // Store the ordered parameter placeholders in the engine
         // Clear the old arrays and copy from our correctly ordered array
@@ -3862,10 +3916,14 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             [engine->allWeightPlaceholders addObject:placeholder];
         }
         
+        NSLog(@"✅ Dynamic graph built successfully with %d layers and proper loss computation", numLayers);
+        NSLog(@"   - Parameters: %lu placeholders", (unsigned long)allParameterPlaceholders.count);
+        NSLog(@"   - Output classes: %d", numClasses);
+        NSLog(@"   - Loss: Cross-entropy with automatic differentiation");
+        
         // Note: We no longer need to create separate convolution output placeholders
         // since we're using actual MPSGraph convolution operations now
         
-        NSLog(@"✅ Dynamic graph built successfully with %d layers", numLayers);
         return YES;
         
     } @catch (NSException* exception) {
@@ -4265,6 +4323,8 @@ int execute_training_step_dynamic_with_gradients(
         }
         
         @try {
+            // NSLog(@"🔍 Dynamic gradient training: batch_size=%d, num_weights=%d", batch_size, num_weights);
+            
             // Create tensor data for inputs
             id<MTLBuffer> inputBuf = (__bridge id<MTLBuffer>)(void*)input_buffer;
             id<MTLBuffer> labelBuf = (__bridge id<MTLBuffer>)(void*)label_buffer;
@@ -4305,6 +4365,37 @@ int execute_training_step_dynamic_with_gradients(
                                                       shape:actualLabelShape
                                                       dataType:MPSDataTypeFloat32];
                 feeds[engine->labelTensor] = labelTensorData;
+                
+                // DEBUGGING: Check input and label data for variety
+                float* inputPtr = (float*)[inputBuf contents];
+                int totalInputElements = 1;
+                for (NSNumber* dim in actualInputShape) {
+                    totalInputElements *= [dim intValue];
+                }
+                float inputSum = 0.0f;
+                for (int i = 0; i < MIN(totalInputElements, 64); i++) { // Sample first 64 elements
+                    inputSum += inputPtr[i];
+                }
+                
+                float* labelPtr = (float*)[labelBuf contents];
+                int totalLabelElements = 1;
+                for (NSNumber* dim in actualLabelShape) {
+                    totalLabelElements *= [dim intValue];
+                }
+                float labelSum = 0.0f;
+                int labelPattern = 0; // Check first few label values to see if they vary
+                for (int i = 0; i < MIN(totalLabelElements, 8); i++) {
+                    labelSum += labelPtr[i];
+                    if (i < 4) labelPattern += (int)(labelPtr[i] * 10); // Simple pattern check
+                }
+                
+                // Only log every 10th batch to reduce noise
+                // static int debugCounter = 0;
+                // debugCounter++;
+                // if (debugCounter % 10 == 1) {
+                //     NSLog(@"🔍 Data variety check: input_sum=%.2f, label_sum=%.1f, label_pattern=%d", 
+                //           inputSum, labelSum, labelPattern);
+                // }
             }
             
             // Feed all parameter placeholders with their corresponding buffers
@@ -4322,34 +4413,50 @@ int execute_training_step_dynamic_with_gradients(
                 }
             }
             
+            // FIXED: engine->lossOutput now contains the actual cross-entropy loss from the graph
+            // No need to recompute loss here since it's already computed in buildDynamicGraphFromLayers
+            MPSGraphTensor* actualLoss = engine->lossOutput;
+            
+            if (!actualLoss) {
+                NSLog(@"❌ No loss tensor found in dynamic engine");
+                return -3;
+            }
+            
             // CRITICAL: Compute gradients for ALL parameters using MPSGraph automatic differentiation
             NSMutableArray<MPSGraphTensor*>* gradientTensors = [[NSMutableArray alloc] init];
             
             if (engine->allWeightPlaceholders.count > 0) {
-                // Use MPSGraph's automatic differentiation to compute gradients of loss w.r.t. all parameters
+                // NSLog(@"🔍 Computing gradients for %lu parameters", (unsigned long)engine->allWeightPlaceholders.count);
+                
+                // Use MPSGraph's automatic differentiation to compute gradients of ACTUAL LOSS w.r.t. all parameters
+                // This now works correctly because actualLoss is the real cross-entropy loss from the graph
                 NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradientDict = 
-                    [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                    [engine->graph gradientForPrimaryTensor:actualLoss
                                                 withTensors:engine->allWeightPlaceholders
                                                        name:@"dynamic_gradients"];
                 
+                // NSLog(@"🔍 Gradient computation returned %lu gradient tensors", (unsigned long)gradientDict.count);
+                
                 // Collect gradients in the same order as weight placeholders
+                int paramIndex = 0;
                 for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
                     MPSGraphTensor* gradTensor = gradientDict[paramPlaceholder];
                     if (gradTensor) {
                         [gradientTensors addObject:gradTensor];
                     } else {
-                        NSLog(@"❌ Failed to compute gradient for parameter");
+                        NSLog(@"❌ Failed to compute gradient for parameter %d", paramIndex);
                         return -4;
                     }
+                    paramIndex++;
                 }
             } else {
                 NSLog(@"❌ No weight placeholders found for gradient computation");
                 return -5;
             }
             
-            // Prepare target tensors for execution: loss + all gradients
+            // Prepare target tensors for execution: actual loss + all gradients
             NSMutableArray<MPSGraphTensor*>* targetTensors = [[NSMutableArray alloc] init];
-            [targetTensors addObject:engine->lossOutput]; // Loss first
+            [targetTensors addObject:actualLoss]; // Actual loss first
             [targetTensors addObjectsFromArray:gradientTensors]; // Then all gradients
             
             // Execute the graph to compute loss and gradients
@@ -4360,14 +4467,24 @@ int execute_training_step_dynamic_with_gradients(
                                      targetOperations:nil];
             
             if (results && results.count > 0) {
-                // Extract loss
-                MPSGraphTensorData* lossData = results[engine->lossOutput];
+                // Extract actual loss
+                MPSGraphTensorData* lossData = results[actualLoss];
                 if (lossData) {
                     float lossValue = 0.0f;
                     [[lossData mpsndarray] readBytes:&lossValue strideBytes:nil];
                     *loss_out = lossValue;
+                    // NSLog(@"🔍 Dynamic computed ACTUAL loss: %.6f", lossValue);
+                    
+                    // DEBUGGING: Check if loss is valid for gradient computation
+                    if (isnan(lossValue) || isinf(lossValue)) {
+                        NSLog(@"❌ Loss is NaN or Inf - this will cause zero gradients!");
+                        return -6;
+                    }
+                    if (lossValue == 0.0f) {
+                        NSLog(@"⚠️ Loss is exactly zero - this may cause zero gradients");
+                    }
                 } else {
-                    NSLog(@"❌ Failed to get loss data");
+                    NSLog(@"❌ Failed to get actual loss data");
                     return -6;
                 }
                 
@@ -4380,6 +4497,20 @@ int execute_training_step_dynamic_with_gradients(
                         id<MTLBuffer> gradBuf = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
                         float* gradPtr = (float*)[gradBuf contents];
                         [[gradData mpsndarray] readBytes:gradPtr strideBytes:nil];
+                        
+                        // DEBUGGING: Check gradient magnitude for this parameter
+                        NSArray<NSNumber*>* gradShape = gradTensor.shape;
+                        int totalElements = 1;
+                        for (NSNumber* dim in gradShape) {
+                            totalElements *= [dim intValue];
+                        }
+                        
+                        float gradSum = 0.0f;
+                        for (int j = 0; j < totalElements; j++) {
+                            gradSum += fabsf(gradPtr[j]);
+                        }
+                        
+                        // NSLog(@"🔍 Dynamic gradient %d: magnitude=%.6f, elements=%d", i, gradSum, totalElements);
                     } else {
                         NSLog(@"❌ Failed to get gradient data for parameter %d", i);
                         return -7;
@@ -4906,29 +5037,45 @@ int execute_training_step_hybrid_with_gradients_pooled(
             // RESOURCE LEAK FIX: Use pooled command buffer instead of creating new one
             id<MTLCommandBuffer> commandBuffer = (__bridge id<MTLCommandBuffer>)(void*)pooledCommandBuffer;
             
+            // CRITICAL FIX: Extract batch size and dimensions from input buffer instead of hardcoding
+            // Input buffer format: [batch_size, channels, height, width]
+            NSUInteger inputBufferSize = inputBuf.length;
+            
+            // TODO: Get actual dimensions from model configuration instead of hardcoding
+            // For now, assume 3 channels, 64x64 images (should be configurable)
+            int channels = 3;
+            int imageHeight = 64;
+            int imageWidth = 64;
+            NSUInteger elementsPerImage = channels * imageHeight * imageWidth;
+            NSUInteger bytesPerImage = elementsPerImage * sizeof(float);
+            int actualBatchSize = (int)(inputBufferSize / bytesPerImage);
+            
+            NSLog(@"🔍 Hybrid engine: detected batch_size=%d from buffer (size=%lu bytes)", 
+                  actualBatchSize, (unsigned long)inputBufferSize);
+            
             // Execute the same hybrid forward+backward pass as the full training step
             // but extract gradients to provided buffers instead of applying weight updates
             
             // STEP 1: Apply MPS convolution layers
             MPSImageDescriptor* imageDesc = [MPSImageDescriptor 
                 imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
-                width:64 height:64 featureChannels:3];
+                width:imageWidth height:imageHeight featureChannels:channels];
             
             // MEMORY LEAK FIX: Reuse cached input image if dimensions match
             MPSImage* inputImage = nil;
             if (engine->cachedInputImage && 
-                engine->cachedImageWidth == 64 && 
-                engine->cachedImageHeight == 64 &&
-                engine->cachedInputChannels == 3) {
+                engine->cachedImageWidth == imageWidth && 
+                engine->cachedImageHeight == imageHeight &&
+                engine->cachedInputChannels == channels) {
                 inputImage = engine->cachedInputImage;
             } else {
                 inputImage = [[MPSImage alloc] initWithDevice:engine->device
                                              imageDescriptor:imageDesc];
                 // Update cache
                 engine->cachedInputImage = inputImage;
-                engine->cachedImageWidth = 64;
-                engine->cachedImageHeight = 64;
-                engine->cachedInputChannels = 3;
+                engine->cachedImageWidth = imageWidth;
+                engine->cachedImageHeight = imageHeight;
+                engine->cachedInputChannels = channels;
             }
             
             // Import data into MPS image
@@ -4938,39 +5085,42 @@ int execute_training_step_hybrid_with_gradients_pooled(
             
             // Apply 3-layer convolution pipeline: 3->16->32->64 channels
             
-            // Conv1: 3->16 channels
+            // Conv1: channels->16 channels (TODO: make 16 configurable)
+            int conv1OutputChannels = 16;
             MPSImage* conv1Output = [[MPSImage alloc] initWithDevice:engine->device
                                                     imageDescriptor:[MPSImageDescriptor 
                                                         imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
-                                                        width:64 height:64 featureChannels:16]];
+                                                        width:imageWidth height:imageHeight featureChannels:conv1OutputChannels]];
             
             [engine->conv1Layer encodeToCommandBuffer:commandBuffer
                                          sourceImage:inputImage
                                     destinationImage:conv1Output];
             
-            // Conv2: 16->32 channels
+            // Conv2: 16->32 channels (TODO: make channel counts configurable)
+            int conv2OutputChannels = 32;
             MPSImage* conv2Output = [[MPSImage alloc] initWithDevice:engine->device
                                                     imageDescriptor:[MPSImageDescriptor 
                                                         imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
-                                                        width:64 height:64 featureChannels:32]];
+                                                        width:imageWidth height:imageHeight featureChannels:conv2OutputChannels]];
             
             [engine->conv2Layer encodeToCommandBuffer:commandBuffer
                                          sourceImage:conv1Output
                                     destinationImage:conv2Output];
             
-            // Conv3: 32->64 channels (final convolution output)
+            // Conv3: 32->64 channels (final convolution output) (TODO: make configurable)
+            int conv3OutputChannels = 64;
             MPSImage* convOutput = [[MPSImage alloc] initWithDevice:engine->device
                                                    imageDescriptor:[MPSImageDescriptor 
                                                        imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat32
-                                                       width:64 height:64 featureChannels:64]];
+                                                       width:imageWidth height:imageHeight featureChannels:conv3OutputChannels]];
             
             [engine->conv3Layer encodeToCommandBuffer:commandBuffer
                                          sourceImage:conv2Output
                                     destinationImage:convOutput];
             
             // Export final conv output to buffer for MPSGraph
-            // Batch size * channels * height * width = 16 * 64 * 64 * 64 = 16MB
-            NSUInteger convOutputSize = 16 * 64 * 64 * 64 * sizeof(float);
+            // Batch size * channels * height * width = actualBatchSize * conv3OutputChannels * imageHeight * imageWidth
+            NSUInteger convOutputSize = actualBatchSize * conv3OutputChannels * imageHeight * imageWidth * sizeof(float);
             
             // MEMORY LEAK FIX: Reuse cached buffer if size matches
             id<MTLBuffer> convOutputBuffer = nil;
@@ -4990,50 +5140,57 @@ int execute_training_step_hybrid_with_gradients_pooled(
             // STEP 2: Forward pass through MPSGraph portion
             NSMutableDictionary* feeds = [[NSMutableDictionary alloc] init];
             
+            // Calculate flattened size: conv3OutputChannels * imageHeight * imageWidth
+            NSUInteger flattenedSize = conv3OutputChannels * imageHeight * imageWidth;
             feeds[engine->hybridInputTensor] = [[MPSGraphTensorData alloc] 
                 initWithMTLBuffer:convOutputBuffer
-                            shape:@[@16, @262144]  // Batch=16, flattened conv output
+                            shape:@[@(actualBatchSize), @(flattenedSize)]  // Batch=actualBatchSize, flattened conv output
                          dataType:MPSDataTypeFloat32];
             
+            // TODO: Make FC layer sizes configurable instead of hardcoding 128
+            int fc1OutputSize = 128;
             feeds[engine->fcWeights] = [[MPSGraphTensorData alloc] 
                 initWithMTLBuffer:fc1WeightBuf
-                            shape:@[@262144, @128]
+                            shape:@[@(flattenedSize), @(fc1OutputSize)]
                          dataType:MPSDataTypeFloat32];
             
             feeds[engine->fcBias] = [[MPSGraphTensorData alloc] 
                 initWithMTLBuffer:fc1BiasBuf  
-                            shape:@[@128]
+                            shape:@[@(fc1OutputSize)]
+                         dataType:MPSDataTypeFloat32];
+            
+            // CRITICAL FIX: Also feed FC2 weights and biases to the graph
+            // TODO: Make number of classes configurable instead of hardcoding 2
+            int numClasses = 2;
+            feeds[engine->fc2Weights] = [[MPSGraphTensorData alloc]
+                initWithMTLBuffer:fc2WeightBuf
+                            shape:@[@(fc1OutputSize), @(numClasses)]
+                         dataType:MPSDataTypeFloat32];
+            
+            feeds[engine->fc2Bias] = [[MPSGraphTensorData alloc]
+                initWithMTLBuffer:fc2BiasBuf
+                            shape:@[@(numClasses)]
                          dataType:MPSDataTypeFloat32];
             
             feeds[engine->labelTensor] = [[MPSGraphTensorData alloc]
                 initWithMTLBuffer:labelBuf
-                            shape:@[@16, @2]  // Batch size x num_classes (one-hot)
+                            shape:@[@(actualBatchSize), @(numClasses)]  // Batch size x num_classes (one-hot)
                          dataType:MPSDataTypeFloat32];
             
-            // Execute forward pass to get loss
-            NSMutableDictionary* results = [[NSMutableDictionary alloc] init];
-            results[engine->lossOutput] = [[MPSGraphTensorData alloc]
-                initWithMTLBuffer:[engine->device newBufferWithLength:sizeof(float)
-                                                             options:MTLResourceStorageModeShared]
-                            shape:@[@1]
-                         dataType:MPSDataTypeFloat32];
+            // Target: loss + gradients (FC1 and FC2)
+            NSArray<MPSGraphTensor*>* targetTensors = @[
+                engine->lossOutput,
+                engine->fcWeightGrads,
+                engine->fcBiasGrads,
+                engine->fc2WeightGrads,
+                engine->fc2BiasGrads
+            ];
             
-            // STEP 3: Execute backward pass to compute gradients  
-            results[engine->fcWeightGrads] = [[MPSGraphTensorData alloc]
-                initWithMTLBuffer:fc1WeightGradBuf
-                            shape:engine->fcWeightGrads.shape
-                         dataType:MPSDataTypeFloat32];
-            
-            results[engine->fcBiasGrads] = [[MPSGraphTensorData alloc]
-                initWithMTLBuffer:fc1BiasGradBuf
-                            shape:engine->fcBiasGrads.shape
-                         dataType:MPSDataTypeFloat32];
-            
-            // Run the backward graph  
-            NSDictionary* graphResults = [engine->backwardGraph runWithMTLCommandQueue:engine->commandQueue
-                                                                                 feeds:feeds  
-                                                                         targetTensors:@[engine->lossOutput, engine->fcWeightGrads, engine->fcBiasGrads]
-                                                                      targetOperations:nil];
+            // Run the complete graph (not a separate backward graph)
+            NSDictionary* graphResults = [engine->graph runWithMTLCommandQueue:engine->commandQueue
+                                                                         feeds:feeds
+                                                                 targetTensors:targetTensors
+                                                              targetOperations:nil];
             
             [commandBuffer commit];
             [commandBuffer waitUntilCompleted];
@@ -5045,6 +5202,62 @@ int execute_training_step_hybrid_with_gradients_pooled(
                     float lossValue = 0.0f;
                     [[lossData mpsndarray] readBytes:&lossValue strideBytes:nil];
                     *loss_out = lossValue;
+                    NSLog(@"🔍 Computed loss value: %.6f", lossValue);
+                }
+                
+                // CRITICAL FIX: Extract gradients for ALL layers (FC1 and FC2)
+                MPSGraphTensorData* fc1WeightGradData = graphResults[engine->fcWeightGrads];
+                MPSGraphTensorData* fc1BiasGradData = graphResults[engine->fcBiasGrads];
+                MPSGraphTensorData* fc2WeightGradData = graphResults[engine->fc2WeightGrads];
+                MPSGraphTensorData* fc2BiasGradData = graphResults[engine->fc2BiasGrads];
+                
+                if (fc1WeightGradData && fc1BiasGradData && fc2WeightGradData && fc2BiasGradData) {
+                    // Copy FC1 weight gradients to provided buffer
+                    float* fc1WeightGrads = (float*)[fc1WeightGradBuf contents];
+                    [[fc1WeightGradData mpsndarray] readBytes:fc1WeightGrads strideBytes:nil];
+                    
+                    // Copy FC1 bias gradients to provided buffer
+                    float* fc1BiasGrads = (float*)[fc1BiasGradBuf contents];
+                    [[fc1BiasGradData mpsndarray] readBytes:fc1BiasGrads strideBytes:nil];
+                    
+                    // Copy FC2 weight gradients to provided buffer
+                    float* fc2WeightGrads = (float*)[fc2WeightGradBuf contents];
+                    [[fc2WeightGradData mpsndarray] readBytes:fc2WeightGrads strideBytes:nil];
+                    
+                    // Copy FC2 bias gradients to provided buffer
+                    float* fc2BiasGrads = (float*)[fc2BiasGradBuf contents];
+                    [[fc2BiasGradData mpsndarray] readBytes:fc2BiasGrads strideBytes:nil];
+                    
+                    // DEBUGGING: Check gradient magnitudes to verify they're non-zero
+                    float fc1WeightGradSum = 0.0f, fc1BiasGradSum = 0.0f;
+                    float fc2WeightGradSum = 0.0f, fc2BiasGradSum = 0.0f;
+                    
+                    // FC1 weight gradients (flattenedSize * fc1OutputSize elements)
+                    for (int i = 0; i < flattenedSize * fc1OutputSize; i++) {
+                        fc1WeightGradSum += fabsf(fc1WeightGrads[i]);
+                    }
+                    
+                    // FC1 bias gradients (fc1OutputSize elements)  
+                    for (int i = 0; i < fc1OutputSize; i++) {
+                        fc1BiasGradSum += fabsf(fc1BiasGrads[i]);
+                    }
+                    
+                    // FC2 weight gradients (fc1OutputSize * numClasses elements)
+                    for (int i = 0; i < fc1OutputSize * numClasses; i++) {
+                        fc2WeightGradSum += fabsf(fc2WeightGrads[i]);
+                    }
+                    
+                    // FC2 bias gradients (numClasses elements)
+                    for (int i = 0; i < numClasses; i++) {
+                        fc2BiasGradSum += fabsf(fc2BiasGrads[i]);
+                    }
+                    
+                    NSLog(@"🔍 Gradient magnitudes - FC1W: %.6f, FC1B: %.6f, FC2W: %.6f, FC2B: %.6f", 
+                          fc1WeightGradSum, fc1BiasGradSum, fc2WeightGradSum, fc2BiasGradSum);
+                } else {
+                    NSLog(@"❌ Failed to get gradient data for one or more layers");
+                    return_command_buffer_to_pool(command_pool, pooledCommandBuffer);
+                    return -11;
                 }
             }
             

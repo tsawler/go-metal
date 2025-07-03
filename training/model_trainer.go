@@ -490,6 +490,7 @@ func (mt *ModelTrainer) TrainBatchPersistent(
 	// PERFORMANCE OPTIMIZATION: Smart accuracy calculation based on configured interval
 	calculateAccuracy := mt.shouldCalculateAccuracy()
 	
+	
 	// OPTIMIZATION: Single batched CGO call using persistent tensors
 	// Maximum performance: no allocations, single CGO call
 	result, err := mt.modelEngine.ExecuteModelTrainingStepBatchedPersistentWithGradients(
@@ -510,14 +511,23 @@ func (mt *ModelTrainer) TrainBatchPersistent(
 	mt.averageLoss = float32(mt.totalLoss / float64(mt.totalSteps))
 	
 	// Update cached accuracy if it was calculated
+	var accuracyToReturn float64
+	var hasAccuracy bool
+	
 	if calculateAccuracy {
 		mt.lastAccuracy = result.Accuracy
+		accuracyToReturn = result.Accuracy
+		hasAccuracy = true
+	} else {
+		// Don't return cached accuracy - return 0 and indicate no accuracy calculated
+		accuracyToReturn = 0.0
+		hasAccuracy = false
 	}
 	
 	return &TrainingResultOptimized{
 		Loss:         result.Loss,
-		Accuracy:     mt.lastAccuracy, // Use cached value if not calculated this step
-		HasAccuracy:  calculateAccuracy,
+		Accuracy:     accuracyToReturn, // Only return accuracy if calculated this step
+		HasAccuracy:  hasAccuracy,
 		BatchSize:    mt.batchSize,
 		StepTime:     mt.lastStepTime,
 		Success:      true,

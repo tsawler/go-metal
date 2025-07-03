@@ -126,6 +126,13 @@ func NewModelTrainingEngineDynamic(
 		isDynamicEngine:   true, // Flag to identify dynamic engines
 	}
 	
+	// CRITICAL FIX: Initialize parameters with proper values for gradient flow
+	// Dynamic engine was missing this step, causing gradient flow issues
+	if err := modelEngine.initializeModelParameters(); err != nil {
+		modelEngine.Cleanup()
+		return nil, fmt.Errorf("failed to initialize model parameters: %v", err)
+	}
+	
 	return modelEngine, nil
 }
 
@@ -276,19 +283,14 @@ func (mte *ModelTrainingEngine) initializeDenseParameters(
 		return fmt.Errorf("missing input_size parameter")
 	}
 	
-	outputSize, ok := layerSpec.Parameters["output_size"].(int)
-	if !ok {
-		return fmt.Errorf("missing output_size parameter")
-	}
-	
 	useBias := true
 	if bias, exists := layerSpec.Parameters["use_bias"].(bool); exists {
 		useBias = bias
 	}
 	
-	// Initialize weight tensor with Xavier initialization
+	// Initialize weight tensor with He initialization (better for ReLU networks)
 	weightTensor := mte.parameterTensors[*paramIndex]
-	err := mte.initializeXavier(weightTensor, inputSize, outputSize)
+	err := mte.initializeHe(weightTensor, inputSize)
 	if err != nil {
 		return fmt.Errorf("failed to initialize weights: %v", err)
 	}
@@ -362,7 +364,7 @@ func (mte *ModelTrainingEngine) initializeXavier(tensor *memory.Tensor, fanIn, f
 // initializeHe initializes tensor with He initialization for ReLU networks
 func (mte *ModelTrainingEngine) initializeHe(tensor *memory.Tensor, fanIn int) error {
 	// He initialization: normal distribution with std = sqrt(2 / fan_in)
-	std := 1.4142136 / float32(fanIn) // sqrt(2) / fan_in
+	std := float32(math.Sqrt(2.0 / float64(fanIn))) // FIXED: sqrt(2 / fan_in) not sqrt(2) / fan_in
 	
 	return mte.initializeNormal(tensor, 0.0, std)
 }

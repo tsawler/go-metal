@@ -85,6 +85,18 @@ func (bt *BatchTrainer) TrainBatchHybridFull(
 TrainBatchHybridFull trains on a single batch using hybrid MPS/MPSGraph approach
 with full training loop
 
+#### type BatchedTrainingResult
+
+```go
+type BatchedTrainingResult struct {
+	Loss     float32
+	Accuracy float64 // Only valid if accuracy was calculated
+}
+```
+
+BatchedTrainingResult represents the result of an optimized batched training
+step
+
 #### type MPSTrainingEngine
 
 ```go
@@ -300,6 +312,52 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStep(
 ExecuteModelTrainingStep executes a complete model training step This maintains
 the single-CGO-call principle while supporting flexible layer models
 
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepBatched
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatched(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	inputData []float32,
+	labelData []float32,
+	calculateAccuracy bool,
+) (*BatchedTrainingResult, error)
+```
+ExecuteModelTrainingStepBatched executes a complete training step with batched
+CGO operations This reduces CGO overhead by combining multiple operations into a
+single call Follows design principle: "Single CGO call per training step"
+
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistent
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistent(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	inputData []float32,
+	labelData []float32,
+	calculateAccuracy bool,
+) (*BatchedTrainingResult, error)
+```
+ExecuteModelTrainingStepBatchedPersistent executes a training step using
+persistent GPU buffers This provides maximum performance by eliminating per-step
+tensor allocations
+
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGradients
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGradients(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	inputData []float32,
+	labelData []float32,
+	calculateAccuracy bool,
+	persistentGradientTensors []*memory.Tensor,
+) (*BatchedTrainingResult, error)
+```
+ExecuteModelTrainingStepBatchedPersistentWithGradients executes training with
+pre-allocated gradient tensors This eliminates the 128MB/step gradient
+allocation that caused 83% performance degradation
+
 #### func (*ModelTrainingEngine) ExecuteModelTrainingStepWithAdam
 
 ```go
@@ -330,6 +388,13 @@ GetModelSummary returns a human-readable model summary
 func (mte *ModelTrainingEngine) GetParameterTensors() []*memory.Tensor
 ```
 GetParameterTensors returns all model parameter tensors
+
+#### func (*ModelTrainingEngine) IsDynamicEngine
+
+```go
+func (mte *ModelTrainingEngine) IsDynamicEngine() bool
+```
+IsDynamicEngine returns whether this is a dynamic engine
 
 #### type TrainingStep
 

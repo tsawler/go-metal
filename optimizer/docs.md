@@ -82,6 +82,14 @@ func (adam *AdamOptimizerState) GetStep() uint64
 ```
 GetStep returns the current step count
 
+#### func (*AdamOptimizerState) SetCommandPool
+
+```go
+func (adam *AdamOptimizerState) SetCommandPool(commandPool unsafe.Pointer)
+```
+SetCommandPool enables command buffer pooling for Metal operations RESOURCE LEAK
+FIX: Allows Adam optimizer to use pooled command buffers
+
 #### func (*AdamOptimizerState) SetWeightBuffers
 
 ```go

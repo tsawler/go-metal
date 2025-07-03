@@ -12,6 +12,13 @@ func AllocateMetalBuffer(device unsafe.Pointer, size int, deviceType DeviceType)
 ```
 AllocateMetalBuffer allocates a Metal buffer
 
+#### func  CommitCommandBuffer
+
+```go
+func CommitCommandBuffer(commandBuffer unsafe.Pointer) error
+```
+CommitCommandBuffer commits a command buffer for execution
+
 #### func  CopyDataToMetalBuffer
 
 ```go
@@ -32,6 +39,20 @@ CopyFloat32ArrayToMetalBuffer copies float32 array data to a Metal buffer
 func CopyInt32ArrayToMetalBuffer(buffer unsafe.Pointer, data []int32) error
 ```
 CopyInt32ArrayToMetalBuffer copies int32 array data to a Metal buffer
+
+#### func  CreateCommandBuffer
+
+```go
+func CreateCommandBuffer(commandQueue unsafe.Pointer) (unsafe.Pointer, error)
+```
+CreateCommandBuffer creates a Metal command buffer from the given command queue
+
+#### func  CreateCommandQueue
+
+```go
+func CreateCommandQueue(device unsafe.Pointer) (unsafe.Pointer, error)
+```
+CreateCommandQueue creates a Metal command queue for the given device
 
 #### func  CreateMetalDevice
 
@@ -96,6 +117,13 @@ func DestroyTrainingEngine(engine unsafe.Pointer)
 ```
 DestroyTrainingEngine destroys a training engine
 
+#### func  DrainAutoreleasePool
+
+```go
+func DrainAutoreleasePool()
+```
+DrainAutoreleasePool drains the autorelease pool to release Metal resources
+
 #### func  ExecuteAdamStep
 
 ```go
@@ -137,6 +165,29 @@ func ExecuteAdamStepMPSGraph(
 ```
 ExecuteAdamStepMPSGraph executes a single Adam optimization step using MPSGraph
 for optimal GPU performance
+
+#### func  ExecuteAdamStepMPSGraphPooled
+
+```go
+func ExecuteAdamStepMPSGraphPooled(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	varianceBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	beta1 float32,
+	beta2 float32,
+	epsilon float32,
+	weightDecay float32,
+	stepCount int,
+	commandPool unsafe.Pointer,
+) error
+```
+ExecuteAdamStepMPSGraphPooled performs Adam optimization with pooled command
+buffers RESOURCE LEAK FIX: Uses command buffer pooling to prevent Metal resource
+accumulation
 
 #### func  ExecuteTrainingStep
 
@@ -208,6 +259,21 @@ func ExecuteTrainingStepHybridFull(
 ExecuteTrainingStepHybridFull executes a complete training step with backward
 pass using hybrid MPS/MPSGraph approach
 
+#### func  ExecuteTrainingStepHybridFullPooled
+
+```go
+func ExecuteTrainingStepHybridFullPooled(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	learningRate float32,
+	commandPool unsafe.Pointer,
+) (float32, error)
+```
+ExecuteTrainingStepHybridFullPooled executes a hybrid training step using
+command buffer pooling
+
 #### func  ExecuteTrainingStepHybridWithGradients
 
 ```go
@@ -221,6 +287,66 @@ func ExecuteTrainingStepHybridWithGradients(
 ```
 ExecuteTrainingStepHybridWithGradients executes forward+backward pass and
 returns gradients
+
+#### func  ExecuteTrainingStepHybridWithGradientsPooled
+
+```go
+func ExecuteTrainingStepHybridWithGradientsPooled(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	commandPool unsafe.Pointer,
+) (float32, error)
+```
+ExecuteTrainingStepHybridWithGradientsPooled executes forward+backward pass with
+pooled command buffers RESOURCE LEAK FIX: Uses command buffer pooling to prevent
+Metal resource accumulation
+
+#### func  GetCommandBufferFromPool
+
+```go
+func GetCommandBufferFromPool(commandPool unsafe.Pointer) (unsafe.Pointer, error)
+```
+GetCommandBufferFromPool gets a command buffer from the pool (Metal level
+interface)
+
+#### func  ReleaseCommandBuffer
+
+```go
+func ReleaseCommandBuffer(commandBuffer unsafe.Pointer)
+```
+ReleaseCommandBuffer releases a Metal command buffer
+
+#### func  ReleaseCommandQueue
+
+```go
+func ReleaseCommandQueue(commandQueue unsafe.Pointer)
+```
+ReleaseCommandQueue releases a Metal command queue
+
+#### func  ReturnCommandBufferToPool
+
+```go
+func ReturnCommandBufferToPool(commandPool unsafe.Pointer, commandBuffer unsafe.Pointer)
+```
+ReturnCommandBufferToPool returns a command buffer to the pool (Metal level
+interface)
+
+#### func  SetupAutoreleasePool
+
+```go
+func SetupAutoreleasePool()
+```
+SetupAutoreleasePool sets up an autorelease pool for Metal resource management
+
+#### func  WaitCommandBufferCompletion
+
+```go
+func WaitCommandBufferCompletion(commandBuffer unsafe.Pointer) error
+```
+WaitCommandBufferCompletion waits for a command buffer to complete execution
 
 #### func  ZeroMetalBuffer
 
