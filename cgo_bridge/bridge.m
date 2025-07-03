@@ -2575,6 +2575,18 @@ int execute_adam_step_mpsgraph(
                 int num_elements = size_bytes / sizeof(float);
                 NSArray<NSNumber*>* shape = @[@(num_elements)];
                 
+                // DEBUGGING: Check gradient magnitude to verify gradients are non-zero
+                static int gradientLogCounter = 0;
+                gradientLogCounter++;
+                // if (i == 0 && gradientLogCounter % 1 == 0) { // Log every Adam call for first parameter
+                //     float* gradPtr = (float*)[gradientsBuffer contents];
+                //     float gradSum = 0.0f;
+                //     for (int j = 0; j < MIN(num_elements, 216); j++) { // Check all 216 elements like dynamic
+                //         gradSum += fabsf(gradPtr[j]);
+                //     }
+                //     NSLog(@"🔧 Adam gradient param %d: grad_sum=%.6f (%d elements)", i, gradSum, MIN(num_elements, 216));
+                // }
+                
                 // Create placeholder tensors for inputs
                 MPSGraphTensor* weightsTensor = [adamGraph placeholderWithShape:shape
                                                                       dataType:MPSDataTypeFloat32
@@ -2737,8 +2749,8 @@ int execute_adam_step_mpsgraph(
                     float weightChange = fabsf(newWeightSum - oldWeightSum);
                     
                     // Only log occasionally to avoid spam
-                    static int weightLogCounter = 0;
-                    weightLogCounter++;
+                    // static int weightLogCounter = 0;
+                    // weightLogCounter++;
                     // if (i == 0 && weightLogCounter % 20 == 1) { // Log every 20th update for first parameter
                     //     NSLog(@"🔧 Weight update param %d: old_sum=%.6f, new_sum=%.6f, change=%.6f", 
                     //           i, oldWeightSum, newWeightSum, weightChange);
@@ -4497,6 +4509,9 @@ int execute_training_step_dynamic_with_gradients(
                         float* gradPtr = (float*)[gradBuf contents];
                         [[gradData mpsndarray] readBytes:gradPtr strideBytes:nil];
                         
+                        // CRITICAL FIX: Notify Metal that buffer contents have changed
+                        [gradBuf didModifyRange:NSMakeRange(0, gradBuf.length)];
+                        
                         // DEBUGGING: Check gradient magnitude for this parameter
                         NSArray<NSNumber*>* gradShape = gradTensor.shape;
                         int totalElements = 1;
@@ -4509,7 +4524,9 @@ int execute_training_step_dynamic_with_gradients(
                             gradSum += fabsf(gradPtr[j]);
                         }
                         
-                        // NSLog(@"🔍 Dynamic gradient %d: magnitude=%.6f, elements=%d", i, gradSum, totalElements);
+                        // if (i == 0) { // Log first parameter gradients every time
+                        //     NSLog(@"🔍 Dynamic gradient %d: magnitude=%.6f, elements=%d", i, gradSum, totalElements);
+                        // }
                     } else {
                         NSLog(@"❌ Failed to get gradient data for parameter %d", i);
                         return -7;
@@ -4694,6 +4711,9 @@ int execute_training_step_dynamic_with_gradients_pooled(
                         id<MTLBuffer> gradBuf = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
                         float* gradPtr = (float*)[gradBuf contents];
                         [[gradData mpsndarray] readBytes:gradPtr strideBytes:nil];
+                        
+                        // CRITICAL FIX: Notify Metal that buffer contents have changed
+                        [gradBuf didModifyRange:NSMakeRange(0, gradBuf.length)];
                         
                         // DEBUGGING: Check gradient magnitude for this parameter
                         NSArray<NSNumber*>* gradShape = gradTensor.shape;

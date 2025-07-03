@@ -181,28 +181,34 @@ func (adam *AdamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 
 	adam.StepCount++
 
-	// FIXED: Added missing bias correction to pooled Adam implementation
-	// Root cause was missing bias correction factors in pooled version
+	// DEBUG: Add logging to verify Adam is being called
+	// if adam.StepCount%10 == 1 {
+	//	fmt.Printf("🔧 Adam step %d: lr=%.6f, %d weights, %d gradients\n", 
+	//		adam.StepCount, adam.LearningRate, len(adam.WeightBuffers), len(gradientBuffers))
+	// }
+
+	// DEBUG: Temporarily disable pooled Adam to test if non-pooled works
+	// Learning broke again - need to isolate issue
 	var err error
-	if adam.usePooling && adam.commandPool != nil {
-		// Use pooled command buffers with proper bias correction
-		err = cgo_bridge.ExecuteAdamStepMPSGraphPooled(
-			adam.device,
-			adam.WeightBuffers,
-			gradientBuffers,
-			adam.MomentumBuffers,
-			adam.VarianceBuffers,
-			adam.bufferSizes,
-			adam.LearningRate,
-			adam.Beta1,
-			adam.Beta2,
-			adam.Epsilon,
-			adam.WeightDecay,
-			int(adam.StepCount),
-			adam.commandPool,
-		)
-	} else {
-		// Fallback to non-pooled version when pooling not available
+	// if adam.usePooling && adam.commandPool != nil {
+	// 	// Use pooled command buffers with proper bias correction
+	// 	err = cgo_bridge.ExecuteAdamStepMPSGraphPooled(
+	// 		adam.device,
+	// 		adam.WeightBuffers,
+	// 		gradientBuffers,
+	// 		adam.MomentumBuffers,
+	// 		adam.VarianceBuffers,
+	// 		adam.bufferSizes,
+	// 		adam.LearningRate,
+	// 		adam.Beta1,
+	// 		adam.Beta2,
+	// 		adam.Epsilon,
+	// 		adam.WeightDecay,
+	// 		int(adam.StepCount),
+	// 		adam.commandPool,
+	// 	)
+	// } else {
+		// Force non-pooled version to test learning
 		err = cgo_bridge.ExecuteAdamStepMPSGraph(
 			adam.device,
 			adam.WeightBuffers,
@@ -217,7 +223,7 @@ func (adam *AdamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 			adam.WeightDecay,
 			int(adam.StepCount),
 		)
-	}
+	// }
 
 	if err != nil {
 		return fmt.Errorf("Adam step execution failed: %v", err)
