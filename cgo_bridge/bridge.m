@@ -4392,8 +4392,7 @@ int execute_training_step_dynamic_with_gradients(
                 // Only log every 10th batch to reduce noise
                 // static int debugCounter = 0;
                 // debugCounter++;
-                // if (debugCounter % 10 == 1) {
-                //     NSLog(@"🔍 Data variety check: input_sum=%.2f, label_sum=%.1f, label_pattern=%d", 
+                // if (debugCounter % 10 == 1) {                //     NSLog(@"🔍 Data variety check: input_sum=%.2f, label_sum=%.1f, label_pattern=%d", 
                 //           inputSum, labelSum, labelPattern);
                 // }
             }
@@ -5510,12 +5509,37 @@ int execute_adam_step_mpsgraph_pooled(
             // Use pooled command buffer for all Adam operations
             id<MTLCommandBuffer> commandBuffer = (__bridge id<MTLCommandBuffer>)(void*)pooledCommandBuffer;
             
-            // Create MPSGraph for Adam optimization
+            // CRITICAL FIX: Create SINGLE MPSGraph for ALL weights to avoid vanishing gradients
             MPSGraph* adamGraph = [[MPSGraph alloc] init];
             // RESOURCE LEAK FIX: Use the pooled command queue instead of creating a new one
             id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)(void*)command_pool;
             
-            // Process each weight tensor
+            // Pre-allocate arrays for all weight tensors to build single computational graph
+            NSMutableArray<MPSGraphTensor*>* weightTensors = [[NSMutableArray alloc] initWithCapacity:num_weights];
+            NSMutableArray<MPSGraphTensor*>* gradTensors = [[NSMutableArray alloc] initWithCapacity:num_weights];
+            NSMutableArray<MPSGraphTensor*>* momentumTensors = [[NSMutableArray alloc] initWithCapacity:num_weights];
+            NSMutableArray<MPSGraphTensor*>* varianceTensors = [[NSMutableArray alloc] initWithCapacity:num_weights];
+            NSMutableArray<MPSGraphTensor*>* updatedWeights = [[NSMutableArray alloc] initWithCapacity:num_weights];
+            NSMutableArray<MPSGraphTensor*>* updatedMomentums = [[NSMutableArray alloc] initWithCapacity:num_weights];
+            NSMutableArray<MPSGraphTensor*>* updatedVariances = [[NSMutableArray alloc] initWithCapacity:num_weights];
+            NSMutableDictionary* feeds = [[NSMutableDictionary alloc] init];
+            NSMutableDictionary* results = [[NSMutableDictionary alloc] init];
+            
+            // CRITICAL FIX: Calculate bias correction factors (missing in previous broken implementation)
+            float bias_correction1 = 1.0f - powf(beta1, (float)step_count);
+            float bias_correction2 = 1.0f - powf(beta2, (float)step_count);
+            
+            // Create shared constants once for efficiency
+            MPSGraphTensor* beta1Scalar = [adamGraph constantWithScalar:beta1 dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* beta2Scalar = [adamGraph constantWithScalar:beta2 dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* oneMinusBeta1 = [adamGraph constantWithScalar:(1.0f - beta1) dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* oneMinusBeta2 = [adamGraph constantWithScalar:(1.0f - beta2) dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* lrScalar = [adamGraph constantWithScalar:learning_rate dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* epsilonScalar = [adamGraph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* biasCorr1Scalar = [adamGraph constantWithScalar:bias_correction1 dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* biasCorr2Scalar = [adamGraph constantWithScalar:bias_correction2 dataType:MPSDataTypeFloat32];
+            
+            // Phase 1: Create placeholders and feeds for all weights in single graph
             for (int i = 0; i < num_weights; i++) {
                 id<MTLBuffer> weightBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
                 id<MTLBuffer> gradBuf = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
@@ -5531,7 +5555,7 @@ int execute_adam_step_mpsgraph_pooled(
                 int numElements = buffer_sizes[i] / sizeof(float);
                 NSArray* shape = @[@(numElements)];
                 
-                // Create placeholders
+                // Create placeholders for this weight tensor
                 MPSGraphTensor* weightTensor = [adamGraph placeholderWithShape:shape
                                                                       dataType:MPSDataTypeFloat32
                                                                           name:[NSString stringWithFormat:@"weight_%d", i]];
@@ -5545,65 +5569,13 @@ int execute_adam_step_mpsgraph_pooled(
                                                                         dataType:MPSDataTypeFloat32
                                                                             name:[NSString stringWithFormat:@"variance_%d", i]];
                 
-                // Create Adam optimizer operations manually since MPSGraphAdamOptimizer may not be available
-                // Adam update formula: 
-                // m = beta1 * m + (1 - beta1) * grad
-                // v = beta2 * v + (1 - beta2) * grad^2
-                // w = w - lr * m / (sqrt(v) + epsilon)
+                // Store placeholders for building full computational graph
+                [weightTensors addObject:weightTensor];
+                [gradTensors addObject:gradTensor];
+                [momentumTensors addObject:momentumTensor];
+                [varianceTensors addObject:varianceTensor];
                 
-                MPSGraphTensor* beta1Scalar = [adamGraph constantWithScalar:beta1 dataType:MPSDataTypeFloat32];
-                MPSGraphTensor* beta2Scalar = [adamGraph constantWithScalar:beta2 dataType:MPSDataTypeFloat32];
-                MPSGraphTensor* oneMinusBeta1 = [adamGraph constantWithScalar:(1.0f - beta1) dataType:MPSDataTypeFloat32];
-                MPSGraphTensor* oneMinusBeta2 = [adamGraph constantWithScalar:(1.0f - beta2) dataType:MPSDataTypeFloat32];
-                MPSGraphTensor* lrScalar = [adamGraph constantWithScalar:learning_rate dataType:MPSDataTypeFloat32];
-                MPSGraphTensor* epsilonScalar = [adamGraph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
-                
-                // Update momentum: m = beta1 * m + (1 - beta1) * grad
-                MPSGraphTensor* momentumScaled = [adamGraph multiplicationWithPrimaryTensor:momentumTensor
-                                                                            secondaryTensor:beta1Scalar
-                                                                                       name:@"momentum_scaled"];
-                MPSGraphTensor* gradScaled = [adamGraph multiplicationWithPrimaryTensor:gradTensor
-                                                                        secondaryTensor:oneMinusBeta1
-                                                                                   name:@"grad_scaled"];
-                MPSGraphTensor* updatedMomentum = [adamGraph additionWithPrimaryTensor:momentumScaled
-                                                                      secondaryTensor:gradScaled
-                                                                                 name:@"updated_momentum"];
-                
-                // Update variance: v = beta2 * v + (1 - beta2) * grad^2
-                MPSGraphTensor* gradSquared = [adamGraph multiplicationWithPrimaryTensor:gradTensor
-                                                                        secondaryTensor:gradTensor
-                                                                                   name:@"grad_squared"];
-                MPSGraphTensor* varianceScaled = [adamGraph multiplicationWithPrimaryTensor:varianceTensor
-                                                                            secondaryTensor:beta2Scalar
-                                                                                       name:@"variance_scaled"];
-                MPSGraphTensor* gradSquaredScaled = [adamGraph multiplicationWithPrimaryTensor:gradSquared
-                                                                               secondaryTensor:oneMinusBeta2
-                                                                                          name:@"grad_squared_scaled"];
-                MPSGraphTensor* updatedVariance = [adamGraph additionWithPrimaryTensor:varianceScaled
-                                                                      secondaryTensor:gradSquaredScaled
-                                                                                 name:@"updated_variance"];
-                
-                // Apply bias correction if needed (for early steps)
-                // For simplicity, we'll skip bias correction in this implementation
-                
-                // Update weights: w = w - lr * m / (sqrt(v) + epsilon)
-                MPSGraphTensor* varianceSqrt = [adamGraph squareRootWithTensor:updatedVariance
-                                                                           name:@"variance_sqrt"];
-                MPSGraphTensor* denominator = [adamGraph additionWithPrimaryTensor:varianceSqrt
-                                                                   secondaryTensor:epsilonScalar
-                                                                              name:@"denominator"];
-                MPSGraphTensor* momentumDivided = [adamGraph divisionWithPrimaryTensor:updatedMomentum
-                                                                      secondaryTensor:denominator
-                                                                                 name:@"momentum_divided"];
-                MPSGraphTensor* weightUpdate = [adamGraph multiplicationWithPrimaryTensor:momentumDivided
-                                                                         secondaryTensor:lrScalar
-                                                                                    name:@"weight_update"];
-                MPSGraphTensor* updatedWeight = [adamGraph subtractionWithPrimaryTensor:weightTensor
-                                                                       secondaryTensor:weightUpdate
-                                                                                  name:@"updated_weight"];
-                
-                // Execute the update
-                NSMutableDictionary* feeds = [[NSMutableDictionary alloc] init];
+                // Create feeds for this weight tensor
                 feeds[weightTensor] = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightBuf
                                                                               shape:shape
                                                                            dataType:MPSDataTypeFloat32];
@@ -5616,30 +5588,116 @@ int execute_adam_step_mpsgraph_pooled(
                 feeds[varianceTensor] = [[MPSGraphTensorData alloc] initWithMTLBuffer:varianceBuf
                                                                                 shape:shape
                                                                              dataType:MPSDataTypeFloat32];
+            }
+            
+            // Phase 2: Build complete computational graph for ALL weights at once
+            for (int i = 0; i < num_weights; i++) {
+                MPSGraphTensor* weightTensor = weightTensors[i];
+                MPSGraphTensor* gradTensor = gradTensors[i];
+                MPSGraphTensor* momentumTensor = momentumTensors[i];
+                MPSGraphTensor* varianceTensor = varianceTensors[i];
                 
-                NSMutableDictionary* results = [[NSMutableDictionary alloc] init];
+                // Adam update formula implemented in single computational graph:
+                // m = beta1 * m + (1 - beta1) * grad
+                // v = beta2 * v + (1 - beta2) * grad^2
+                // w = w - lr * m / (sqrt(v) + epsilon)
+                
+                // Update momentum: m = beta1 * m + (1 - beta1) * grad
+                MPSGraphTensor* momentumScaled = [adamGraph multiplicationWithPrimaryTensor:momentumTensor
+                                                                            secondaryTensor:beta1Scalar
+                                                                                       name:[NSString stringWithFormat:@"momentum_scaled_%d", i]];
+                MPSGraphTensor* gradScaled = [adamGraph multiplicationWithPrimaryTensor:gradTensor
+                                                                        secondaryTensor:oneMinusBeta1
+                                                                                   name:[NSString stringWithFormat:@"grad_scaled_%d", i]];
+                MPSGraphTensor* updatedMomentum = [adamGraph additionWithPrimaryTensor:momentumScaled
+                                                                      secondaryTensor:gradScaled
+                                                                                 name:[NSString stringWithFormat:@"updated_momentum_%d", i]];
+                
+                // Update variance: v = beta2 * v + (1 - beta2) * grad^2
+                MPSGraphTensor* gradSquared = [adamGraph multiplicationWithPrimaryTensor:gradTensor
+                                                                        secondaryTensor:gradTensor
+                                                                                   name:[NSString stringWithFormat:@"grad_squared_%d", i]];
+                MPSGraphTensor* varianceScaled = [adamGraph multiplicationWithPrimaryTensor:varianceTensor
+                                                                            secondaryTensor:beta2Scalar
+                                                                                       name:[NSString stringWithFormat:@"variance_scaled_%d", i]];
+                MPSGraphTensor* gradSquaredScaled = [adamGraph multiplicationWithPrimaryTensor:gradSquared
+                                                                               secondaryTensor:oneMinusBeta2
+                                                                                          name:[NSString stringWithFormat:@"grad_squared_scaled_%d", i]];
+                MPSGraphTensor* updatedVariance = [adamGraph additionWithPrimaryTensor:varianceScaled
+                                                                      secondaryTensor:gradSquaredScaled
+                                                                                 name:[NSString stringWithFormat:@"updated_variance_%d", i]];
+                
+                // CRITICAL FIX: Apply bias correction (was missing in broken implementation)
+                // m_hat = m_t / (1 - β1^t)
+                MPSGraphTensor* momentumHat = [adamGraph divisionWithPrimaryTensor:updatedMomentum
+                                                                  secondaryTensor:biasCorr1Scalar
+                                                                             name:[NSString stringWithFormat:@"momentum_hat_%d", i]];
+                
+                // v_hat = v_t / (1 - β2^t)
+                MPSGraphTensor* varianceHat = [adamGraph divisionWithPrimaryTensor:updatedVariance
+                                                                  secondaryTensor:biasCorr2Scalar
+                                                                             name:[NSString stringWithFormat:@"variance_hat_%d", i]];
+                
+                // Update weights: w = w - lr * m_hat / (sqrt(v_hat) + epsilon)
+                MPSGraphTensor* varianceSqrt = [adamGraph squareRootWithTensor:varianceHat
+                                                                           name:[NSString stringWithFormat:@"variance_sqrt_%d", i]];
+                MPSGraphTensor* denominator = [adamGraph additionWithPrimaryTensor:varianceSqrt
+                                                                   secondaryTensor:epsilonScalar
+                                                                              name:[NSString stringWithFormat:@"denominator_%d", i]];
+                MPSGraphTensor* momentumDivided = [adamGraph divisionWithPrimaryTensor:momentumHat
+                                                                      secondaryTensor:denominator
+                                                                                 name:[NSString stringWithFormat:@"momentum_divided_%d", i]];
+                MPSGraphTensor* weightUpdate = [adamGraph multiplicationWithPrimaryTensor:momentumDivided
+                                                                         secondaryTensor:lrScalar
+                                                                                    name:[NSString stringWithFormat:@"weight_update_%d", i]];
+                MPSGraphTensor* updatedWeight = [adamGraph subtractionWithPrimaryTensor:weightTensor
+                                                                       secondaryTensor:weightUpdate
+                                                                                  name:[NSString stringWithFormat:@"updated_weight_%d", i]];
+                
+                // Store computed tensors for single execution
+                [updatedWeights addObject:updatedWeight];
+                [updatedMomentums addObject:updatedMomentum];
+                [updatedVariances addObject:updatedVariance];
+                
+                // Prepare results buffers for this weight tensor
+                int numElements = buffer_sizes[i] / sizeof(float);
+                NSArray* shape = @[@(numElements)];
+                id<MTLBuffer> weightBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                id<MTLBuffer> momentumBuf = (__bridge id<MTLBuffer>)(void*)momentum_buffers[i];
+                id<MTLBuffer> varianceBuf = (__bridge id<MTLBuffer>)(void*)variance_buffers[i];
+                
                 results[updatedWeight] = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightBuf
                                                                                  shape:shape
                                                                               dataType:MPSDataTypeFloat32];
-                
-                // Run the graph to update weights, momentum, and variance
-                // We need to also update momentum and variance tensors
                 results[updatedMomentum] = [[MPSGraphTensorData alloc] initWithMTLBuffer:momentumBuf
                                                                                    shape:shape
                                                                                 dataType:MPSDataTypeFloat32];
                 results[updatedVariance] = [[MPSGraphTensorData alloc] initWithMTLBuffer:varianceBuf
                                                                                    shape:shape
                                                                                 dataType:MPSDataTypeFloat32];
-                
-                NSDictionary* adamResults = [adamGraph runWithMTLCommandQueue:commandQueue
-                                                                        feeds:feeds
-                                                                targetTensors:@[updatedWeight, updatedMomentum, updatedVariance]
-                                                             targetOperations:nil];
-                
-                // CRITICAL FIX: MPSGraph creates NEW output buffers - we MUST copy results back!
-                if (adamResults) {
+            }
+            
+            // Phase 3: Execute SINGLE computational graph for ALL weights at once
+            NSMutableArray* allTargetTensors = [[NSMutableArray alloc] init];
+            [allTargetTensors addObjectsFromArray:updatedWeights];
+            [allTargetTensors addObjectsFromArray:updatedMomentums];
+            [allTargetTensors addObjectsFromArray:updatedVariances];
+            
+            // CRITICAL: Single graph execution for all weights prevents vanishing gradients
+            NSDictionary* adamResults = [adamGraph runWithMTLCommandQueue:commandQueue
+                                                                    feeds:feeds
+                                                            targetTensors:allTargetTensors
+                                                         targetOperations:nil];
+            
+            // Phase 4: Copy all results back to original buffers
+            if (adamResults) {
+                for (int i = 0; i < num_weights; i++) {
+                    id<MTLBuffer> weightBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                    id<MTLBuffer> momentumBuf = (__bridge id<MTLBuffer>)(void*)momentum_buffers[i];
+                    id<MTLBuffer> varianceBuf = (__bridge id<MTLBuffer>)(void*)variance_buffers[i];
+                    
                     // Copy updated weights back to original weight buffer
-                    MPSGraphTensorData* newWeightsData = adamResults[updatedWeight];
+                    MPSGraphTensorData* newWeightsData = adamResults[updatedWeights[i]];
                     if (newWeightsData) {
                         float* weightPtr = (float*)[weightBuf contents];
                         [[newWeightsData mpsndarray] readBytes:weightPtr strideBytes:nil];
@@ -5647,7 +5705,7 @@ int execute_adam_step_mpsgraph_pooled(
                     }
                     
                     // Copy updated momentum back
-                    MPSGraphTensorData* newMomentumData = adamResults[updatedMomentum];
+                    MPSGraphTensorData* newMomentumData = adamResults[updatedMomentums[i]];
                     if (newMomentumData) {
                         float* momentumPtr = (float*)[momentumBuf contents];
                         [[newMomentumData mpsndarray] readBytes:momentumPtr strideBytes:nil];
@@ -5655,7 +5713,7 @@ int execute_adam_step_mpsgraph_pooled(
                     }
                     
                     // Copy updated variance back
-                    MPSGraphTensorData* newVarianceData = adamResults[updatedVariance];
+                    MPSGraphTensorData* newVarianceData = adamResults[updatedVariances[i]];
                     if (newVarianceData) {
                         float* variancePtr = (float*)[varianceBuf contents];
                         [[newVarianceData mpsndarray] readBytes:variancePtr strideBytes:nil];
