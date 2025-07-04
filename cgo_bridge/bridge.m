@@ -94,6 +94,28 @@ typedef struct {
     int cachedOutputChannels;
     int cachedImageWidth;
     int cachedImageHeight;
+    
+    // PRODUCTION OPTIMIZATION: Cached scalar tensors for Adam optimizer
+    // This eliminates the primary source of performance degradation: scalar tensor creation
+    MPSGraphTensor* cachedLrTensor;                         // Cached learning rate scalar
+    MPSGraphTensor* cachedBeta1Tensor;                      // Cached beta1 scalar  
+    MPSGraphTensor* cachedBeta2Tensor;                      // Cached beta2 scalar
+    MPSGraphTensor* cachedEpsilonTensor;                    // Cached epsilon scalar
+    MPSGraphTensor* cachedOneTensor;                        // Cached 1.0 scalar
+    MPSGraphTensor* cachedOneMinusBeta1;                    // Cached (1 - beta1) scalar
+    MPSGraphTensor* cachedOneMinusBeta2;                    // Cached (1 - beta2) scalar
+    BOOL adamScalarsCached;                                 // Flag indicating scalars are cached
+    
+    // UNIFIED OPTIMIZER: Adam optimizer state arrays for parameter updates
+    NSMutableArray* momentumPlaceholders;                   // Momentum state for each parameter  
+    NSMutableArray* variancePlaceholders;                   // Variance state for each parameter
+    BOOL adamStateInitialized;                             // Flag indicating Adam state is ready
+    
+    // TRUE PRE-COMPILATION: Pre-compiled gradient and optimizer operations
+    NSMutableArray* precompiledGradientTensors;             // Pre-compiled gradient tensors
+    NSMutableArray* precompiledUpdatedParams;               // Pre-compiled parameter updates
+    NSMutableArray* precompiledUpdatedMomentum;             // Pre-compiled momentum updates  
+    NSMutableArray* precompiledUpdatedVariance;             // Pre-compiled variance updates
 } training_engine_t;
 
 // Forward declarations for dynamic graph functions
@@ -114,6 +136,9 @@ MPSGraphTensor* addConv2DLayerToGraph(MPSGraph* graph,
                                      layer_spec_c_t* layerSpec,
                                      int layerIdx,
                                      NSMutableArray* allParameterPlaceholders);
+
+// PRODUCTION OPTIMIZATION: Cache Adam scalar tensors to eliminate allocation overhead
+void cacheAdamScalarTensors(training_engine_t* engine);
 
 // Create Metal device
 uintptr_t create_metal_device() {
@@ -3770,6 +3795,8 @@ uintptr_t create_training_engine_dynamic(
                 return 0;
             }
             
+            // Adam state initialization moved earlier - before pre-compilation
+            
             engine->initialized = YES;
             NSLog(@"✅ Dynamic training engine created successfully with %d layers", num_layers);
             
@@ -3933,6 +3960,150 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
         NSLog(@"   - Output classes: %d", numClasses);
         NSLog(@"   - Loss: Cross-entropy with automatic differentiation");
         
+        // PRODUCTION OPTIMIZATION: Cache Adam scalar tensors if using Adam optimizer
+        if (engine->config.optimizer_type == 1) { // Adam optimizer
+            cacheAdamScalarTensors(engine);
+            
+            // UNIFIED OPTIMIZER: Initialize Adam state arrays BEFORE pre-compilation
+            engine->momentumPlaceholders = [[NSMutableArray alloc] init];
+            engine->variancePlaceholders = [[NSMutableArray alloc] init];
+            
+            // Initialize momentum and variance for each parameter with zeros
+            for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
+                MPSGraphTensor* paramTensor = [engine->allWeightPlaceholders objectAtIndex:i];
+                
+                // Create zero tensors with same shape as parameters for momentum and variance
+                MPSGraphTensor* zeroMomentum = [engine->graph constantWithScalar:0.0f 
+                                                                           shape:[paramTensor shape]
+                                                                        dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* zeroVariance = [engine->graph constantWithScalar:0.0f 
+                                                                           shape:[paramTensor shape]
+                                                                        dataType:MPSDataTypeFloat32];
+                
+                [engine->momentumPlaceholders addObject:zeroMomentum];
+                [engine->variancePlaceholders addObject:zeroVariance];
+            }
+            
+            engine->adamStateInitialized = YES;
+            NSLog(@"✅ Adam state initialized EARLY for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
+        // TRUE PRE-COMPILATION: Build gradient computation and Adam optimizer during graph construction
+        // This eliminates runtime operation creation and fixes performance degradation
+        if (engine->config.optimizer_type == 1 && engine->allWeightPlaceholders.count > 0 && engine->adamStateInitialized) { // Adam optimizer
+            
+            NSLog(@"🚀 PRE-COMPILATION: Building gradient and Adam operations in graph...");
+            
+            // Pre-compile gradient computation using automatic differentiation ONCE during graph building
+            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
+                [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                                            withTensors:engine->allWeightPlaceholders
+                                                   name:@"precompiled_gradients"];
+            
+            // Store gradient tensors for execution (these are pre-compiled, not runtime-created)
+            NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
+            for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+                MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
+                if (gradTensor) {
+                    [precompiledGradientTensors addObject:gradTensor];
+                } else {
+                    NSLog(@"❌ Failed to pre-compile gradient for parameter");
+                    return NO;
+                }
+            }
+            
+            // Store pre-compiled gradients in engine for execution
+            engine->precompiledGradientTensors = precompiledGradientTensors;
+            
+            NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            NSLog(@"🚀 PRE-COMPILATION: Building Adam parameter update operations...");
+            
+            // Pre-compile Adam parameter updates only if momentum/variance are properly initialized
+            if (engine->momentumPlaceholders && engine->variancePlaceholders && 
+                [engine->momentumPlaceholders count] == [engine->allWeightPlaceholders count] &&
+                [engine->variancePlaceholders count] == [engine->allWeightPlaceholders count]) {
+                
+                NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
+                NSMutableArray<MPSGraphTensor*>* precompiledUpdatedMomentum = [[NSMutableArray alloc] init];
+                NSMutableArray<MPSGraphTensor*>* precompiledUpdatedVariance = [[NSMutableArray alloc] init];
+                
+                for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
+                    MPSGraphTensor* paramTensor = [engine->allWeightPlaceholders objectAtIndex:i];
+                    MPSGraphTensor* gradTensor = [precompiledGradientTensors objectAtIndex:i];
+                    MPSGraphTensor* momentumTensor = [engine->momentumPlaceholders objectAtIndex:i];
+                    MPSGraphTensor* varianceTensor = [engine->variancePlaceholders objectAtIndex:i];
+                    
+                    // Verify all tensors are non-nil
+                    if (!paramTensor || !gradTensor || !momentumTensor || !varianceTensor) {
+                        NSLog(@"❌ Nil tensor detected at index %d - skipping Adam pre-compilation", i);
+                        engine->precompiledUpdatedParams = nil;
+                        engine->precompiledUpdatedMomentum = nil;
+                        engine->precompiledUpdatedVariance = nil;
+                        break;
+                    }
+                    
+                    // Pre-compile Adam update formulas using cached scalar tensors:
+                    // momentum = beta1 * momentum + (1 - beta1) * grad
+                    MPSGraphTensor* newMomentum = [engine->graph additionWithPrimaryTensor:
+                        [engine->graph multiplicationWithPrimaryTensor:engine->cachedBeta1Tensor
+                                                        secondaryTensor:momentumTensor
+                                                                   name:nil]
+                                                                secondaryTensor:
+                        [engine->graph multiplicationWithPrimaryTensor:engine->cachedOneMinusBeta1
+                                                        secondaryTensor:gradTensor
+                                                                   name:nil]
+                                                                       name:nil];
+                    
+                    // variance = beta2 * variance + (1 - beta2) * grad^2
+                    MPSGraphTensor* gradSquared = [engine->graph squareWithTensor:gradTensor name:nil];
+                    MPSGraphTensor* newVariance = [engine->graph additionWithPrimaryTensor:
+                        [engine->graph multiplicationWithPrimaryTensor:engine->cachedBeta2Tensor
+                                                        secondaryTensor:varianceTensor
+                                                                   name:nil]
+                                                                secondaryTensor:
+                        [engine->graph multiplicationWithPrimaryTensor:engine->cachedOneMinusBeta2
+                                                        secondaryTensor:gradSquared
+                                                                   name:nil]
+                                                                       name:nil];
+                    
+                    // param = param - lr * momentum / (sqrt(variance) + epsilon)
+                    MPSGraphTensor* sqrtVariance = [engine->graph squareRootWithTensor:newVariance name:nil];
+                    MPSGraphTensor* denominator = [engine->graph additionWithPrimaryTensor:sqrtVariance
+                                                                           secondaryTensor:engine->cachedEpsilonTensor
+                                                                                      name:nil];
+                    MPSGraphTensor* update = [engine->graph divisionWithPrimaryTensor:newMomentum
+                                                                      secondaryTensor:denominator
+                                                                                 name:nil];
+                    MPSGraphTensor* scaledUpdate = [engine->graph multiplicationWithPrimaryTensor:engine->cachedLrTensor
+                                                                                 secondaryTensor:update
+                                                                                            name:nil];
+                    MPSGraphTensor* newParam = [engine->graph subtractionWithPrimaryTensor:paramTensor
+                                                                            secondaryTensor:scaledUpdate
+                                                                                       name:nil];
+                    
+                    // Store pre-compiled updated tensors
+                    [precompiledUpdatedParams addObject:newParam];
+                    [precompiledUpdatedMomentum addObject:newMomentum];
+                    [precompiledUpdatedVariance addObject:newVariance];
+                }
+                
+                // Store pre-compiled Adam operations in engine
+                engine->precompiledUpdatedParams = precompiledUpdatedParams;
+                engine->precompiledUpdatedMomentum = precompiledUpdatedMomentum;
+                engine->precompiledUpdatedVariance = precompiledUpdatedVariance;
+                
+                NSLog(@"✅ PRE-COMPILATION: Successfully built Adam update operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            } else {
+                NSLog(@"⚠️ PRE-COMPILATION: Adam state not properly initialized - will use fallback optimizer");
+                engine->precompiledUpdatedParams = nil;
+                engine->precompiledUpdatedMomentum = nil;
+                engine->precompiledUpdatedVariance = nil;
+            }
+        } else {
+            NSLog(@"⚠️ PRE-COMPILATION: Skipping pre-compilation (optimizer: %d, params: %lu, adam_state: %d)", 
+                  engine->config.optimizer_type, [engine->allWeightPlaceholders count], engine->adamStateInitialized);
+        }
+        
         // Note: We no longer need to create separate convolution output placeholders
         // since we're using actual MPSGraph convolution operations now
         
@@ -4093,6 +4264,40 @@ MPSGraphTensor* addConv2DLayerToGraph(MPSGraph* graph,
     // Debug: Conv2D layer created with MPSGraph convolution and output shape
     
     return convResult;
+}
+
+// PRODUCTION OPTIMIZATION: Cache Adam scalar tensors to eliminate allocation overhead
+void cacheAdamScalarTensors(training_engine_t* engine) {
+    @autoreleasepool {
+        if (engine->adamScalarsCached || !engine->graph) {
+            return; // Already cached or no graph available
+        }
+        
+        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching Adam scalar tensors to eliminate allocation overhead...");
+        
+        // Create scalar tensors for Adam hyperparameters ONCE
+        float lr = engine->config.learning_rate;
+        float beta1 = engine->config.beta1;
+        float beta2 = engine->config.beta2;
+        float epsilon = engine->config.epsilon;
+        
+        engine->cachedLrTensor = [engine->graph constantWithScalar:lr dataType:MPSDataTypeFloat32];
+        engine->cachedBeta1Tensor = [engine->graph constantWithScalar:beta1 dataType:MPSDataTypeFloat32];
+        engine->cachedBeta2Tensor = [engine->graph constantWithScalar:beta2 dataType:MPSDataTypeFloat32];
+        engine->cachedEpsilonTensor = [engine->graph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+        engine->cachedOneTensor = [engine->graph constantWithScalar:1.0f dataType:MPSDataTypeFloat32];
+        
+        // Create derived constant tensors ONCE
+        engine->cachedOneMinusBeta1 = [engine->graph subtractionWithPrimaryTensor:engine->cachedOneTensor
+                                                                   secondaryTensor:engine->cachedBeta1Tensor
+                                                                              name:@"cached_1_minus_beta1"];
+        engine->cachedOneMinusBeta2 = [engine->graph subtractionWithPrimaryTensor:engine->cachedOneTensor
+                                                                   secondaryTensor:engine->cachedBeta2Tensor
+                                                                              name:@"cached_1_minus_beta2"];
+        
+        engine->adamScalarsCached = YES;
+        NSLog(@"✅ PRODUCTION OPTIMIZATION: Adam scalar tensors cached - zero scalar allocations during training");
+    }
 }
 
 // Execute training step for dynamic engines with complete graph
@@ -4644,35 +4849,51 @@ int execute_training_step_dynamic_with_gradients_pooled(
                 return -3;
             }
             
-            // Compute gradients for ALL parameters using MPSGraph automatic differentiation
-            NSMutableArray<MPSGraphTensor*>* gradientTensors = [[NSMutableArray alloc] init];
-            
-            if (engine->allWeightPlaceholders.count > 0) {
-                // Use MPSGraph's automatic differentiation to compute gradients
-                NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradientDict = 
-                    [engine->graph gradientForPrimaryTensor:actualLoss
-                                                withTensors:engine->allWeightPlaceholders
-                                                       name:@"dynamic_gradients"];
-                
-                // Collect gradients in the same order as weight placeholders
-                for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
-                    MPSGraphTensor* gradTensor = gradientDict[paramPlaceholder];
-                    if (gradTensor) {
-                        [gradientTensors addObject:gradTensor];
-                    } else {
-                        NSLog(@"❌ Failed to compute gradient for parameter");
-                        return -4;
-                    }
-                }
-            } else {
-                NSLog(@"❌ No weight placeholders found for gradient computation");
-                return -5;
-            }
-            
-            // Prepare target tensors for execution: actual loss + all gradients
+            // TRUE PRE-COMPILATION: Use pre-compiled gradient and optimizer operations
+            // This eliminates runtime operation creation and fixes performance degradation
             NSMutableArray<MPSGraphTensor*>* targetTensors = [[NSMutableArray alloc] init];
-            [targetTensors addObject:actualLoss]; // Actual loss first
-            [targetTensors addObjectsFromArray:gradientTensors]; // Then all gradients
+            
+            if (engine->precompiledGradientTensors && engine->precompiledUpdatedParams) {
+                // Use pre-compiled tensors - no runtime operation creation!
+                [targetTensors addObject:actualLoss]; // Loss first
+                [targetTensors addObjectsFromArray:engine->precompiledGradientTensors]; // Pre-compiled gradients
+                [targetTensors addObjectsFromArray:engine->precompiledUpdatedParams]; // Pre-compiled parameter updates
+                [targetTensors addObjectsFromArray:engine->precompiledUpdatedMomentum]; // Pre-compiled momentum updates
+                [targetTensors addObjectsFromArray:engine->precompiledUpdatedVariance]; // Pre-compiled variance updates
+                
+                NSLog(@"✅ PRE-COMPILATION: Executing %lu pre-compiled operations (zero new operations created)", [targetTensors count]);
+            } else {
+                NSLog(@"❌ Pre-compiled operations not available, falling back to runtime gradient computation");
+                
+                // Fallback: Use runtime automatic differentiation (creates new operations - causes degradation)
+                NSMutableArray<MPSGraphTensor*>* gradientTensors = [[NSMutableArray alloc] init];
+                
+                if (engine->allWeightPlaceholders.count > 0) {
+                    // Use MPSGraph's automatic differentiation to compute gradients
+                    NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradientDict = 
+                        [engine->graph gradientForPrimaryTensor:actualLoss
+                                                    withTensors:engine->allWeightPlaceholders
+                                                           name:@"dynamic_gradients"];
+                    
+                    // Collect gradients in the same order as weight placeholders
+                    for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+                        MPSGraphTensor* gradTensor = gradientDict[paramPlaceholder];
+                        if (gradTensor) {
+                            [gradientTensors addObject:gradTensor];
+                        } else {
+                            NSLog(@"❌ Failed to compute gradient for parameter");
+                            return -4;
+                        }
+                    }
+                } else {
+                    NSLog(@"❌ No weight placeholders found for gradient computation");
+                    return -5;
+                }
+                
+                // Prepare target tensors for execution: actual loss + all gradients
+                [targetTensors addObject:actualLoss]; // Actual loss first
+                [targetTensors addObjectsFromArray:gradientTensors]; // Then all gradients
+            }
             
             // Execute the graph using pooled command queue
             NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
@@ -4702,39 +4923,89 @@ int execute_training_step_dynamic_with_gradients_pooled(
                     return -6;
                 }
                 
-                // Extract gradients and copy to provided gradient buffers
-                for (int i = 0; i < gradientTensors.count && i < num_weights; i++) {
-                    MPSGraphTensor* gradTensor = gradientTensors[i];
-                    MPSGraphTensorData* gradData = results[gradTensor];
-                    
-                    if (gradData && gradient_buffers[i]) {
-                        id<MTLBuffer> gradBuf = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
-                        float* gradPtr = (float*)[gradBuf contents];
-                        [[gradData mpsndarray] readBytes:gradPtr strideBytes:nil];
+                // Gradient extraction is now handled by the pre-compilation logic above
+                
+                // TRUE PRE-COMPILATION: Extract results from pre-compiled operations
+                if (engine->precompiledGradientTensors && engine->precompiledUpdatedParams) {
+                    // Extract gradients for logging/debugging
+                    for (int i = 0; i < num_weights && i < [engine->precompiledGradientTensors count]; i++) {
+                        MPSGraphTensor* gradTensor = [engine->precompiledGradientTensors objectAtIndex:i];
+                        MPSGraphTensorData* gradData = results[gradTensor];
                         
-                        // CRITICAL FIX: Notify Metal that buffer contents have changed
-                        [gradBuf didModifyRange:NSMakeRange(0, gradBuf.length)];
-                        
-                        // DEBUGGING: Check gradient magnitude for this parameter
-                        NSArray<NSNumber*>* gradShape = gradTensor.shape;
-                        int totalElements = 1;
-                        for (NSNumber* dim in gradShape) {
-                            totalElements *= [dim intValue];
+                        if (gradData) {
+                            id<MTLBuffer> gradBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                            float* bufferPtr = (float*)[gradBuffer contents];
+                            
+                            // Use the correct API to read MPSNDArray data
+                            [[gradData mpsndarray] readBytes:bufferPtr strideBytes:nil];
+                            
+                            NSUInteger bufferSize = [gradBuffer length];
+                            [gradBuffer didModifyRange:NSMakeRange(0, bufferSize)];
                         }
-                        
-                        float gradSum = 0.0f;
-                        for (int j = 0; j < totalElements; j++) {
-                            gradSum += fabsf(gradPtr[j]);
-                        }
-                        
-                        // NSLog(@"🔍 Dynamic gradient (pooled) %d: magnitude=%.6f, elements=%d", i, gradSum, totalElements);
-                    } else {
-                        NSLog(@"❌ Failed to get gradient data for parameter %d", i);
-                        return -7;
                     }
+                    
+                    // Extract updated parameters - this is where learning happens!
+                    for (int i = 0; i < num_weights && i < [engine->precompiledUpdatedParams count]; i++) {
+                        MPSGraphTensor* paramTensor = [engine->precompiledUpdatedParams objectAtIndex:i];
+                        MPSGraphTensorData* paramData = results[paramTensor];
+                        
+                        if (paramData) {
+                            id<MTLBuffer> weightBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                            float* bufferPtr = (float*)[weightBuffer contents];
+                            
+                            // Use the correct API to read updated parameter data
+                            [[paramData mpsndarray] readBytes:bufferPtr strideBytes:nil];
+                            
+                            NSUInteger bufferSize = [weightBuffer length];
+                            [weightBuffer didModifyRange:NSMakeRange(0, bufferSize)];
+                        }
+                    }
+                    
+                    NSLog(@"✅ PRE-COMPILATION: Extracted updated parameters for %d weights using ZERO new operations", num_weights);
+                } else {
+                    // Fallback: Extract gradients from results and apply CPU-based optimizer
+                    NSArray<MPSGraphTensor*>* gradientTensorArray = nil;
+                    
+                    // Get gradient tensors from targetTensors (skip loss at index 0)
+                    NSMutableArray<MPSGraphTensor*>* fallbackGradients = [[NSMutableArray alloc] init];
+                    for (int i = 1; i <= num_weights && i < [targetTensors count]; i++) {
+                        [fallbackGradients addObject:[targetTensors objectAtIndex:i]];
+                    }
+                    gradientTensorArray = fallbackGradients;
+                    
+                    // Extract gradients and apply parameter updates
+                    for (int i = 0; i < num_weights && i < [gradientTensorArray count]; i++) {
+                        MPSGraphTensor* gradTensor = [gradientTensorArray objectAtIndex:i];
+                        MPSGraphTensorData* gradData = results[gradTensor];
+                        
+                        if (gradData) {
+                            id<MTLBuffer> weightBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                            id<MTLBuffer> gradBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                            
+                            // Copy gradient data using correct API
+                            float* gradBufferPtr = (float*)[gradBuffer contents];
+                            [[gradData mpsndarray] readBytes:gradBufferPtr strideBytes:nil];
+                            
+                            NSUInteger gradBufferSize = [gradBuffer length];
+                            [gradBuffer didModifyRange:NSMakeRange(0, gradBufferSize)];
+                            
+                            // Apply simple SGD update to parameters
+                            float* weights = (float*)[weightBuffer contents];
+                            NSUInteger bufferSize = [weightBuffer length];
+                            NSUInteger numElements = bufferSize / sizeof(float);
+                            float lr = engine->config.learning_rate;
+                            
+                            for (NSUInteger j = 0; j < numElements; j++) {
+                                weights[j] -= lr * gradBufferPtr[j];
+                            }
+                            [weightBuffer didModifyRange:NSMakeRange(0, bufferSize)];
+                        }
+                    }
+                    
+                    NSLog(@"✅ Fallback optimizer: Applied updates for %d parameters", num_weights);
                 }
                 
-                return 0; // Success - real gradients computed and extracted
+                return 0; // Success - gradients computed AND parameters updated
                 
             } else {
                 NSLog(@"❌ MPSGraph gradient execution failed - no results");

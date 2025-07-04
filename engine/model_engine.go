@@ -677,9 +677,19 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamicWithGradients(
 	}
 
 	// Step 4: Apply Adam optimization with REAL gradients
-	err = mte.MPSTrainingEngine.adamOptimizer.Step(gradientBuffers)
-	if err != nil {
-		return 0, fmt.Errorf("Adam optimization step failed: %v", err)
+	// UNIFIED OPTIMIZER: Skip separate Adam step if optimizer is integrated into the graph
+	// When using the pooled version with unified optimizer, the parameter updates
+	// are already performed within the same MPSGraph execution
+	if !mte.MPSTrainingEngine.useCommandPooling {
+		// Only run separate Adam step if NOT using unified optimizer
+		err = mte.MPSTrainingEngine.adamOptimizer.Step(gradientBuffers)
+		if err != nil {
+			return 0, fmt.Errorf("Adam optimization step failed: %v", err)
+		}
+	} else {
+		// UNIFIED OPTIMIZER: Parameters already updated in single MPSGraph execution
+		// This implements the design-doc.md requirement for single command buffer
+		// No separate optimizer step needed
 	}
 	
 	// DEBUG: Log loss to track learning progress
