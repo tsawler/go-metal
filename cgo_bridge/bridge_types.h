@@ -106,11 +106,8 @@ typedef struct {
     MPSGraphTensor* cachedOneTensor;                        // Cached 1.0 scalar
     MPSGraphTensor* cachedOneMinusBeta1;                    // Cached (1 - beta1) scalar
     MPSGraphTensor* cachedOneMinusBeta2;                    // Cached (1 - beta2) scalar
-<<<<<<< HEAD
-=======
     MPSGraphTensor* biasCorr1Placeholder;                   // Dynamic bias correction 1 placeholder
     MPSGraphTensor* biasCorr2Placeholder;                   // Dynamic bias correction 2 placeholder
->>>>>>> b40c7fc (Fix training loop for optimizers)
     BOOL adamScalarsCached;                                 // Flag indicating scalars are cached
     
     // UNIFIED OPTIMIZER: Adam optimizer state arrays for parameter updates
@@ -120,11 +117,12 @@ typedef struct {
     NSMutableArray* varianceVariables;                      // MPSGraph variables for variance state
     NSMutableArray* momentumBuffers;                        // Metal buffers for momentum state
     NSMutableArray* varianceBuffers;                        // Metal buffers for variance state
-<<<<<<< HEAD
-=======
     int adamStepCount;                                      // Training step counter for bias correction
->>>>>>> b40c7fc (Fix training loop for optimizers)
     BOOL adamStateInitialized;                             // Flag indicating Adam state is ready
+    
+    // PERFORMANCE: Cached bias correction buffers to avoid per-step allocations
+    id<MTLBuffer> cachedBiasCorr1Buffer;                    // Reusable buffer for bias correction 1
+    id<MTLBuffer> cachedBiasCorr2Buffer;                    // Reusable buffer for bias correction 2
     
     // TRUE PRE-COMPILATION: Pre-compiled gradient and optimizer operations
     NSMutableArray* precompiledGradientTensors;             // Pre-compiled gradient tensors
