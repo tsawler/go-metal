@@ -4936,10 +4936,10 @@ int execute_training_step_dynamic_with_gradients_pooled(
                     feeds[engine->biasCorr2Placeholder] = biasCorr2Data;
                     
                     // Debug log for first few steps
-                    if (engine->adamStepCount <= 5) {
-                        NSLog(@"🔍 ADAM STEP %d: bias_corr1=%.6f, bias_corr2=%.6f", 
-                              engine->adamStepCount, biasCorr1, biasCorr2);
-                    }
+                    //if (engine->adamStepCount <= 5) {
+                    //    NSLog(@"🔍 ADAM STEP %d: bias_corr1=%.6f, bias_corr2=%.6f", 
+                    //          engine->adamStepCount, biasCorr1, biasCorr2);
+                    //}
                 }
                 
                 for (int i = 0; i < engine->momentumPlaceholders.count && i < engine->momentumBuffers.count; i++) {
