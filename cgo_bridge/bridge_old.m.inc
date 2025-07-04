@@ -4023,6 +4023,12 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                 [engine->variancePlaceholders addObject:variancePlaceholder];
             }
             
+<<<<<<< HEAD
+=======
+            // Initialize Adam step counter
+            engine->adamStepCount = 0;
+            
+>>>>>>> b40c7fc (Fix training loop for optimizers)
             engine->adamStateInitialized = YES;
             NSLog(@"✅ Adam state initialized EARLY for %lu parameters", [engine->allWeightPlaceholders count]);
             NSLog(@"🔍 ADAM DEBUG: State flag set to %d", engine->adamStateInitialized);
@@ -4109,6 +4115,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                        name:nil];
                     
                     // Bias correction: m_hat = momentum / (1 - beta1^t), v_hat = variance / (1 - beta2^t)
+<<<<<<< HEAD
                     // For simplicity, use step = 1 initially (can be improved later with step tracking)
                     float biasCorr1 = 1.0f - engine->config.beta1; // Simplified: 1 - beta1^1
                     float biasCorr2 = 1.0f - engine->config.beta2; // Simplified: 1 - beta2^1
@@ -4121,6 +4128,14 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                                      name:nil];
                     MPSGraphTensor* varianceHat = [engine->graph divisionWithPrimaryTensor:newVariance
                                                                           secondaryTensor:biasCorr2Tensor
+=======
+                    // Use dynamic placeholders that will be fed with proper step-based bias correction at runtime
+                    MPSGraphTensor* momentumHat = [engine->graph divisionWithPrimaryTensor:newMomentum
+                                                                          secondaryTensor:engine->biasCorr1Placeholder
+                                                                                     name:nil];
+                    MPSGraphTensor* varianceHat = [engine->graph divisionWithPrimaryTensor:newVariance
+                                                                          secondaryTensor:engine->biasCorr2Placeholder
+>>>>>>> b40c7fc (Fix training loop for optimizers)
                                                                                      name:nil];
                     
                     // param = param - lr * m_hat / (sqrt(v_hat) + epsilon)
@@ -4352,6 +4367,17 @@ void cacheAdamScalarTensors(training_engine_t* engine) {
                                                                    secondaryTensor:engine->cachedBeta2Tensor
                                                                               name:@"cached_1_minus_beta2"];
         
+<<<<<<< HEAD
+=======
+        // Create placeholders for dynamic bias correction factors (fed at runtime based on step count)
+        engine->biasCorr1Placeholder = [engine->graph placeholderWithShape:@[@1] 
+                                                                   dataType:MPSDataTypeFloat32 
+                                                                       name:@"bias_correction_1"];
+        engine->biasCorr2Placeholder = [engine->graph placeholderWithShape:@[@1] 
+                                                                   dataType:MPSDataTypeFloat32 
+                                                                       name:@"bias_correction_2"];
+        
+>>>>>>> b40c7fc (Fix training loop for optimizers)
         engine->adamScalarsCached = YES;
         NSLog(@"✅ PRODUCTION OPTIMIZATION: Adam scalar tensors cached - zero scalar allocations during training");
     }
@@ -4900,6 +4926,44 @@ int execute_training_step_dynamic_with_gradients_pooled(
             
             // Feed momentum and variance placeholders for Adam optimizer
             if (engine->config.optimizer_type == 1 && engine->momentumPlaceholders && engine->variancePlaceholders) {
+<<<<<<< HEAD
+=======
+                // Increment step counter and calculate bias correction factors
+                engine->adamStepCount++;
+                float biasCorr1 = 1.0f - powf(engine->config.beta1, (float)engine->adamStepCount);
+                float biasCorr2 = 1.0f - powf(engine->config.beta2, (float)engine->adamStepCount);
+                
+                // Feed bias correction placeholders with proper step-based values
+                if (engine->biasCorr1Placeholder && engine->biasCorr2Placeholder) {
+                    // Create buffers for bias correction scalars
+                    id<MTLBuffer> biasCorr1Buf = [engine->device newBufferWithLength:sizeof(float) 
+                                                                             options:MTLResourceStorageModeShared];
+                    id<MTLBuffer> biasCorr2Buf = [engine->device newBufferWithLength:sizeof(float) 
+                                                                             options:MTLResourceStorageModeShared];
+                    
+                    *(float*)[biasCorr1Buf contents] = biasCorr1;
+                    *(float*)[biasCorr2Buf contents] = biasCorr2;
+                    
+                    MPSGraphTensorData* biasCorr1Data = [[MPSGraphTensorData alloc] 
+                                                        initWithMTLBuffer:biasCorr1Buf
+                                                        shape:@[@1]
+                                                        dataType:MPSDataTypeFloat32];
+                    MPSGraphTensorData* biasCorr2Data = [[MPSGraphTensorData alloc] 
+                                                        initWithMTLBuffer:biasCorr2Buf
+                                                        shape:@[@1]
+                                                        dataType:MPSDataTypeFloat32];
+                    
+                    feeds[engine->biasCorr1Placeholder] = biasCorr1Data;
+                    feeds[engine->biasCorr2Placeholder] = biasCorr2Data;
+                    
+                    // Debug log for first few steps
+                    if (engine->adamStepCount <= 5) {
+                        NSLog(@"🔍 ADAM STEP %d: bias_corr1=%.6f, bias_corr2=%.6f", 
+                              engine->adamStepCount, biasCorr1, biasCorr2);
+                    }
+                }
+                
+>>>>>>> b40c7fc (Fix training loop for optimizers)
                 for (int i = 0; i < engine->momentumPlaceholders.count && i < engine->momentumBuffers.count; i++) {
                     MPSGraphTensor* momentumPlaceholder = engine->momentumPlaceholders[i];
                     MPSGraphTensor* variancePlaceholder = engine->variancePlaceholders[i];
