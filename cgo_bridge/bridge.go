@@ -14,12 +14,47 @@ typedef struct {
     int optimizer_type; // 0 = SGD, 1 = Adam
 } training_config_t;
 
+// Model configuration structure for dynamic dimensions
+typedef struct {
+    // Input configuration
+    int batch_size;
+    int input_channels;
+    int input_height;
+    int input_width;
+    
+    // Convolution layer outputs (calculated or provided)
+    int conv1_out_channels;
+    int conv1_out_height;
+    int conv1_out_width;
+    
+    int conv2_out_channels;
+    int conv2_out_height;
+    int conv2_out_width;
+    
+    int conv3_out_channels;
+    int conv3_out_height;
+    int conv3_out_width;
+    
+    // Fully connected layer dimensions
+    int fc1_input_size;      // Flattened conv output size
+    int fc1_output_size;     // Hidden layer size
+    int fc2_output_size;     // Number of classes
+    
+    // Convolution parameters
+    int conv1_kernel_size;
+    int conv1_stride;
+    int conv2_kernel_size;
+    int conv2_stride;
+    int conv3_kernel_size;
+    int conv3_stride;
+} model_config_t;
+
 // Forward declarations for CGO functions
 uintptr_t create_metal_device();
 void destroy_metal_device(uintptr_t device);
 uintptr_t create_training_engine(uintptr_t device, training_config_t* config);
 uintptr_t create_training_engine_constant_weights(uintptr_t device, training_config_t* config);
-uintptr_t create_training_engine_hybrid(uintptr_t device, training_config_t* config);
+uintptr_t create_training_engine_hybrid(uintptr_t device, training_config_t* config, model_config_t* model_config);
 int execute_training_step(
     uintptr_t engine,
     uintptr_t input_buffer,
@@ -228,6 +263,20 @@ int execute_training_step_dynamic_with_gradients_pooled(
     float* loss_out
 );
 
+// SGD-specific pooled training function for optimal performance
+int execute_training_step_sgd_pooled(
+    uintptr_t engine,
+    uintptr_t input_buffer,
+    uintptr_t label_buffer,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    int num_weights,
+    float learning_rate,
+    int batch_size,
+    uintptr_t command_pool,
+    float* loss_out
+);
+
 // Command Buffer Management Functions for Resource Leak Prevention
 uintptr_t create_command_queue(uintptr_t device);
 void release_command_queue(uintptr_t command_queue);
@@ -264,6 +313,41 @@ type TrainingConfig struct {
 	WeightDecay   float32
 	Epsilon       float32
 	OptimizerType OptimizerType
+}
+
+// ModelConfig holds model architecture configuration for dynamic dimensions
+type ModelConfig struct {
+	// Input configuration
+	BatchSize      int
+	InputChannels  int
+	InputHeight    int
+	InputWidth     int
+	
+	// Convolution layer outputs
+	Conv1OutChannels int
+	Conv1OutHeight   int
+	Conv1OutWidth    int
+	
+	Conv2OutChannels int
+	Conv2OutHeight   int
+	Conv2OutWidth    int
+	
+	Conv3OutChannels int
+	Conv3OutHeight   int
+	Conv3OutWidth    int
+	
+	// Fully connected layer dimensions
+	FC1InputSize  int // Flattened conv output size
+	FC1OutputSize int // Hidden layer size
+	FC2OutputSize int // Number of classes
+	
+	// Convolution parameters
+	Conv1KernelSize int
+	Conv1Stride     int
+	Conv2KernelSize int
+	Conv2Stride     int
+	Conv3KernelSize int
+	Conv3Stride     int
 }
 
 // DeviceType maps to our memory package
@@ -330,7 +414,7 @@ func CreateTrainingEngineConstantWeights(device unsafe.Pointer, config TrainingC
 }
 
 // CreateTrainingEngineHybrid creates a hybrid MPS/MPSGraph training engine
-func CreateTrainingEngineHybrid(device unsafe.Pointer, config TrainingConfig) (unsafe.Pointer, error) {
+func CreateTrainingEngineHybrid(device unsafe.Pointer, config TrainingConfig, modelConfig ModelConfig) (unsafe.Pointer, error) {
 	cConfig := C.training_config_t{
 		learning_rate:  C.float(config.LearningRate),
 		beta1:         C.float(config.Beta1),
@@ -340,7 +424,37 @@ func CreateTrainingEngineHybrid(device unsafe.Pointer, config TrainingConfig) (u
 		optimizer_type: C.int(config.OptimizerType),
 	}
 	
-	engine := C.create_training_engine_hybrid(C.uintptr_t(uintptr(device)), &cConfig)
+	cModelConfig := C.model_config_t{
+		batch_size:       C.int(modelConfig.BatchSize),
+		input_channels:   C.int(modelConfig.InputChannels),
+		input_height:     C.int(modelConfig.InputHeight),
+		input_width:      C.int(modelConfig.InputWidth),
+		
+		conv1_out_channels: C.int(modelConfig.Conv1OutChannels),
+		conv1_out_height:   C.int(modelConfig.Conv1OutHeight),
+		conv1_out_width:    C.int(modelConfig.Conv1OutWidth),
+		
+		conv2_out_channels: C.int(modelConfig.Conv2OutChannels),
+		conv2_out_height:   C.int(modelConfig.Conv2OutHeight),
+		conv2_out_width:    C.int(modelConfig.Conv2OutWidth),
+		
+		conv3_out_channels: C.int(modelConfig.Conv3OutChannels),
+		conv3_out_height:   C.int(modelConfig.Conv3OutHeight),
+		conv3_out_width:    C.int(modelConfig.Conv3OutWidth),
+		
+		fc1_input_size:  C.int(modelConfig.FC1InputSize),
+		fc1_output_size: C.int(modelConfig.FC1OutputSize),
+		fc2_output_size: C.int(modelConfig.FC2OutputSize),
+		
+		conv1_kernel_size: C.int(modelConfig.Conv1KernelSize),
+		conv1_stride:      C.int(modelConfig.Conv1Stride),
+		conv2_kernel_size: C.int(modelConfig.Conv2KernelSize),
+		conv2_stride:      C.int(modelConfig.Conv2Stride),
+		conv3_kernel_size: C.int(modelConfig.Conv3KernelSize),
+		conv3_stride:      C.int(modelConfig.Conv3Stride),
+	}
+	
+	engine := C.create_training_engine_hybrid(C.uintptr_t(uintptr(device)), &cConfig, &cModelConfig)
 	if engine == 0 {
 		return nil, fmt.Errorf("failed to create hybrid training engine")
 	}
@@ -1046,6 +1160,70 @@ func ExecuteTrainingStepDynamicWithGradientsPooled(
 
 	if result != 0 {
 		return 0, fmt.Errorf("pooled dynamic gradient training step failed with error code: %d", result)
+	}
+
+	return float32(lossOut), nil
+}
+
+// ExecuteTrainingStepSGDPooled executes SGD training step with pooled command buffers for optimal performance
+func ExecuteTrainingStepSGDPooled(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	learningRate float32,
+	batchSize int,
+	commandPool unsafe.Pointer,
+) (float32, error) {
+	if engine == nil {
+		return 0, fmt.Errorf("engine cannot be nil")
+	}
+	
+	if inputBuffer == nil || labelBuffer == nil {
+		return 0, fmt.Errorf("input and label buffers cannot be nil")
+	}
+	
+	if len(weightBuffers) != len(gradientBuffers) {
+		return 0, fmt.Errorf("weight and gradient buffer counts must match")
+	}
+	
+	// Convert weight buffers to C array
+	var cWeightBuffers *C.uintptr_t
+	if len(weightBuffers) > 0 {
+		cWeights := make([]C.uintptr_t, len(weightBuffers))
+		for i, buf := range weightBuffers {
+			cWeights[i] = C.uintptr_t(uintptr(buf))
+		}
+		cWeightBuffers = &cWeights[0]
+	}
+	
+	// Convert gradient buffers to C array
+	var cGradientBuffers *C.uintptr_t
+	if len(gradientBuffers) > 0 {
+		cGradients := make([]C.uintptr_t, len(gradientBuffers))
+		for i, buf := range gradientBuffers {
+			cGradients[i] = C.uintptr_t(uintptr(buf))
+		}
+		cGradientBuffers = &cGradients[0]
+	}
+
+	var lossOut C.float
+	result := C.execute_training_step_sgd_pooled(
+		C.uintptr_t(uintptr(engine)),
+		C.uintptr_t(uintptr(inputBuffer)),
+		C.uintptr_t(uintptr(labelBuffer)),
+		cWeightBuffers,
+		cGradientBuffers,
+		C.int(len(weightBuffers)),
+		C.float(learningRate),
+		C.int(batchSize),
+		C.uintptr_t(uintptr(commandPool)),
+		&lossOut,
+	)
+
+	if result != 0 {
+		return 0, fmt.Errorf("SGD pooled training step failed with error code: %d", result)
 	}
 
 	return float32(lossOut), nil

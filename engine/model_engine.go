@@ -18,6 +18,7 @@ type ModelTrainingEngine struct {
 	*MPSTrainingEngine
 	modelSpec       *layers.ModelSpec
 	parameterTensors []*memory.Tensor
+	gradientTensors  []*memory.Tensor // Pre-allocated gradient tensors for performance
 	compiledForModel bool
 	isDynamicEngine  bool // True if using dynamic graph engine, false if using hybrid fallback
 }
@@ -134,10 +135,34 @@ func NewModelTrainingEngineDynamic(
 		return nil, fmt.Errorf("failed to create parameter tensors: %v", err)
 	}
 	
+	// Create gradient tensors with same shapes as parameter tensors for performance
+	gradTensors := make([]*memory.Tensor, len(paramTensors))
+	for i, paramTensor := range paramTensors {
+		gradTensor, err := memory.NewTensor(paramTensor.Shape(), memory.Float32, memory.GPU)
+		if err != nil {
+			// Cleanup previously created gradient tensors
+			for j := 0; j < i; j++ {
+				if gradTensors[j] != nil {
+					gradTensors[j].Release()
+				}
+			}
+			// Cleanup parameter tensors
+			for _, tensor := range paramTensors {
+				if tensor != nil {
+					tensor.Release()
+				}
+			}
+			baseEngine.Cleanup()
+			return nil, fmt.Errorf("failed to create gradient tensor %d: %v", i, err)
+		}
+		gradTensors[i] = gradTensor
+	}
+	
 	modelEngine := &ModelTrainingEngine{
 		MPSTrainingEngine: baseEngine,
 		modelSpec:         modelSpec,
 		parameterTensors:  paramTensors,
+		gradientTensors:   gradTensors,
 		compiledForModel:  true, // Dynamic engine compiles during creation
 		isDynamicEngine:   true, // Flag to identify dynamic engines
 	}
@@ -163,8 +188,26 @@ func NewModelTrainingEngine(
 		return nil, fmt.Errorf("model validation failed: %v", err)
 	}
 	
+	// Create model configuration from model specification
+	modelConfig, err := createModelConfigFromSpec(modelSpec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create model configuration: %v", err)
+	}
+	
+	// DEBUG: Log the generated model configuration
+	fmt.Printf("🔧 Generated Model Configuration:\n")
+	fmt.Printf("  Input: %dx%dx%d (batch: %d)\n", modelConfig.InputChannels, modelConfig.InputHeight, modelConfig.InputWidth, modelConfig.BatchSize)
+	fmt.Printf("  Conv1: %d filters, %dx%d → %dx%dx%d\n", modelConfig.Conv1OutChannels, modelConfig.Conv1KernelSize, modelConfig.Conv1KernelSize, 
+		modelConfig.Conv1OutChannels, modelConfig.Conv1OutHeight, modelConfig.Conv1OutWidth)
+	fmt.Printf("  Conv2: %d filters, %dx%d → %dx%dx%d\n", modelConfig.Conv2OutChannels, modelConfig.Conv2KernelSize, modelConfig.Conv2KernelSize,
+		modelConfig.Conv2OutChannels, modelConfig.Conv2OutHeight, modelConfig.Conv2OutWidth)
+	fmt.Printf("  Conv3: %d filters, %dx%d → %dx%dx%d\n", modelConfig.Conv3OutChannels, modelConfig.Conv3KernelSize, modelConfig.Conv3KernelSize,
+		modelConfig.Conv3OutChannels, modelConfig.Conv3OutHeight, modelConfig.Conv3OutWidth)
+	fmt.Printf("  FC1: %d → %d\n", modelConfig.FC1InputSize, modelConfig.FC1OutputSize)
+	fmt.Printf("  FC2: %d → %d\n", modelConfig.FC1OutputSize, modelConfig.FC2OutputSize)
+	
 	// Create base training engine using proven hybrid approach
-	baseEngine, err := NewMPSTrainingEngineHybrid(config)
+	baseEngine, err := NewMPSTrainingEngineHybrid(config, modelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base training engine: %v", err)
 	}
@@ -503,22 +546,25 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStep(
 		return 0, fmt.Errorf("model not compiled for execution")
 	}
 	
-	// Use the existing high-performance hybrid training step
-	// The layer specification has been compiled into the appropriate parameter tensors
-	
-	// For hybrid CNN, we need the FC layer parameters (conv parameters are built-in)
-	fcParameters := mte.getFCLayerParameters()
-	if len(fcParameters) == 0 {
-		return 0, fmt.Errorf("no FC layer parameters found")
+	if mte.isDynamicEngine {
+		// Use SGD implementation that matches Adam's resource management approach
+		return mte.executeSGDStepDynamicWithGradients(inputTensor, labelTensor, learningRate, mte.gradientTensors)
+	} else {
+		// Use hybrid engine execution path for legacy compatibility
+		// For hybrid CNN, we need the FC layer parameters (conv parameters are built-in)
+		fcParameters := mte.getFCLayerParameters()
+		if len(fcParameters) == 0 {
+			return 0, fmt.Errorf("no FC layer parameters found")
+		}
+		
+		// Execute using proven single-CGO-call architecture
+		return mte.MPSTrainingEngine.ExecuteStepHybridFull(
+			inputTensor,
+			labelTensor,
+			fcParameters,
+			learningRate,
+		)
 	}
-	
-	// Execute using proven single-CGO-call architecture
-	return mte.MPSTrainingEngine.ExecuteStepHybridFull(
-		inputTensor,
-		labelTensor,
-		fcParameters,
-		learningRate,
-	)
 }
 
 // ExecuteModelTrainingStepWithAdam executes model training with Adam optimizer
@@ -699,6 +745,114 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamicWithGradients(
 	return actualLoss, nil
 }
 
+// executeSGDStepDynamicWithGradients executes SGD optimization with Adam's resource management approach
+// PERFORMANCE CRITICAL: Matches Adam's persistent gradient tensor and pooled command buffer usage
+func (mte *ModelTrainingEngine) executeSGDStepDynamicWithGradients(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	learningRate float32,
+	persistentGradientTensors []*memory.Tensor, // If nil, will allocate (fallback behavior)
+) (float32, error) {
+	// Get all parameter tensors for the dynamic engine (matches Adam approach)
+	allParameters := mte.getAllParameterTensors()
+	if len(allParameters) == 0 {
+		return 0, fmt.Errorf("no parameter tensors found for dynamic engine")
+	}
+	
+	// Convert parameter tensors to weight buffers for CGO call
+	weightBuffers := make([]unsafe.Pointer, len(allParameters))
+	for i, tensor := range allParameters {
+		if tensor == nil {
+			return 0, fmt.Errorf("parameter tensor %d is nil", i)
+		}
+		weightBuffers[i] = tensor.MetalBuffer()
+	}
+	
+	// Get batch size from input tensor shape
+	inputShape := inputTensor.Shape()
+	if len(inputShape) == 0 {
+		return 0, fmt.Errorf("input tensor has no shape")
+	}
+	batchSize := inputShape[0]
+	
+	// CRITICAL: Use persistent gradient tensors if provided, otherwise allocate (matches Adam)
+	gradientBuffers := make([]unsafe.Pointer, len(allParameters))
+	var gradientTensors []*memory.Tensor
+	var allocatedGradients bool
+
+	if persistentGradientTensors != nil && len(persistentGradientTensors) == len(allParameters) {
+		// PERFORMANCE OPTIMIZATION: Use pre-allocated persistent gradient tensors (Adam approach)
+		gradientTensors = persistentGradientTensors
+		allocatedGradients = false
+		for i, gradTensor := range gradientTensors {
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	} else {
+		// FALLBACK: Allocate gradient tensors (original behavior for compatibility)
+		gradientTensors = make([]*memory.Tensor, len(allParameters))
+		allocatedGradients = true
+		defer func() {
+			if allocatedGradients {
+				for _, gradTensor := range gradientTensors {
+					if gradTensor != nil {
+						gradTensor.Release()
+					}
+				}
+			}
+		}()
+
+		for i, paramTensor := range allParameters {
+			// Create gradient tensor with same shape as parameter
+			gradTensor, err := memory.NewTensor(paramTensor.Shape(), memory.Float32, memory.GPU)
+			if err != nil {
+				// Cleanup previously created tensors
+				for j := 0; j < i; j++ {
+					gradientTensors[j].Release()
+				}
+				return 0, fmt.Errorf("failed to create gradient tensor %d: %v", i, err)
+			}
+			gradientTensors[i] = gradTensor
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	}
+
+	// CRITICAL: Compute loss and gradients with optimal SGD implementation
+	var actualLoss float32
+	var err error
+	
+	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
+		// Use SGD-specific pooled version for optimal performance (11-12 batch/s)
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepSGDPooled(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			learningRate,
+			batchSize,
+			mte.MPSTrainingEngine.commandQueue, // Pass command queue as pool
+		)
+	} else {
+		// Fallback to non-pooled version for backward compatibility
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
+			mte.MPSTrainingEngine.engine,
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			learningRate,
+			batchSize,
+		)
+	}
+	
+	if err != nil {
+		return 0, fmt.Errorf("SGD training step failed: %v", err)
+	}
+	
+	// Return actual computed loss
+	return actualLoss, nil
+}
+
 // getAllParameterTensors returns all parameter tensors for dynamic inference
 func (mte *ModelTrainingEngine) getAllParameterTensors() []*memory.Tensor {
 	return mte.parameterTensors
@@ -806,6 +960,14 @@ func (mte *ModelTrainingEngine) Cleanup() {
 	}
 	mte.parameterTensors = nil
 	
+	// Release gradient tensors
+	for _, tensor := range mte.gradientTensors {
+		if tensor != nil {
+			tensor.Release()
+		}
+	}
+	mte.gradientTensors = nil
+	
 	// Cleanup base training engine
 	if mte.MPSTrainingEngine != nil {
 		mte.MPSTrainingEngine.Cleanup()
@@ -850,7 +1012,13 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatched(
 	if mte.isDynamicEngine {
 		loss, err = mte.executeAdamStepDynamic(inputTensor, labelTensor)
 	} else {
-		loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+		// Check configured optimizer type for hybrid engine
+		if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Adam {
+			loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+		} else {
+			// SGD optimizer - use regular training step with learning rate
+			loss, err = mte.ExecuteModelTrainingStep(inputTensor, labelTensor, mte.MPSTrainingEngine.config.LearningRate)
+		}
 	}
 	
 	if err != nil {
@@ -939,13 +1107,19 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGra
 		return nil, fmt.Errorf("failed to copy label data to persistent GPU buffer: %v", err)
 	}
 	
-	// Execute training step based on engine type
+	// Execute training step based on engine type and optimizer
 	var loss float32
 	if mte.isDynamicEngine {
 		// Use persistent gradients if provided, otherwise allocate (fallback)
 		loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
 	} else {
-		loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+		// Check configured optimizer type for hybrid engine
+		if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Adam {
+			loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+		} else {
+			// SGD optimizer - use regular training step with learning rate
+			loss, err = mte.ExecuteModelTrainingStep(inputTensor, labelTensor, mte.MPSTrainingEngine.config.LearningRate)
+		}
 	}
 	
 	if err != nil {
@@ -1108,4 +1282,130 @@ func (mte *ModelTrainingEngine) ExecuteInference(
 	}
 	
 	return result, nil
+}
+
+// createModelConfigFromSpec creates a ModelConfig from a ModelSpec by analyzing layer architectures
+func createModelConfigFromSpec(modelSpec *layers.ModelSpec) (cgo_bridge.ModelConfig, error) {
+	inputShape := modelSpec.InputShape
+	if len(inputShape) != 4 {
+		return cgo_bridge.ModelConfig{}, fmt.Errorf("expected 4D input shape [batch, channels, height, width], got %v", inputShape)
+	}
+	
+	// Extract input dimensions
+	batchSize := inputShape[0]
+	inputChannels := inputShape[1]
+	inputHeight := inputShape[2]
+	inputWidth := inputShape[3]
+	
+	// Analyze the actual model layers to extract architecture
+	convLayers := []interface{}{}
+	fcLayers := []interface{}{}
+	
+	// Parse layers to find conv and dense layers
+	for _, layer := range modelSpec.Layers {
+		switch layer.Type {
+		case layers.Conv2D:
+			convLayers = append(convLayers, layer)
+		case layers.Dense:
+			fcLayers = append(fcLayers, layer)
+		}
+	}
+	
+	// For now, we only support models with exactly 3 conv layers + 2 FC layers
+	// This matches the current bridge implementation constraints
+	if len(convLayers) != 3 {
+		return cgo_bridge.ModelConfig{}, fmt.Errorf("current bridge implementation only supports models with exactly 3 Conv2D layers, got %d", len(convLayers))
+	}
+	if len(fcLayers) != 2 {
+		return cgo_bridge.ModelConfig{}, fmt.Errorf("current bridge implementation only supports models with exactly 2 Dense layers, got %d", len(fcLayers))
+	}
+	
+	// Extract actual layer parameters from the model spec using the correct API
+	conv1Idx := findLayerIndex(modelSpec, layers.Conv2D, 0)
+	conv2Idx := findLayerIndex(modelSpec, layers.Conv2D, 1)
+	conv3Idx := findLayerIndex(modelSpec, layers.Conv2D, 2)
+	fc1Idx := findLayerIndex(modelSpec, layers.Dense, 0)
+	fc2Idx := findLayerIndex(modelSpec, layers.Dense, 1)
+	
+	if conv1Idx == -1 || conv2Idx == -1 || conv3Idx == -1 || fc1Idx == -1 || fc2Idx == -1 {
+		return cgo_bridge.ModelConfig{}, fmt.Errorf("could not find required layers in model spec")
+	}
+	
+	conv1 := modelSpec.Layers[conv1Idx]
+	conv2 := modelSpec.Layers[conv2Idx]
+	conv3 := modelSpec.Layers[conv3Idx]
+	fc1 := modelSpec.Layers[fc1Idx]
+	fc2 := modelSpec.Layers[fc2Idx]
+	
+	// Extract Conv2D parameters using the Parameters map
+	conv1OutChannels := conv1.Parameters["output_channels"].(int)
+	conv1KernelSize := conv1.Parameters["kernel_size"].(int)
+	conv1Stride := conv1.Parameters["stride"].(int)
+	conv1Padding := conv1.Parameters["padding"].(int)
+	conv1OutHeight := (inputHeight + 2*conv1Padding - conv1KernelSize) / conv1Stride + 1
+	conv1OutWidth := (inputWidth + 2*conv1Padding - conv1KernelSize) / conv1Stride + 1
+	
+	conv2OutChannels := conv2.Parameters["output_channels"].(int)
+	conv2KernelSize := conv2.Parameters["kernel_size"].(int)
+	conv2Stride := conv2.Parameters["stride"].(int)
+	conv2Padding := conv2.Parameters["padding"].(int)
+	conv2OutHeight := (conv1OutHeight + 2*conv2Padding - conv2KernelSize) / conv2Stride + 1
+	conv2OutWidth := (conv1OutWidth + 2*conv2Padding - conv2KernelSize) / conv2Stride + 1
+	
+	conv3OutChannels := conv3.Parameters["output_channels"].(int)
+	conv3KernelSize := conv3.Parameters["kernel_size"].(int)
+	conv3Stride := conv3.Parameters["stride"].(int)
+	conv3Padding := conv3.Parameters["padding"].(int)
+	conv3OutHeight := (conv2OutHeight + 2*conv3Padding - conv3KernelSize) / conv3Stride + 1
+	conv3OutWidth := (conv2OutWidth + 2*conv3Padding - conv3KernelSize) / conv3Stride + 1
+	
+	// Extract Dense layer parameters
+	fc1InputSize := conv3OutChannels * conv3OutHeight * conv3OutWidth
+	fc1OutputSize := fc1.Parameters["output_size"].(int)
+	fc2OutputSize := fc2.Parameters["output_size"].(int)
+	
+	modelConfig := cgo_bridge.ModelConfig{
+		BatchSize:     batchSize,
+		InputChannels: inputChannels,
+		InputHeight:   inputHeight,
+		InputWidth:    inputWidth,
+		
+		Conv1OutChannels: conv1OutChannels,
+		Conv1OutHeight:   conv1OutHeight,
+		Conv1OutWidth:    conv1OutWidth,
+		Conv1KernelSize:  conv1KernelSize,
+		Conv1Stride:      conv1Stride,
+		
+		Conv2OutChannels: conv2OutChannels,
+		Conv2OutHeight:   conv2OutHeight,
+		Conv2OutWidth:    conv2OutWidth,
+		Conv2KernelSize:  conv2KernelSize,
+		Conv2Stride:      conv2Stride,
+		
+		Conv3OutChannels: conv3OutChannels,
+		Conv3OutHeight:   conv3OutHeight,
+		Conv3OutWidth:    conv3OutWidth,
+		Conv3KernelSize:  conv3KernelSize,
+		Conv3Stride:      conv3Stride,
+		
+		FC1InputSize:  fc1InputSize,
+		FC1OutputSize: fc1OutputSize,
+		FC2OutputSize: fc2OutputSize,
+	}
+	
+	return modelConfig, nil
+}
+
+// Helper function to find the nth layer of a specific type
+func findLayerIndex(modelSpec *layers.ModelSpec, layerType layers.LayerType, occurrence int) int {
+	count := 0
+	for i, layer := range modelSpec.Layers {
+		if layer.Type == layerType {
+			if count == occurrence {
+				return i
+			}
+			count++
+		}
+	}
+	return -1 // Not found
 }

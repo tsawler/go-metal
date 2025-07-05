@@ -103,7 +103,7 @@ func NewMPSTrainingEngineConstantWeights(config cgo_bridge.TrainingConfig) (*MPS
 
 // NewMPSTrainingEngineHybrid creates a new hybrid MPS/MPSGraph training engine
 // This uses MPS for convolution and MPSGraph for other operations, avoiding the assertion issue
-func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig) (*MPSTrainingEngine, error) {
+func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig, modelConfig cgo_bridge.ModelConfig) (*MPSTrainingEngine, error) {
 	// Create Metal device
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
@@ -113,8 +113,8 @@ func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig) (*MPSTrainingE
 	// Initialize global memory manager
 	memory.InitializeGlobalMemoryManager(device)
 	
-	// Create hybrid training engine
-	engine, err := cgo_bridge.CreateTrainingEngineHybrid(device, config)
+	// Create hybrid training engine with model configuration
+	engine, err := cgo_bridge.CreateTrainingEngineHybrid(device, config, modelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create hybrid training engine: %v", err)
 	}
@@ -142,8 +142,11 @@ func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig) (*MPSTrainingE
 
 // NewMPSTrainingEngineWithAdam creates a new hybrid training engine with Adam optimizer
 func NewMPSTrainingEngineWithAdam(config cgo_bridge.TrainingConfig, adamConfig optimizer.AdamConfig, weightShapes [][]int) (*MPSTrainingEngine, error) {
+	// Create default model configuration for cats-dogs architecture
+	defaultModelConfig := getDefaultModelConfig()
+	
 	// Create base training engine
-	engine, err := NewMPSTrainingEngineHybrid(config)
+	engine, err := NewMPSTrainingEngineHybrid(config, defaultModelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base training engine: %v", err)
 	}
@@ -582,7 +585,10 @@ func NewBatchTrainerConstantWeights(config cgo_bridge.TrainingConfig, batchSize 
 
 // NewBatchTrainerHybrid creates a new batch trainer with hybrid MPS/MPSGraph approach
 func NewBatchTrainerHybrid(config cgo_bridge.TrainingConfig, batchSize int) (*BatchTrainer, error) {
-	engine, err := NewMPSTrainingEngineHybrid(config)
+	// Create default model configuration for cats-dogs architecture
+	defaultModelConfig := getDefaultModelConfig()
+	
+	engine, err := NewMPSTrainingEngineHybrid(config, defaultModelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create hybrid training engine: %v", err)
 	}
@@ -685,4 +691,20 @@ func (bt *BatchTrainer) Cleanup() {
 // Helper function to get current time in nanoseconds
 func getCurrentTime() int64 {
 	return time.Now().UnixNano()
+}
+
+// getDefaultModelConfig returns a model configuration that will fail gracefully
+// This function exists only for backward compatibility with legacy functions that don't have access to ModelSpec
+// NEW CODE SHOULD NOT USE THIS - Use NewModelTrainingEngine with proper ModelSpec instead
+func getDefaultModelConfig() cgo_bridge.ModelConfig {
+	// Return a configuration that will cause a descriptive error rather than silent wrong behavior
+	return cgo_bridge.ModelConfig{
+		BatchSize:     0, // This will cause validation errors
+		InputChannels: 0,
+		InputHeight:   0,
+		InputWidth:    0,
+		
+		// All other fields zeroed - this will cause the bridge to fail with clear error messages
+		// rather than silently using wrong hardcoded values for different model architectures
+	}
 }
