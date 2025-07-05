@@ -125,7 +125,7 @@ convolution operations
 #### func  NewMPSTrainingEngineHybrid
 
 ```go
-func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig) (*MPSTrainingEngine, error)
+func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig, modelConfig cgo_bridge.ModelConfig) (*MPSTrainingEngine, error)
 ```
 NewMPSTrainingEngineHybrid creates a new hybrid MPS/MPSGraph training engine
 This uses MPS for convolution and MPSGraph for other operations, avoiding the

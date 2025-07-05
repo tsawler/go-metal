@@ -92,7 +92,7 @@ model specification
 #### func  CreateTrainingEngineHybrid
 
 ```go
-func CreateTrainingEngineHybrid(device unsafe.Pointer, config TrainingConfig) (unsafe.Pointer, error)
+func CreateTrainingEngineHybrid(device unsafe.Pointer, config TrainingConfig, modelConfig ModelConfig) (unsafe.Pointer, error)
 ```
 CreateTrainingEngineHybrid creates a hybrid MPS/MPSGraph training engine
 
@@ -232,6 +232,22 @@ func ExecuteTrainingStepDynamicWithGradients(
 ExecuteTrainingStepDynamicWithGradients executes a dynamic training step with
 real gradient computation
 
+#### func  ExecuteTrainingStepDynamicWithGradientsPooled
+
+```go
+func ExecuteTrainingStepDynamicWithGradientsPooled(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	batchSize int,
+	commandPool unsafe.Pointer,
+) (float32, error)
+```
+ExecuteTrainingStepDynamicWithGradientsPooled executes a dynamic training step
+with pooled command buffers
+
 #### func  ExecuteTrainingStepHybrid
 
 ```go
@@ -303,6 +319,23 @@ func ExecuteTrainingStepHybridWithGradientsPooled(
 ExecuteTrainingStepHybridWithGradientsPooled executes forward+backward pass with
 pooled command buffers RESOURCE LEAK FIX: Uses command buffer pooling to prevent
 Metal resource accumulation
+
+#### func  ExecuteTrainingStepSGDPooled
+
+```go
+func ExecuteTrainingStepSGDPooled(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	labelBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	learningRate float32,
+	batchSize int,
+	commandPool unsafe.Pointer,
+) (float32, error)
+```
+ExecuteTrainingStepSGDPooled executes SGD training step with pooled command
+buffers for optimal performance
 
 #### func  GetCommandBufferFromPool
 
@@ -426,6 +459,46 @@ type LayerSpecC struct {
 ```
 
 LayerSpecC represents a C-compatible layer specification
+
+#### type ModelConfig
+
+```go
+type ModelConfig struct {
+	// Input configuration
+	BatchSize     int
+	InputChannels int
+	InputHeight   int
+	InputWidth    int
+
+	// Convolution layer outputs
+	Conv1OutChannels int
+	Conv1OutHeight   int
+	Conv1OutWidth    int
+
+	Conv2OutChannels int
+	Conv2OutHeight   int
+	Conv2OutWidth    int
+
+	Conv3OutChannels int
+	Conv3OutHeight   int
+	Conv3OutWidth    int
+
+	// Fully connected layer dimensions
+	FC1InputSize  int // Flattened conv output size
+	FC1OutputSize int // Hidden layer size
+	FC2OutputSize int // Number of classes
+
+	// Convolution parameters
+	Conv1KernelSize int
+	Conv1Stride     int
+	Conv2KernelSize int
+	Conv2Stride     int
+	Conv3KernelSize int
+	Conv3Stride     int
+}
+```
+
+ModelConfig holds model architecture configuration for dynamic dimensions
 
 #### type OptimizerType
 
