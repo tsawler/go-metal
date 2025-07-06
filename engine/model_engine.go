@@ -694,7 +694,7 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamicWithGradients(
 	
 	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
 		// Use pooled version with command queue for resource leak prevention
-		// Using pooled version
+		fmt.Printf("🚀 Using POOLED execution (commandQueue: %v)\n", mte.MPSTrainingEngine.commandQueue != nil)
 		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradientsPooled(
 			unsafe.Pointer(mte.MPSTrainingEngine.engine),
 			inputTensor.MetalBuffer(),
@@ -706,7 +706,8 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamicWithGradients(
 		)
 	} else {
 		// Fallback to original version
-		// Using non-pooled version
+		fmt.Printf("❌ Using NON-POOLED execution (useCommandPooling: %v, commandQueue: %v)\n", 
+			mte.MPSTrainingEngine.useCommandPooling, mte.MPSTrainingEngine.commandQueue != nil)
 		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
 			unsafe.Pointer(mte.MPSTrainingEngine.engine),
 			inputTensor.MetalBuffer(),
@@ -820,6 +821,8 @@ func (mte *ModelTrainingEngine) executeSGDStepDynamicWithGradients(
 	var actualLoss float32
 	var err error
 	
+	// Enable SGD pooled execution for optimal performance
+	// The pooled implementation should achieve 11-12 batch/s with proper resource management
 	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
 		// Use SGD-specific pooled version for optimal performance (11-12 batch/s)
 		actualLoss, err = cgo_bridge.ExecuteTrainingStepSGDPooled(
@@ -833,7 +836,7 @@ func (mte *ModelTrainingEngine) executeSGDStepDynamicWithGradients(
 			mte.MPSTrainingEngine.commandQueue, // Pass command queue as pool
 		)
 	} else {
-		// Fallback to non-pooled version for backward compatibility
+		// Use non-pooled dynamic execution for SGD (works without placeholder issues)
 		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
 			mte.MPSTrainingEngine.engine,
 			inputTensor.MetalBuffer(),

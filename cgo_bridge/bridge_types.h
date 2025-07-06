@@ -177,6 +177,24 @@ typedef struct {
     NSMutableArray* precompiledSGDUpdatedParams;            // Pre-compiled SGD parameter updates
     NSMutableArray* precompiledSGDUpdatedMomentum;          // Pre-compiled SGD momentum updates (if using momentum)
     
+    // OPTIMIZER-SPECIFIC GRAPH COMPILATION: Separate pre-compilation per optimizer
+    // This prevents placeholder conflicts and enables optimal performance for each optimizer
+    
+    // SGD-specific graph compilation
+    BOOL sgdGraphCompiled;                                 // Flag indicating SGD graph is compiled
+    NSMutableArray* sgdPrecompiledGradients;               // SGD pre-compiled gradient tensors  
+    NSMutableArray* sgdPrecompiledUpdatedParams;           // SGD pre-compiled parameter updates
+    NSMutableArray* sgdPrecompiledUpdatedMomentum;         // SGD pre-compiled momentum updates (if momentum enabled)
+    MPSGraphTensor* sgdCachedLrTensor;                     // Cached SGD learning rate scalar
+    MPSGraphTensor* sgdCachedMomentumTensor;               // Cached SGD momentum scalar (beta1)
+    
+    // Adam-specific graph compilation  
+    BOOL adamGraphCompiled;                                // Flag indicating Adam graph is compiled
+    NSMutableArray* adamPrecompiledGradients;              // Adam pre-compiled gradient tensors
+    NSMutableArray* adamPrecompiledUpdatedParams;          // Adam pre-compiled parameter updates
+    NSMutableArray* adamPrecompiledUpdatedMomentum;        // Adam pre-compiled momentum updates  
+    NSMutableArray* adamPrecompiledUpdatedVariance;        // Adam pre-compiled variance updates
+    
     // Model configuration for dynamic dimensions
     model_config_t model_config;                             // Model architecture configuration
 } training_engine_t;

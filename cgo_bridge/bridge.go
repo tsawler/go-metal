@@ -1209,14 +1209,13 @@ func ExecuteTrainingStepSGDPooled(
 	}
 
 	var lossOut C.float
-	result := C.execute_training_step_sgd_pooled(
+	result := C.execute_training_step_dynamic_with_gradients_pooled(
 		C.uintptr_t(uintptr(engine)),
 		C.uintptr_t(uintptr(inputBuffer)),
 		C.uintptr_t(uintptr(labelBuffer)),
 		cWeightBuffers,
 		cGradientBuffers,
 		C.int(len(weightBuffers)),
-		C.float(learningRate),
 		C.int(batchSize),
 		C.uintptr_t(uintptr(commandPool)),
 		&lossOut,

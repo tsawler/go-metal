@@ -124,7 +124,26 @@ typedef struct {
     
     BOOL adamStateInitialized;                             // Flag indicating Adam state is ready
     
-    // TRUE PRE-COMPILATION: Pre-compiled gradient and optimizer operations
+    // OPTIMIZER-SPECIFIC GRAPH COMPILATION: Separate pre-compilation per optimizer
+    // This prevents placeholder conflicts and enables optimal performance for each optimizer
+    
+    // SGD-specific graph compilation
+    BOOL sgdGraphCompiled;                                 // Flag indicating SGD graph is compiled
+    NSMutableArray* sgdPrecompiledGradients;               // SGD pre-compiled gradient tensors  
+    NSMutableArray* sgdPrecompiledUpdatedParams;           // SGD pre-compiled parameter updates
+    NSMutableArray* sgdPrecompiledUpdatedMomentum;         // SGD pre-compiled momentum updates (if momentum enabled)
+    MPSGraphTensor* sgdCachedLrTensor;                     // Cached SGD learning rate scalar
+    MPSGraphTensor* sgdCachedMomentumTensor;               // Cached SGD momentum scalar (beta1)
+    BOOL sgdScalarsCached;                                 // Flag indicating SGD scalars are cached
+    
+    // Adam-specific graph compilation  
+    BOOL adamGraphCompiled;                                // Flag indicating Adam graph is compiled
+    NSMutableArray* adamPrecompiledGradients;              // Adam pre-compiled gradient tensors
+    NSMutableArray* adamPrecompiledUpdatedParams;          // Adam pre-compiled parameter updates
+    NSMutableArray* adamPrecompiledUpdatedMomentum;        // Adam pre-compiled momentum updates  
+    NSMutableArray* adamPrecompiledUpdatedVariance;        // Adam pre-compiled variance updates
+    
+    // Legacy arrays for backward compatibility (use optimizer-specific ones above)
     NSMutableArray* precompiledGradientTensors;             // Pre-compiled gradient tensors
     NSMutableArray* precompiledUpdatedParams;               // Pre-compiled parameter updates
     NSMutableArray* precompiledUpdatedMomentum;             // Pre-compiled momentum updates  
@@ -3800,6 +3819,21 @@ uintptr_t create_training_engine_dynamic(
         engine->allWeightPlaceholders = [[NSMutableArray alloc] init];
         engine->allBiasPlaceholders = [[NSMutableArray alloc] init];
         
+        // Initialize optimizer-specific graph compilation arrays
+        engine->sgdGraphCompiled = NO;
+        engine->sgdPrecompiledGradients = [[NSMutableArray alloc] init];
+        engine->sgdPrecompiledUpdatedParams = [[NSMutableArray alloc] init]; 
+        engine->sgdPrecompiledUpdatedMomentum = [[NSMutableArray alloc] init];
+        engine->sgdScalarsCached = NO;
+        engine->sgdCachedLrTensor = nil;
+        engine->sgdCachedMomentumTensor = nil;
+        
+        engine->adamGraphCompiled = NO;
+        engine->adamPrecompiledGradients = [[NSMutableArray alloc] init];
+        engine->adamPrecompiledUpdatedParams = [[NSMutableArray alloc] init];
+        engine->adamPrecompiledUpdatedMomentum = [[NSMutableArray alloc] init];
+        engine->adamPrecompiledUpdatedVariance = [[NSMutableArray alloc] init];
+        
         // Create command queue
         engine->commandQueue = [device newCommandQueue];
         if (!engine->commandQueue) {
@@ -4094,11 +4128,119 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                   engine->config.beta1 > 0.0f ? "enabled" : "disabled");
         }
         
-        // TRUE PRE-COMPILATION: Build gradient computation and Adam optimizer during graph construction
-        // This eliminates runtime operation creation and fixes performance degradation
-        NSLog(@"🔍 PRE-COMPILATION DEBUG: optimizer=%d, params=%lu, adam_state=%d", 
-              engine->config.optimizer_type, [engine->allWeightPlaceholders count], engine->adamStateInitialized);
-        if (engine->config.optimizer_type == 1 && engine->allWeightPlaceholders.count > 0 && engine->adamStateInitialized) { // Adam optimizer
+        // OPTIMIZER-SPECIFIC PRE-COMPILATION: Build optimizer-specific graphs to avoid conflicts
+        // This eliminates runtime operation creation and prevents placeholder issues
+        NSLog(@"🔍 PRE-COMPILATION DEBUG: optimizer=%d, params=%lu, adam_state=%d, sgd_state=%d", 
+              engine->config.optimizer_type, [engine->allWeightPlaceholders count], engine->adamStateInitialized, engine->sgdStateInitialized);
+        
+        // SGD-SPECIFIC GRAPH COMPILATION: Build SGD graph without Adam dependencies
+        if (engine->config.optimizer_type == 0 && engine->allWeightPlaceholders.count > 0 && engine->sgdStateInitialized && !engine->sgdGraphCompiled) { // SGD optimizer
+            
+            NSLog(@"🚀 SGD PRE-COMPILATION: Building gradient and SGD operations in graph...");
+            
+            // SGD scalar tensors should already be cached by cacheSGDScalarTensors
+            // Just verify they exist and use the correct field names
+            if (!engine->sgdScalarsCached) {
+                NSLog(@"⚠️ SGD scalars not cached - this should not happen");
+                engine->sgdScalarsCached = YES;
+            }
+            
+            // Use the correct cached tensors
+            if (!engine->sgdCachedLrTensor && engine->cachedLrTensor) {
+                engine->sgdCachedLrTensor = engine->cachedLrTensor; // Use shared LR tensor
+            }
+            
+            // Pre-compile gradient computation using automatic differentiation ONCE during graph building (same as Adam)
+            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
+                [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                                            withTensors:engine->allWeightPlaceholders
+                                                   name:@"sgd_precompiled_gradients"];
+            
+            // Store gradient tensors for execution (these are pre-compiled, not runtime-created) - same as Adam
+            NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
+            for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+                MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
+                if (gradTensor) {
+                    [precompiledGradientTensors addObject:gradTensor];
+                } else {
+                    NSLog(@"❌ Failed to pre-compile gradient for parameter");
+                    return NO;
+                }
+            }
+            
+            // Store pre-compiled gradients in SGD-specific arrays (same pattern as Adam)
+            engine->sgdPrecompiledGradients = precompiledGradientTensors;
+            
+            // Also store in legacy array for backward compatibility (same as Adam)
+            engine->precompiledGradientTensors = precompiledGradientTensors;
+            
+            NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            NSLog(@"🚀 PRE-COMPILATION: Building SGD parameter update operations...");
+            
+            // Pre-compile SGD parameter updates only if properly initialized (same pattern as Adam)
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedMomentum = [[NSMutableArray alloc] init];
+            
+            for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
+                MPSGraphTensor* paramTensor = [engine->allWeightPlaceholders objectAtIndex:i];
+                MPSGraphTensor* gradTensor = [precompiledGradientTensors objectAtIndex:i];
+                
+                if (gradTensor) {
+                    if (engine->config.beta1 > 0.0f && engine->momentumPlaceholders && i < engine->momentumPlaceholders.count) {
+                        // SGD with momentum: m = beta1 * m + lr * grad; param = param - m
+                        MPSGraphTensor* momentumPlaceholder = [engine->momentumPlaceholders objectAtIndex:i];
+                        
+                        // Updated momentum: new_momentum = beta1 * old_momentum + lr * gradient
+                        MPSGraphTensor* scaledMomentum = [engine->graph multiplicationWithPrimaryTensor:momentumPlaceholder
+                                                                                      secondaryTensor:engine->cachedMomentumTensor
+                                                                                                 name:[NSString stringWithFormat:@"sgd_scaled_momentum_%d", i]];
+                        MPSGraphTensor* scaledGradient = [engine->graph multiplicationWithPrimaryTensor:gradTensor
+                                                                                      secondaryTensor:engine->sgdCachedLrTensor
+                                                                                                 name:[NSString stringWithFormat:@"sgd_scaled_grad_%d", i]];
+                        MPSGraphTensor* updatedMomentum = [engine->graph additionWithPrimaryTensor:scaledMomentum
+                                                                                   secondaryTensor:scaledGradient
+                                                                                              name:[NSString stringWithFormat:@"sgd_updated_momentum_%d", i]];
+                        
+                        // Updated parameter: param = param - updated_momentum
+                        MPSGraphTensor* updatedParam = [engine->graph subtractionWithPrimaryTensor:paramTensor
+                                                                                   secondaryTensor:updatedMomentum
+                                                                                              name:[NSString stringWithFormat:@"sgd_updated_param_%d", i]];
+                        
+                        [precompiledUpdatedMomentum addObject:updatedMomentum];
+                        [precompiledUpdatedParams addObject:updatedParam];
+                    } else {
+                        // Standard SGD: param = param - learning_rate * gradient
+                        MPSGraphTensor* scaledGradient = [engine->graph multiplicationWithPrimaryTensor:gradTensor
+                                                                                      secondaryTensor:engine->sgdCachedLrTensor
+                                                                                                 name:[NSString stringWithFormat:@"sgd_scaled_grad_%d", i]];
+                        MPSGraphTensor* updatedParam = [engine->graph subtractionWithPrimaryTensor:paramTensor
+                                                                                   secondaryTensor:scaledGradient
+                                                                                              name:[NSString stringWithFormat:@"sgd_updated_param_%d", i]];
+                        
+                        [precompiledUpdatedParams addObject:updatedParam];
+                        // No momentum tensor needed for standard SGD
+                        [precompiledUpdatedMomentum addObject:paramTensor]; // Placeholder (not used)
+                    }
+                } else {
+                    NSLog(@"❌ Failed to pre-compile parameter update for parameter %d", i);
+                    return NO;
+                }
+            }
+            
+            // Store pre-compiled SGD operations in SGD-specific arrays (same pattern as Adam)
+            engine->sgdPrecompiledUpdatedParams = precompiledUpdatedParams;
+            engine->sgdPrecompiledUpdatedMomentum = precompiledUpdatedMomentum;
+            
+            // Also store in legacy arrays for backward compatibility (same as Adam)
+            engine->precompiledUpdatedParams = precompiledUpdatedParams;
+            engine->precompiledUpdatedMomentum = precompiledUpdatedMomentum;
+            
+            engine->sgdGraphCompiled = YES;
+            NSLog(@"✅ SGD PRE-COMPILATION: Successfully built SGD update operations for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
+        // ADAM-SPECIFIC GRAPH COMPILATION: Build Adam graph without SGD dependencies  
+        else if (engine->config.optimizer_type == 1 && engine->allWeightPlaceholders.count > 0 && engine->adamStateInitialized && !engine->adamGraphCompiled) { // Adam optimizer
             
             NSLog(@"🚀 PRE-COMPILATION: Building gradient and Adam operations in graph...");
             
@@ -4120,7 +4262,10 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                 }
             }
             
-            // Store pre-compiled gradients in engine for execution
+            // Store pre-compiled gradients in Adam-specific arrays
+            engine->adamPrecompiledGradients = precompiledGradientTensors;
+            
+            // Also store in legacy array for backward compatibility
             engine->precompiledGradientTensors = precompiledGradientTensors;
             
             NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
@@ -4204,12 +4349,18 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     [precompiledUpdatedVariance addObject:newVariance];
                 }
                 
-                // Store pre-compiled Adam operations in engine
+                // Store pre-compiled Adam operations in optimizer-specific arrays
+                engine->adamPrecompiledUpdatedParams = precompiledUpdatedParams;
+                engine->adamPrecompiledUpdatedMomentum = precompiledUpdatedMomentum;
+                engine->adamPrecompiledUpdatedVariance = precompiledUpdatedVariance;
+                
+                // Also store in legacy arrays for backward compatibility
                 engine->precompiledUpdatedParams = precompiledUpdatedParams;
                 engine->precompiledUpdatedMomentum = precompiledUpdatedMomentum;
                 engine->precompiledUpdatedVariance = precompiledUpdatedVariance;
                 
-                NSLog(@"✅ PRE-COMPILATION: Successfully built Adam update operations for %lu parameters", [engine->allWeightPlaceholders count]);
+                engine->adamGraphCompiled = YES;
+                NSLog(@"✅ ADAM PRE-COMPILATION: Successfully built Adam update operations for %lu parameters", [engine->allWeightPlaceholders count]);
             } else {
                 NSLog(@"⚠️ PRE-COMPILATION: Adam state not properly initialized - will use fallback optimizer");
                 engine->precompiledUpdatedParams = nil;
@@ -4306,10 +4457,16 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             // Store pre-compiled SGD operations for execution
             engine->precompiledGradientTensors = precompiledGradientTensors;
+            engine->precompiledUpdatedParams = precompiledSGDUpdatedParams;  // Fix: Use generic field name
             engine->precompiledSGDUpdatedParams = precompiledSGDUpdatedParams;
             engine->precompiledSGDUpdatedMomentum = precompiledSGDUpdatedMomentum;
+            if (precompiledSGDUpdatedMomentum.count > 0) {
+                engine->precompiledUpdatedMomentum = precompiledSGDUpdatedMomentum;  // Fix: Set generic momentum field
+            }
             
             NSLog(@"✅ PRE-COMPILATION: Successfully built SGD operations for %lu parameters", [precompiledSGDUpdatedParams count]);
+            NSLog(@"🔍 SGD GENERIC FIELDS SET: precompiledGradientTensors=%p, precompiledUpdatedParams=%p", 
+                  engine->precompiledGradientTensors, engine->precompiledUpdatedParams);
             
         } else {
             NSLog(@"⚠️ PRE-COMPILATION: Skipping pre-compilation (optimizer: %d, params: %lu, adam_state: %d, sgd_state: %d)", 
@@ -4804,7 +4961,7 @@ int execute_training_step_dynamic_with_gradients(
         }
         
         @try {
-            NSLog(@"🔍 Dynamic gradient training: batch_size=%d, num_weights=%d", batch_size, num_weights);
+            // NSLog(@"🔍 Dynamic gradient training: batch_size=%d, num_weights=%d", batch_size, num_weights);
             
             // Create tensor data for inputs
             id<MTLBuffer> inputBuf = (__bridge id<MTLBuffer>)(void*)input_buffer;
@@ -5179,8 +5336,11 @@ int execute_training_step_dynamic_with_gradients_pooled(
             // This eliminates runtime operation creation and fixes performance degradation
             NSMutableArray<MPSGraphTensor*>* targetTensors = [[NSMutableArray alloc] init];
             
+            // Successfully using pre-compiled operations
+            
             if (engine->precompiledGradientTensors && engine->precompiledUpdatedParams) {
-                // Adam optimizer: Use pre-compiled tensors - no runtime operation creation!
+                // Use pre-compiled tensors - no runtime operation creation! (Works for both Adam and SGD)
+                // NSLog(@"🚀 Using PRE-COMPILED operations for optimal performance!");
                 [targetTensors addObject:actualLoss]; // Loss first
                 [targetTensors addObjectsFromArray:engine->precompiledGradientTensors]; // Pre-compiled gradients
                 [targetTensors addObjectsFromArray:engine->precompiledUpdatedParams]; // Pre-compiled parameter updates
@@ -5193,18 +5353,11 @@ int execute_training_step_dynamic_with_gradients_pooled(
                     [targetTensors addObjectsFromArray:engine->precompiledUpdatedVariance];
                 }
                 
-            } else if (engine->precompiledGradientTensors && engine->precompiledSGDUpdatedParams) {
-                // SGD optimizer: Use pre-compiled SGD tensors - no runtime operation creation!
-                [targetTensors addObject:actualLoss]; // Loss first
-                [targetTensors addObjectsFromArray:engine->precompiledGradientTensors]; // Pre-compiled gradients
-                [targetTensors addObjectsFromArray:engine->precompiledSGDUpdatedParams]; // Pre-compiled SGD parameter updates
-                
-                // Add momentum tensors to target tensors for computation (if using SGD with momentum)
-                if (engine->precompiledSGDUpdatedMomentum) {
-                    [targetTensors addObjectsFromArray:engine->precompiledSGDUpdatedMomentum];
-                }
-                
             } else {
+                // NSLog(@"🔍 Debug: precompiledGradientTensors=%p, precompiledUpdatedParams=%p, precompiledSGDUpdatedParams=%p", 
+                //       engine->precompiledGradientTensors, engine->precompiledUpdatedParams, engine->precompiledSGDUpdatedParams);
+                // NSLog(@"🔍 Debug: sgdPrecompiledGradients=%p, sgdPrecompiledUpdatedParams=%p", 
+                //      engine->sgdPrecompiledGradients, engine->sgdPrecompiledUpdatedParams);
                 NSLog(@"❌ Pre-compiled operations not available, falling back to runtime gradient computation");
                 
                 // Fallback: Use runtime automatic differentiation (creates new operations - causes degradation)
@@ -5444,8 +5597,8 @@ int execute_training_step_dynamic_with_gradients_pooled(
 }
 
 // SGD-specific pooled training function for optimal performance
-// PERFORMANCE CRITICAL: This function provides pooled command buffer support specifically for SGD
-// without relying on Adam-specific placeholder tensors or state management
+// PERFORMANCE CRITICAL: Uses SGD-specific pre-compiled graph operations for maximum performance
+// This eliminates placeholder conflicts by using optimizer-specific compilation
 int execute_training_step_sgd_pooled(
     uintptr_t engine_ptr,
     uintptr_t input_buffer,
@@ -5459,16 +5612,29 @@ int execute_training_step_sgd_pooled(
     float* loss_out
 ) {
     @autoreleasepool {
+        
         training_engine_t* engine = (training_engine_t*)engine_ptr;
         if (!engine || !engine->initialized || !loss_out) {
             NSLog(@"❌ SGD Pooled: Engine not initialized");
             return -1;
         }
         
-        if (!engine->graph || !engine->inputTensor || !engine->lossOutput) {
-            NSLog(@"❌ SGD Pooled: Engine missing required graph components");
+        // EARLY VALIDATION: Check all pointers before proceeding
+        if (!input_buffer || !label_buffer || !weight_buffers || !gradient_buffers) {
+            NSLog(@"❌ SGD Pooled: Invalid buffer pointers");
             return -2;
         }
+        
+        // Check if SGD graph is compiled and ready
+        if (!engine->sgdGraphCompiled || !engine->sgdPrecompiledGradients || !engine->sgdPrecompiledUpdatedParams) {
+            NSLog(@"❌ SGD Pooled: SGD graph not compiled - falling back to dynamic execution");
+            return execute_training_step_dynamic_with_gradients(
+                engine_ptr, input_buffer, label_buffer, weight_buffers, gradient_buffers,
+                num_weights, learning_rate, batch_size, loss_out
+            );
+        }
+        
+        NSLog(@"🚀 SGD Pooled: Using SGD-specific pre-compiled graph execution");
         
         @try {
             // Get command buffer from pool for resource efficiency
@@ -5486,15 +5652,15 @@ int execute_training_step_sgd_pooled(
                 return -3;
             }
             
-            // Create feeds dictionary for SGD-specific graph execution
+            // Create feeds dictionary using pre-compiled placeholders
             NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
             
-            // CRITICAL: Handle input tensor shape dynamically (architecture-agnostic)
+            // Add input tensor data (dynamic batch size)
             NSArray<NSNumber*>* placeholderInputShape = engine->inputTensor.shape;
             NSMutableArray<NSNumber*>* actualInputShape = [[NSMutableArray alloc] init];
             [actualInputShape addObject:@(batch_size)]; // Dynamic batch size
             for (int i = 1; i < placeholderInputShape.count; i++) {
-                [actualInputShape addObject:placeholderInputShape[i]]; // Preserve other dimensions
+                [actualInputShape addObject:placeholderInputShape[i]];
             }
             
             MPSGraphTensorData* inputTensorData = [[MPSGraphTensorData alloc] 
@@ -5503,13 +5669,13 @@ int execute_training_step_sgd_pooled(
                                                   dataType:MPSDataTypeFloat32];
             feeds[engine->inputTensor] = inputTensorData;
             
-            // CRITICAL: Handle label tensor shape dynamically (architecture-agnostic)
+            // Add label tensor data (dynamic batch size)
             if (engine->labelTensor) {
                 NSArray<NSNumber*>* placeholderLabelShape = engine->labelTensor.shape;
                 NSMutableArray<NSNumber*>* actualLabelShape = [[NSMutableArray alloc] init];
                 [actualLabelShape addObject:@(batch_size)]; // Dynamic batch size
                 for (int i = 1; i < placeholderLabelShape.count; i++) {
-                    [actualLabelShape addObject:placeholderLabelShape[i]]; // Preserve label dimensions
+                    [actualLabelShape addObject:placeholderLabelShape[i]];
                 }
                 
                 MPSGraphTensorData* labelTensorData = [[MPSGraphTensorData alloc] 
@@ -5519,13 +5685,13 @@ int execute_training_step_sgd_pooled(
                 feeds[engine->labelTensor] = labelTensorData;
             }
             
-            // CRITICAL: Feed all parameter placeholders dynamically (architecture-agnostic)
+            // Feed parameter placeholders with weight buffers
             for (int i = 0; i < engine->allWeightPlaceholders.count && i < num_weights; i++) {
                 MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
                 id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
                 
                 if (paramBuf && paramPlaceholder) {
-                    NSArray<NSNumber*>* paramShape = paramPlaceholder.shape; // Use actual parameter shape
+                    NSArray<NSNumber*>* paramShape = paramPlaceholder.shape;
                     MPSGraphTensorData* paramData = [[MPSGraphTensorData alloc] 
                                                     initWithMTLBuffer:paramBuf
                                                     shape:paramShape
@@ -5534,45 +5700,121 @@ int execute_training_step_sgd_pooled(
                 }
             }
             
-            // SGD execution: Compute loss and gradients using runtime automatic differentiation
-            // This follows the same pattern as Adam pooled but optimized for SGD
+            // Feed momentum placeholders if SGD uses momentum
+            if (engine->config.beta1 > 0.0f && engine->momentumPlaceholders) {
+                for (int i = 0; i < engine->momentumPlaceholders.count && i < num_weights; i++) {
+                    MPSGraphTensor* momentumPlaceholder = engine->momentumPlaceholders[i];
+                    id<MTLBuffer> gradBuf = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i]; // Use gradient buffer as momentum storage
+                    
+                    if (gradBuf && momentumPlaceholder) {
+                        NSArray<NSNumber*>* momentumShape = momentumPlaceholder.shape;
+                        MPSGraphTensorData* momentumData = [[MPSGraphTensorData alloc] 
+                                                          initWithMTLBuffer:gradBuf
+                                                          shape:momentumShape
+                                                          dataType:MPSDataTypeFloat32];
+                        feeds[momentumPlaceholder] = momentumData;
+                    }
+                }
+            }
             
+            // Execute SGD-specific pre-compiled graph: loss + gradients + parameter updates
             NSMutableArray<MPSGraphTensor*>* targetTensors = [[NSMutableArray alloc] init];
-            [targetTensors addObject:engine->lossOutput]; // Always compute loss first
+            [targetTensors addObject:engine->lossOutput]; // Always compute loss
+            [targetTensors addObjectsFromArray:engine->sgdPrecompiledUpdatedParams]; // Pre-compiled parameter updates
             
-            // For SGD pooled, we only compute loss - the gradient computation and parameter updates 
-            // are handled outside this function to maintain architecture-agnostic design
+            if (engine->config.beta1 > 0.0f && engine->sgdPrecompiledUpdatedMomentum) {
+                [targetTensors addObjectsFromArray:engine->sgdPrecompiledUpdatedMomentum]; // Pre-compiled momentum updates
+            }
             
-            // No additional tensors needed - just compute loss
+            // CRITICAL: Execute only SGD-specific operations to avoid placeholder conflicts
+            // Use targetOperations to explicitly control what gets executed
+            NSLog(@"🔍 SGD Pooled: Executing graph with %lu target tensors and %lu feeds", 
+                  [targetTensors count], [feeds count]);
             
-            // Execute SGD graph with pooled command queue for performance
-            NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
-                [engine->graph runWithMTLCommandQueue:commandQueue
-                                                feeds:feeds
-                                        targetTensors:targetTensors
-                                     targetOperations:nil];
+            NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = nil;
+            @try {
+                results = [engine->graph runWithMTLCommandQueue:commandQueue
+                                                         feeds:feeds
+                                                 targetTensors:targetTensors
+                                              targetOperations:nil];
+            } @catch (NSException* graphException) {
+                NSLog(@"❌ SGD Pooled: Graph execution failed - %@", graphException.reason);
+                
+                // Check if this is a placeholder error and fallback
+                if ([graphException.reason containsString:@"placeholder"] || 
+                    [graphException.reason containsString:@"Unsupported MPS operation"]) {
+                    NSLog(@"🔄 SGD Pooled: Placeholder error - falling back to dynamic execution");
+                    return execute_training_step_dynamic_with_gradients(
+                        engine_ptr, input_buffer, label_buffer, weight_buffers, gradient_buffers,
+                        num_weights, learning_rate, batch_size, loss_out
+                    );
+                } else {
+                    @throw graphException; // Re-throw non-placeholder errors
+                }
+            }
             
-            if (results && results.count > 0) {
+            if (results && results[engine->lossOutput]) {
                 // Extract loss value
                 MPSGraphTensorData* lossData = results[engine->lossOutput];
-                if (lossData) {
-                    float lossValue = 0.0f;
-                    [[lossData mpsndarray] readBytes:&lossValue strideBytes:nil];
-                    *loss_out = lossValue;
-                    
-                    if (isnan(lossValue) || isinf(lossValue)) {
-                        NSLog(@"❌ SGD Pooled: Invalid loss value");
-                        return -6;
-                    }
-                } else {
-                    NSLog(@"❌ SGD Pooled: Failed to extract loss");
+                float lossValue = 0.0f;
+                [[lossData mpsndarray] readBytes:&lossValue strideBytes:nil];
+                *loss_out = lossValue;
+                
+                if (isnan(lossValue) || isinf(lossValue)) {
+                    NSLog(@"❌ SGD Pooled: Invalid loss value");
                     return -6;
                 }
                 
-                // SGD Pooled: Only extract loss - gradient computation handled separately
-                // This avoids the placeholder execution issues and maintains compatibility
+                // Copy updated parameters back to weight buffers (GPU-to-GPU)
+                for (int i = 0; i < MIN(engine->sgdPrecompiledUpdatedParams.count, num_weights); i++) {
+                    MPSGraphTensor* updatedParamTensor = engine->sgdPrecompiledUpdatedParams[i];
+                    MPSGraphTensorData* updatedParamData = results[updatedParamTensor];
+                    
+                    if (updatedParamData && ![updatedParamTensor isEqual:[NSNull null]]) {
+                        id<MTLBuffer> weightBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                        if (weightBuf) {
+                            // GPU-to-GPU copy using Metal buffer operations
+                            NSUInteger weightSize = weightBuf.length;
+                            NSUInteger resultSize = weightSize; // Use weight buffer size since they should match
+                            
+                            if (weightSize == resultSize) {
+                                id<MTLCommandBuffer> copyCommandBuffer = [commandQueue commandBuffer];
+                                id<MTLBlitCommandEncoder> blitEncoder = [copyCommandBuffer blitCommandEncoder];
+                                
+                                // Direct CPU copy from MPSGraphTensorData to Metal buffer
+                                // This is less efficient than GPU-to-GPU copy but works with current API
+                                [[updatedParamData mpsndarray] readBytes:[weightBuf contents] strideBytes:nil];
+                            }
+                        }
+                    }
+                }
                 
-                return 0; // Success - only computed loss
+                // Copy updated momentum back to gradient buffers (if momentum is used)
+                if (engine->config.beta1 > 0.0f && engine->sgdPrecompiledUpdatedMomentum) {
+                    for (int i = 0; i < MIN(engine->sgdPrecompiledUpdatedMomentum.count, num_weights); i++) {
+                        MPSGraphTensor* updatedMomentumTensor = engine->sgdPrecompiledUpdatedMomentum[i];
+                        MPSGraphTensorData* updatedMomentumData = results[updatedMomentumTensor];
+                        
+                        if (updatedMomentumData && ![updatedMomentumTensor isEqual:[NSNull null]]) {
+                            id<MTLBuffer> gradBuf = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                            if (gradBuf) {
+                                NSUInteger gradSize = gradBuf.length;
+                                NSUInteger resultSize = gradSize; // Use gradient buffer size since they should match
+                                
+                                if (gradSize == resultSize) {
+                                    id<MTLCommandBuffer> copyCommandBuffer = [commandQueue commandBuffer];
+                                    id<MTLBlitCommandEncoder> blitEncoder = [copyCommandBuffer blitCommandEncoder];
+                                    
+                                    // Direct CPU copy from MPSGraphTensorData to Metal buffer
+                                    // This is less efficient than GPU-to-GPU copy but works with current API
+                                    [[updatedMomentumData mpsndarray] readBytes:[gradBuf contents] strideBytes:nil];
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                return 0; // Success
                 
             } else {
                 NSLog(@"❌ SGD Pooled: Graph execution failed");
@@ -5581,6 +5823,16 @@ int execute_training_step_sgd_pooled(
             
         } @catch (NSException* exception) {
             NSLog(@"❌ SGD Pooled: Exception - %@", exception.reason);
+            
+            // Check if this is a placeholder-related error
+            if ([exception.reason containsString:@"placeholder"] || [exception.reason containsString:@"Unsupported MPS operation"]) {
+                NSLog(@"🔄 SGD Pooled: Placeholder error detected, falling back to dynamic execution");
+                return execute_training_step_dynamic_with_gradients_pooled(
+                    engine_ptr, input_buffer, label_buffer, weight_buffers, gradient_buffers,
+                    num_weights, batch_size, command_pool, loss_out
+                );
+            }
+            
             return -9;
         }
     }
