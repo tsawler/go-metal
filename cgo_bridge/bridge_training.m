@@ -712,6 +712,27 @@ int execute_training_step_dynamic_with_gradients_pooled(
                 }
             }
             
+            // Feed momentum placeholders for SGD with momentum
+            if (engine->config.optimizer_type == 0 && engine->config.beta1 > 0.0f && engine->momentumPlaceholders) {
+                // SGD with momentum: feed momentum state placeholders
+                for (int i = 0; i < engine->momentumPlaceholders.count && i < engine->momentumBuffers.count; i++) {
+                    MPSGraphTensor* momentumPlaceholder = engine->momentumPlaceholders[i];
+                    id<MTLBuffer> momentumBuffer = engine->momentumBuffers[i];
+                    
+                    if (momentumPlaceholder && momentumBuffer) {
+                        // Get parameter shape for momentum placeholder
+                        MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
+                        NSArray<NSNumber*>* paramShape = [paramPlaceholder shape];
+                        
+                        MPSGraphTensorData* momentumData = [[MPSGraphTensorData alloc] 
+                                                           initWithMTLBuffer:momentumBuffer
+                                                           shape:paramShape
+                                                           dataType:MPSDataTypeFloat32];
+                        feeds[momentumPlaceholder] = momentumData;
+                    }
+                }
+            }
+            
             // Feed momentum and variance placeholders for Adam optimizer
             if (engine->config.optimizer_type == 1 && engine->momentumPlaceholders && engine->variancePlaceholders) {
                 // Increment step counter and calculate bias correction factors
@@ -785,7 +806,7 @@ int execute_training_step_dynamic_with_gradients_pooled(
             
             // Try SGD-specific arrays first (for SGD optimizer)
             if (engine->config.optimizer_type == 0 && engine->sgdPrecompiledGradients && engine->sgdPrecompiledUpdatedParams) {
-                NSLog(@"🚀 Using SGD-SPECIFIC pre-compiled operations!");
+                // NSLog(@"🚀 Using SGD-SPECIFIC pre-compiled operations!");
                 gradientsToUse = engine->sgdPrecompiledGradients;
                 updatesParamsToUse = engine->sgdPrecompiledUpdatedParams;
                 updatesMomentumToUse = engine->sgdPrecompiledUpdatedMomentum;
@@ -810,8 +831,8 @@ int execute_training_step_dynamic_with_gradients_pooled(
             
             if (hasPrecompiledOps) {
                 // Use pre-compiled tensors - no runtime operation creation! (Works for both Adam and SGD)
-                NSLog(@"🚀 Using PRE-COMPILED operations for optimal performance (gradients: %lu, params: %lu)!", 
-                      gradientsToUse.count, updatesParamsToUse.count);
+                // NSLog(@"🚀 Using PRE-COMPILED operations for optimal performance (gradients: %lu, params: %lu)!", 
+                    //   gradientsToUse.count, updatesParamsToUse.count);
                 [targetTensors addObject:actualLoss]; // Loss first
                 [targetTensors addObjectsFromArray:gradientsToUse]; // Pre-compiled gradients
                 [targetTensors addObjectsFromArray:updatesParamsToUse]; // Pre-compiled parameter updates
@@ -905,8 +926,8 @@ int execute_training_step_dynamic_with_gradients_pooled(
                                     float newValue = weightPtr[0]; // Check if it changed
                                     if (i == 0 && fabsf(newValue - oldValue) > 1e-5f) {
                                         // Only log significant parameter changes to reduce noise
-                                        NSLog(@"🔧 DEBUG: Param[0] updated: %.6f -> %.6f (delta: %.2e)", 
-                                              oldValue, newValue, newValue - oldValue);
+                                        // NSLog(@"🔧 DEBUG: Param[0] updated: %.6f -> %.6f (delta: %.2e)", 
+                                        //       oldValue, newValue, newValue - oldValue);
                                     } else if (i == 0 && fabsf(newValue - oldValue) <= 1e-6f) {
                                         // Only warn about very small changes occasionally (every 50 calls)
                                         static int smallChangeCount = 0;
@@ -1311,13 +1332,69 @@ int execute_inference_dynamic(
             return -4;
         }
         
+        if (!engine->predictionsTensor) {
+            NSLog(@"❌ Predictions tensor not available in dynamic graph");
+            return -5;
+        }
+        
         @try {
-            // For brevity, this is a placeholder implementation
-            // The full implementation would include dynamic graph execution
-            // as shown in the extracted code
-            *predictions_out = 0.5f; // Placeholder value
-            
-            return 0; // Success
+            // Use nested autorelease pool for MPSGraphTensorData cleanup
+            @autoreleasepool {
+                // Create feeds dictionary for inference
+                NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
+                
+                // Add input tensor data with actual batch size
+                NSArray<NSNumber*>* placeholderInputShape = engine->inputTensor.shape;
+                NSMutableArray<NSNumber*>* actualInputShape = [[NSMutableArray alloc] init];
+                [actualInputShape addObject:@(batch_size)]; // Use provided batch size
+                for (int i = 1; i < placeholderInputShape.count; i++) {
+                    [actualInputShape addObject:placeholderInputShape[i]];
+                }
+                
+                MPSGraphTensorData* inputTensorData = [[MPSGraphTensorData alloc] 
+                                                      initWithMTLBuffer:inputBuf
+                                                      shape:actualInputShape
+                                                      dataType:MPSDataTypeFloat32];
+                feeds[engine->inputTensor] = inputTensorData;
+                
+                // Feed all parameter placeholders with their corresponding buffers
+                for (int i = 0; i < engine->allWeightPlaceholders.count && i < num_weights; i++) {
+                    MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
+                    id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                    
+                    if (paramBuf && paramPlaceholder) {
+                        NSArray<NSNumber*>* paramShape = paramPlaceholder.shape;
+                        MPSGraphTensorData* paramData = [[MPSGraphTensorData alloc] 
+                                                        initWithMTLBuffer:paramBuf
+                                                        shape:paramShape
+                                                        dataType:MPSDataTypeFloat32];
+                        feeds[paramPlaceholder] = paramData;
+                    }
+                }
+                
+                // Execute the graph for inference (forward pass only)
+                id<MTLCommandQueue> commandQueue = engine->commandQueue;
+                NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
+                    [engine->graph runWithMTLCommandQueue:commandQueue
+                                                    feeds:feeds
+                                            targetTensors:@[engine->predictionsTensor]
+                                         targetOperations:nil];
+                
+                if (results && results.count > 0) {
+                    MPSGraphTensorData* predictionsData = results[engine->predictionsTensor];
+                    if (predictionsData) {
+                        // Read predictions from GPU and copy to output
+                        [[predictionsData mpsndarray] readBytes:predictions_out strideBytes:nil];
+                        return 0; // Success
+                    } else {
+                        NSLog(@"❌ No predictions data returned from dynamic graph execution");
+                        return -6;
+                    }
+                } else {
+                    NSLog(@"❌ Dynamic graph execution returned no results");
+                    return -7;
+                }
+            }
             
         } @catch (NSException* exception) {
             NSLog(@"❌ Dynamic inference execution exception: %@", exception.reason);
@@ -1349,13 +1426,237 @@ int execute_training_step_dynamic(
             return -2;
         }
         
+        id<MTLBuffer> inputBuf = (__bridge id<MTLBuffer>)(void*)input_buffer;
+        id<MTLBuffer> labelBuf = (__bridge id<MTLBuffer>)(void*)label_buffer;
+        
+        if (!inputBuf || !labelBuf) {
+            NSLog(@"❌ Dynamic gradient training: Input or label buffer is nil");
+            return -3;
+        }
+        
         @try {
-            // For brevity, this is a placeholder implementation
-            // The full implementation would include dynamic graph execution
-            // with gradient computation as shown in the extracted code
-            *loss_out = 0.5f; // Placeholder value
+            // Get command queue for graph execution
+            id<MTLCommandQueue> commandQueue = engine->commandQueue;
+            if (!commandQueue) {
+                NSLog(@"❌ Command queue is nil in dynamic training");
+                return -4;
+            }
             
-            return 0;
+            // Use nested autorelease pool for MPSGraphTensorData cleanup
+            @autoreleasepool {
+                // Create feeds dictionary for the dynamic graph
+                NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
+            
+                // Add input tensor data
+                NSArray<NSNumber*>* placeholderInputShape = engine->inputTensor.shape;
+                NSMutableArray<NSNumber*>* actualInputShape = [[NSMutableArray alloc] init];
+                [actualInputShape addObject:@(batch_size)]; // Use provided batch size
+                for (int i = 1; i < placeholderInputShape.count; i++) {
+                    [actualInputShape addObject:placeholderInputShape[i]];
+                }
+                
+                MPSGraphTensorData* inputTensorData = [[MPSGraphTensorData alloc] 
+                                                      initWithMTLBuffer:inputBuf
+                                                      shape:actualInputShape
+                                                      dataType:MPSDataTypeFloat32];
+                feeds[engine->inputTensor] = inputTensorData;
+                
+                // Add label tensor data for loss computation
+                if (engine->labelTensor) {
+                    NSArray<NSNumber*>* placeholderLabelShape = engine->labelTensor.shape;
+                    NSMutableArray<NSNumber*>* actualLabelShape = [[NSMutableArray alloc] init];
+                    [actualLabelShape addObject:@(batch_size)];
+                    for (int i = 1; i < placeholderLabelShape.count; i++) {
+                        [actualLabelShape addObject:placeholderLabelShape[i]];
+                    }
+                    
+                    MPSGraphTensorData* labelTensorData = [[MPSGraphTensorData alloc] 
+                                                          initWithMTLBuffer:labelBuf
+                                                          shape:actualLabelShape
+                                                          dataType:MPSDataTypeFloat32];
+                    feeds[engine->labelTensor] = labelTensorData;
+                }
+                
+                // Feed all parameter placeholders with their corresponding buffers
+                for (int i = 0; i < engine->allWeightPlaceholders.count && i < num_weights; i++) {
+                    MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
+                    id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                    
+                    if (paramBuf && paramPlaceholder) {
+                        NSArray<NSNumber*>* paramShape = paramPlaceholder.shape;
+                        MPSGraphTensorData* paramData = [[MPSGraphTensorData alloc] 
+                                                        initWithMTLBuffer:paramBuf
+                                                        shape:paramShape
+                                                        dataType:MPSDataTypeFloat32];
+                        feeds[paramPlaceholder] = paramData;
+                    }
+                }
+                
+                // Feed momentum placeholders for SGD with momentum
+                if (engine->config.optimizer_type == 0 && engine->config.beta1 > 0.0f && engine->momentumPlaceholders) {
+                    // SGD with momentum: feed momentum state placeholders
+                    for (int i = 0; i < engine->momentumPlaceholders.count && i < engine->momentumBuffers.count; i++) {
+                        MPSGraphTensor* momentumPlaceholder = engine->momentumPlaceholders[i];
+                        id<MTLBuffer> momentumBuffer = engine->momentumBuffers[i];
+                        
+                        if (momentumPlaceholder && momentumBuffer) {
+                            // Get parameter shape for momentum placeholder
+                            MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
+                            NSArray<NSNumber*>* paramShape = [paramPlaceholder shape];
+                            
+                            MPSGraphTensorData* momentumData = [[MPSGraphTensorData alloc] 
+                                                               initWithMTLBuffer:momentumBuffer
+                                                               shape:paramShape
+                                                               dataType:MPSDataTypeFloat32];
+                            feeds[momentumPlaceholder] = momentumData;
+                        }
+                    }
+                }
+                
+                // Get actual loss tensor from the graph
+                MPSGraphTensor* actualLoss = engine->lossOutput;
+                if (!actualLoss) {
+                    NSLog(@"❌ No loss tensor found in dynamic engine");
+                    return -5;
+                }
+                
+                // Prepare target tensors for gradient computation and parameter updates
+                NSMutableArray<MPSGraphTensor*>* targetTensors = [[NSMutableArray alloc] init];
+                
+                // Check for pre-compiled operations (SGD-specific, Adam-specific, or legacy)
+                BOOL hasPrecompiledOps = NO;
+                NSMutableArray<MPSGraphTensor*>* gradientsToUse = nil;
+                NSMutableArray<MPSGraphTensor*>* updatesParamsToUse = nil;
+                NSMutableArray<MPSGraphTensor*>* updatesMomentumToUse = nil;
+                
+                // Try SGD-specific arrays first (for SGD optimizer)
+                if (engine->config.optimizer_type == 0 && engine->sgdPrecompiledGradients && engine->sgdPrecompiledUpdatedParams) {
+                    gradientsToUse = engine->sgdPrecompiledGradients;
+                    updatesParamsToUse = engine->sgdPrecompiledUpdatedParams;
+                    updatesMomentumToUse = engine->sgdPrecompiledUpdatedMomentum;
+                    hasPrecompiledOps = YES;
+                }
+                // Try legacy arrays (fallback for backward compatibility)
+                else if (engine->precompiledGradientTensors && engine->precompiledUpdatedParams) {
+                    gradientsToUse = engine->precompiledGradientTensors;
+                    updatesParamsToUse = engine->precompiledUpdatedParams;
+                    updatesMomentumToUse = engine->precompiledUpdatedMomentum;
+                    hasPrecompiledOps = YES;
+                }
+                
+                if (hasPrecompiledOps) {
+                    // Use pre-compiled tensors - no runtime operation creation!
+                    [targetTensors addObject:actualLoss]; // Loss first
+                    [targetTensors addObjectsFromArray:gradientsToUse]; // Pre-compiled gradients
+                    [targetTensors addObjectsFromArray:updatesParamsToUse]; // Pre-compiled parameter updates
+                    
+                    // Add momentum tensors if available
+                    if (updatesMomentumToUse && updatesMomentumToUse.count > 0) {
+                        // Filter out NSNull objects before adding to target tensors
+                        for (id momentumObj in updatesMomentumToUse) {
+                            if (![momentumObj isKindOfClass:[NSNull class]]) {
+                                [targetTensors addObject:momentumObj];
+                            }
+                        }
+                    }
+                } else {
+                    NSLog(@"❌ Pre-compiled operations not available! Using fallback runtime gradients");
+                    
+                    // Fallback: Use runtime automatic differentiation
+                    NSMutableArray<MPSGraphTensor*>* gradientTensors = [[NSMutableArray alloc] init];
+                    
+                    if (engine->allWeightPlaceholders.count > 0) {
+                        // Use MPSGraph's automatic differentiation to compute gradients
+                        NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradientDict = 
+                            [engine->graph gradientForPrimaryTensor:actualLoss
+                                                        withTensors:engine->allWeightPlaceholders
+                                                               name:@"dynamic_gradients"];
+                        
+                        // Collect gradients in the same order as weight placeholders
+                        for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+                            MPSGraphTensor* gradTensor = gradientDict[paramPlaceholder];
+                            if (gradTensor) {
+                                [gradientTensors addObject:gradTensor];
+                            }
+                        }
+                    }
+                    
+                    [targetTensors addObject:actualLoss];
+                    [targetTensors addObjectsFromArray:gradientTensors];
+                }
+                
+                // Execute the graph
+                NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
+                    [engine->graph runWithMTLCommandQueue:commandQueue
+                                                    feeds:feeds
+                                            targetTensors:targetTensors
+                                         targetOperations:nil];
+                
+                if (results && results.count > 0) {
+                    MPSGraphTensorData* lossData = results[actualLoss];
+                    if (lossData) {
+                        float lossValue = 0.0f;
+                        [[lossData mpsndarray] readBytes:&lossValue strideBytes:nil];
+                        *loss_out = lossValue;
+                        
+                        // Copy updated parameters back to weight buffers if pre-compiled ops were used
+                        if (hasPrecompiledOps && updatesParamsToUse && updatesParamsToUse.count > 0) {
+                            int updatedCount = 0;
+                            for (int i = 0; i < updatesParamsToUse.count && i < num_weights; i++) {
+                                MPSGraphTensor* updatedParamTensor = updatesParamsToUse[i];
+                                MPSGraphTensorData* updatedParamData = results[updatedParamTensor];
+                                
+                                if (updatedParamData) {
+                                    id<MTLBuffer> weightBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                                    if (weightBuf) {
+                                        // Copy updated weights back to original buffer
+                                        [[updatedParamData mpsndarray] readBytes:[weightBuf contents] strideBytes:nil];
+                                        [weightBuf didModifyRange:NSMakeRange(0, [weightBuf length])];
+                                        updatedCount++;
+                                    }
+                                }
+                            }
+                            
+                            if (updatedCount == 0) {
+                                NSLog(@"❌ CRITICAL: No parameters were updated from pre-compiled results!");
+                                return -6;
+                            }
+                            
+                            // Copy updated momentum back for SGD with momentum
+                            if (updatesMomentumToUse && updatesMomentumToUse.count > 0 && 
+                                engine->config.optimizer_type == 0 && engine->config.beta1 > 0.0f) {
+                                for (int i = 0; i < updatesMomentumToUse.count && i < engine->momentumBuffers.count; i++) {
+                                    id updatedMomentumTensorObj = updatesMomentumToUse[i];
+                                    
+                                    // Skip NSNull placeholders from standard SGD
+                                    if ([updatedMomentumTensorObj isKindOfClass:[NSNull class]]) {
+                                        continue;
+                                    }
+                                    
+                                    MPSGraphTensor* updatedMomentumTensor = (MPSGraphTensor*)updatedMomentumTensorObj;
+                                    MPSGraphTensorData* updatedMomentumData = results[updatedMomentumTensor];
+                                    
+                                    if (updatedMomentumData) {
+                                        id<MTLBuffer> momentumBuf = engine->momentumBuffers[i];
+                                        if (momentumBuf) {
+                                            [[updatedMomentumData mpsndarray] readBytes:[momentumBuf contents] strideBytes:nil];
+                                            [momentumBuf didModifyRange:NSMakeRange(0, [momentumBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        return 0; // Success
+                    } else {
+                        NSLog(@"❌ No loss data returned from dynamic graph execution");
+                        return -7;
+                    }
+                } else {
+                    NSLog(@"❌ Dynamic graph execution returned no results");
+                    return -8;
+                }
+            }
             
         } @catch (NSException* exception) {
             NSLog(@"❌ Dynamic training step exception: %@", exception.reason);

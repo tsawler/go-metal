@@ -216,7 +216,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             // SGD can optionally use momentum (through config.beta1 for compatibility)
             if (engine->config.beta1 > 0.0f) {
-                // Initialize momentum state if not already done (shared with Adam implementation)
+                // Initialize momentum state using the same pattern as Adam (placeholders + buffers)
                 if (!engine->momentumPlaceholders) {
                     engine->momentumPlaceholders = [[NSMutableArray alloc] init];
                     engine->momentumBuffers = [[NSMutableArray alloc] init];
@@ -225,23 +225,24 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                         MPSGraphTensor* paramTensor = [engine->allWeightPlaceholders objectAtIndex:i];
                         NSArray<NSNumber*>* paramShape = [paramTensor shape];
                         
-                        // Create momentum placeholder for this parameter
-                        MPSGraphTensor* momentumPlaceholder = [engine->graph placeholderWithShape:paramShape
-                                                                                         dataType:MPSDataTypeFloat32
-                                                                                             name:[NSString stringWithFormat:@"sgd_momentum_%d", i]];
-                        [engine->momentumPlaceholders addObject:momentumPlaceholder];
-                        
-                        // Create momentum buffer (initialized to zero)
+                        // Calculate buffer size for momentum state
                         NSUInteger elementCount = 1;
                         for (NSNumber* dim in paramShape) {
                             elementCount *= [dim unsignedIntegerValue];
                         }
                         NSUInteger bufferSize = elementCount * sizeof(float);
                         
+                        // Create momentum buffer (initialized to zero)
                         id<MTLBuffer> momentumBuffer = [engine->device newBufferWithLength:bufferSize 
                                                                                    options:MTLResourceStorageModeShared];
                         memset([momentumBuffer contents], 0, bufferSize); // Zero-initialize
                         [engine->momentumBuffers addObject:momentumBuffer];
+                        
+                        // Create momentum placeholder for feeding data to graph
+                        MPSGraphTensor* momentumPlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                         dataType:MPSDataTypeFloat32
+                                                                                             name:[NSString stringWithFormat:@"sgd_momentum_%d", i]];
+                        [engine->momentumPlaceholders addObject:momentumPlaceholder];
                     }
                 }
             }
