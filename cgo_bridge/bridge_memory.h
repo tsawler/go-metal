@@ -9,3 +9,8 @@ void deallocate_metal_buffer(uintptr_t buffer_ptr);
 // Buffer utility functions
 int zero_metal_buffer_mpsgraph(uintptr_t device_ptr, uintptr_t buffer_ptr, int size);
 int zero_metal_buffer(uintptr_t device_ptr, uintptr_t buffer_ptr, int size);
+
+// Buffer copy functions
+int copy_data_to_metal_buffer(uintptr_t buffer_ptr, void* data, int size);
+int copy_float32_array_to_metal_buffer(uintptr_t buffer_ptr, float* data, int num_elements);
+int copy_int32_array_to_metal_buffer(uintptr_t buffer_ptr, int* data, int num_elements);

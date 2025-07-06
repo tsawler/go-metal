@@ -310,7 +310,7 @@ func (mt *ModelTrainer) TrainBatchOptimized(
 	return &TrainingResultOptimized{
 		Loss:         result.Loss,
 		Accuracy:     mt.lastAccuracy, // Use cached value if not calculated this step
-		HasAccuracy:  calculateAccuracy,
+		HasAccuracy:  calculateAccuracy, // Training step batched method returns accuracy based on calculation request
 		BatchSize:    mt.batchSize,
 		StepTime:     mt.lastStepTime,
 		Success:      true,
@@ -617,6 +617,7 @@ func (mt *ModelTrainer) TrainBatchWithCommandPool(
 	
 	// Calculate accuracy if requested
 	var accuracy float64
+	var hasAccuracy bool
 	if calculateAccuracy {
 		// Perform inference to get predictions
 		inferenceResult, inferErr := mt.modelEngine.ExecuteInference(inputTensor, inputShape[0])
@@ -628,9 +629,18 @@ func (mt *ModelTrainer) TrainBatchWithCommandPool(
 				mt.getOutputSize(),
 			)
 			mt.lastAccuracy = accuracy
+			hasAccuracy = true
+		} else {
+			// Log inference error but don't fail the training step
+			if mt.currentStep % 100 == 0 { // Log occasionally to avoid spam
+				fmt.Printf("Warning: Training accuracy inference failed at step %d: %v\n", mt.currentStep, inferErr)
+			}
+			accuracy = 0.0
+			hasAccuracy = false
 		}
 	} else {
 		accuracy = mt.lastAccuracy
+		hasAccuracy = false
 	}
 	
 	// Update statistics
@@ -642,7 +652,7 @@ func (mt *ModelTrainer) TrainBatchWithCommandPool(
 	return &TrainingResultOptimized{
 		Loss:         loss,
 		Accuracy:     accuracy,
-		HasAccuracy:  calculateAccuracy,
+		HasAccuracy:  hasAccuracy, // Use the actual result of accuracy calculation
 		BatchSize:    mt.batchSize,
 		StepTime:     mt.lastStepTime,
 		Success:      true,
@@ -730,6 +740,7 @@ func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
 	
 	// Calculate accuracy if requested
 	var accuracy float64
+	var hasAccuracy bool
 	if calculateAccuracy {
 		// Perform inference using persistent tensors
 		inferenceResult, inferErr := mt.modelEngine.ExecuteInference(mt.persistentInputTensor, currentBatchSize)
@@ -741,9 +752,18 @@ func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
 				mt.getOutputSize(),
 			)
 			mt.lastAccuracy = accuracy
+			hasAccuracy = true
+		} else {
+			// Log inference error but don't fail the training step
+			if mt.currentStep % 100 == 0 { // Log occasionally to avoid spam
+				fmt.Printf("Warning: Training accuracy inference failed at step %d: %v\n", mt.currentStep, inferErr)
+			}
+			accuracy = 0.0
+			hasAccuracy = false
 		}
 	} else {
 		accuracy = mt.lastAccuracy
+		hasAccuracy = false
 	}
 	
 	// Update statistics
@@ -755,7 +775,7 @@ func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
 	return &TrainingResultOptimized{
 		Loss:         loss,
 		Accuracy:     accuracy,
-		HasAccuracy:  calculateAccuracy,
+		HasAccuracy:  hasAccuracy, // Use the actual result of accuracy calculation
 		BatchSize:    mt.batchSize,
 		StepTime:     mt.lastStepTime,
 		Success:      true,
