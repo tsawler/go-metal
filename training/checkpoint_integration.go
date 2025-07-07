@@ -28,7 +28,7 @@ func DefaultCheckpointConfig() CheckpointConfig {
 		SaveBest:        true,
 		MaxCheckpoints:  10,
 		Format:          checkpoints.FormatJSON,
-		FilenamePattern: "checkpoint_epoch_{epoch}_{format}",
+		FilenamePattern: "checkpoint_epoch_%d_step_%d",
 	}
 }
 
@@ -255,12 +255,14 @@ func (cm *CheckpointManager) restoreTrainerFromCheckpoint(checkpoint *checkpoint
 func (cm *CheckpointManager) generateFilename(epoch int, step int) string {
 	pattern := cm.config.FilenamePattern
 	if pattern == "" {
-		pattern = "checkpoint_epoch_{epoch}_{format}"
+		pattern = "checkpoint_epoch_%d_step_%d"
 	}
 	
-	filename := pattern
-	filename = fmt.Sprintf(filename, epoch, step)
-	filename = fmt.Sprintf("%s.%s", filename, cm.getFileExtension())
+	// Generate the base filename using the pattern
+	baseFilename := fmt.Sprintf(pattern, epoch, step)
+	
+	// Add the file extension
+	filename := fmt.Sprintf("%s.%s", baseFilename, cm.getFileExtension())
 	
 	return filename
 }
