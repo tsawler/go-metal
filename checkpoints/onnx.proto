@@ -1,0 +1,232 @@
+// ONNX Protocol Buffer definitions
+// This is a subset of the ONNX specification needed for checkpoint functionality
+// Based on ONNX v1.13.0 specification
+
+syntax = "proto3";
+
+package checkpoints;
+
+option go_package = "github.com/tsawler/go-metal/checkpoints";
+
+// Versioning
+message Version {
+  int64 ir_version = 1;
+  int64 model_version = 2;
+}
+
+// Operator Set
+message OperatorSetIdProto {
+  string domain = 1;
+  int64 version = 2;
+}
+
+// Tensor data types
+enum TensorProto_DataType {
+  UNDEFINED = 0;
+  FLOAT = 1;      // float32
+  UINT8 = 2;      // uint8
+  INT8 = 3;       // int8
+  UINT16 = 4;     // uint16
+  INT16 = 5;      // int16
+  INT32 = 6;      // int32
+  INT64 = 7;      // int64
+  STRING = 8;     // string
+  BOOL = 9;       // bool
+  FLOAT16 = 10;
+  DOUBLE = 11;
+  UINT32 = 12;
+  UINT64 = 13;
+  COMPLEX64 = 14;
+  COMPLEX128 = 15;
+  BFLOAT16 = 16;
+}
+
+// Dimension of a tensor shape
+message TensorShapeProto {
+  message Dimension {
+    oneof value {
+      int64 dim_value = 1;
+      string dim_param = 2;
+    }
+    string denotation = 3;
+  }
+  repeated Dimension dim = 1;
+}
+
+// Type of a tensor
+message TypeProto {
+  message Tensor {
+    TensorProto_DataType elem_type = 1;
+    TensorShapeProto shape = 2;
+  }
+  
+  oneof value {
+    Tensor tensor_type = 1;
+  }
+  
+  string denotation = 6;
+}
+
+// ValueInfo
+message ValueInfoProto {
+  string name = 1;
+  TypeProto type = 2;
+  string doc_string = 3;
+}
+
+// Attribute types
+enum AttributeProto_AttributeType {
+  UNDEFINED_ATTR = 0;
+  FLOAT_ATTR = 1;
+  INT_ATTR = 2;
+  STRING_ATTR = 3;
+  TENSOR_ATTR = 4;
+  GRAPH_ATTR = 5;
+  SPARSE_TENSOR_ATTR = 11;
+  TYPE_PROTO_ATTR = 13;
+  
+  FLOATS_ATTR = 6;
+  INTS_ATTR = 7;
+  STRINGS_ATTR = 8;
+  TENSORS_ATTR = 9;
+  GRAPHS_ATTR = 10;
+  SPARSE_TENSORS_ATTR = 12;
+  TYPE_PROTOS_ATTR = 14;
+}
+
+// Attribute definition
+message AttributeProto {
+  string name = 1;
+  
+  string ref_attr_name = 21;
+  string doc_string = 13;
+  
+  AttributeProto_AttributeType type = 20;
+  
+  float f = 2;
+  int64 i = 3;
+  bytes s = 4;
+  TensorProto t = 5;
+  GraphProto g = 6;
+  SparseTensorProto sparse_tensor = 22;
+  TypeProto tp = 14;
+  
+  repeated float floats = 7;
+  repeated int64 ints = 8;
+  repeated bytes strings = 9;
+  repeated TensorProto tensors = 10;
+  repeated GraphProto graphs = 11;
+  repeated SparseTensorProto sparse_tensors = 23;
+  repeated TypeProto type_protos = 15;
+}
+
+// Tensor
+message TensorProto {
+  repeated int64 dims = 1;
+  TensorProto_DataType data_type = 2;
+  
+  message Segment {
+    int64 begin = 1;
+    int64 end = 2;
+  }
+  Segment segment = 3;
+  
+  repeated float float_data = 4 [packed = true];
+  repeated int32 int32_data = 5 [packed = true];
+  repeated bytes string_data = 6;
+  repeated int64 int64_data = 7 [packed = true];
+  string name = 8;
+  
+  string doc_string = 12;
+  bytes raw_data = 9;
+  
+  repeated double double_data = 10 [packed = true];
+  repeated uint64 uint64_data = 11 [packed = true];
+}
+
+// SparseTensor (minimal for compatibility)
+message SparseTensorProto {
+  TensorProto values = 1;
+  TensorProto indices = 2;
+  repeated int64 dims = 3;
+}
+
+// Node - represents a computation operation
+message NodeProto {
+  repeated string input = 1;
+  repeated string output = 2;
+  
+  string name = 3;
+  string op_type = 4;
+  string domain = 7;
+  
+  repeated AttributeProto attribute = 5;
+  string doc_string = 6;
+}
+
+// Graph
+message GraphProto {
+  repeated NodeProto node = 1;
+  string name = 2;
+  
+  repeated TensorProto initializer = 5;
+  repeated SparseTensorProto sparse_initializer = 15;
+  string doc_string = 10;
+  
+  repeated ValueInfoProto input = 11;
+  repeated ValueInfoProto output = 12;
+  
+  repeated ValueInfoProto value_info = 13;
+  
+  repeated TensorAnnotation quantization_annotation = 14;
+}
+
+// TensorAnnotation
+message TensorAnnotation {
+  string tensor_name = 1;
+  repeated StringStringEntryProto quant_parameter_tensor_names = 2;
+}
+
+// StringStringEntry
+message StringStringEntryProto {
+  string key = 1;
+  string value = 2;
+}
+
+// Model
+message ModelProto {
+  int64 ir_version = 1;
+  repeated OperatorSetIdProto opset_import = 8;
+  
+  string producer_name = 2;
+  string producer_version = 3;
+  string domain = 4;
+  int64 model_version = 5;
+  string doc_string = 6;
+  
+  GraphProto graph = 7;
+  
+  repeated StringStringEntryProto metadata_props = 14;
+  
+  repeated TrainingInfoProto training_info = 20;
+  
+  repeated FunctionProto functions = 25;
+}
+
+// TrainingInfo (minimal)
+message TrainingInfoProto {
+  GraphProto initialization = 1;
+  GraphProto algorithm = 2;
+}
+
+// Function (minimal)
+message FunctionProto {
+  string name = 1;
+  repeated string input = 4;
+  repeated string output = 5;
+  repeated string attribute = 6;
+  repeated NodeProto node = 7;
+  string doc_string = 8;
+  repeated OperatorSetIdProto opset_import = 9;
+  string domain = 10;
+}

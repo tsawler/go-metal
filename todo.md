@@ -18,9 +18,10 @@ This phase prioritizes resolving existing limitations and implementing fundament
 
     * **Checkpoint Saving & Loading:** Develop robust mechanisms to save and load model weights, optimizer states, and training progress, enabling interruption and resumption of training.
 
-    * ✅ **Advanced Layer Types:** ~~Integrate additional common neural network layers such as Batch Normalization, Dropout, and other advanced activation functions (e.g., Leaky ReLU, ELU).~~ **FULLY COMPLETED** 
+    * ✅ **Advanced Layer Types:** ~~Integrate additional common neural network layers such as Batch Normalization, Dropout, and other advanced activation functions (e.g., Leaky ReLU, ELU).~~ **NEARLY COMPLETED** 
       * **Dropout:** Fully implemented with MPSGraph integration, comprehensive testing, and overfitting reduction validated (25+ point gap reduced to ~17 points)
-      * **Batch Normalization:** Fully implemented with complete MPSGraph integration, proper gradient computation, parameter initialization (gamma=1.0, beta=0.0), tensor broadcasting for 4D inputs, and production validation. Training stability and generalization improvements confirmed (validation accuracy 73.80%, controlled 19.49% train-val gap vs 25.3% without BatchNorm). Still needed: Leaky ReLU, ELU.
+      * **Batch Normalization:** Fully implemented with complete MPSGraph integration, proper gradient computation, parameter initialization (gamma=1.0, beta=0.0), tensor broadcasting for 4D inputs, and production validation. Training stability and generalization improvements confirmed (validation accuracy 73.80%, controlled 19.49% train-val gap vs 25.3% without BatchNorm)
+      * **Leaky ReLU:** Fully implemented with configurable negative slope parameter, complete MPSGraph `leakyReLUWithTensor` integration, comprehensive testing, and real-world financial prediction demo. Demonstrates improved gradient flow for negative inputs (0.184687 vs 0.196875 loss). Still needed: ELU.
 
     * **Model Serialization:** Implement capabilities to save trained models to disk and load them back for inference or further training.
 

@@ -168,6 +168,8 @@ int zero_metal_buffer_mpsgraph(uintptr_t device, uintptr_t buffer, int size);
 int copy_data_to_metal_buffer(uintptr_t buffer, void* data, int size);
 int copy_float32_array_to_metal_buffer(uintptr_t buffer, float* data, int num_elements);
 int copy_int32_array_to_metal_buffer(uintptr_t buffer, int* data, int num_elements);
+int copy_metal_buffer_to_float32_array(uintptr_t buffer, float* data, int num_elements);
+int copy_metal_buffer_to_int32_array(uintptr_t buffer, int* data, int num_elements);
 
 // Forward+backward pass that returns gradients for Adam optimizer
 int execute_training_step_hybrid_with_gradients(
@@ -296,6 +298,20 @@ import (
 	"fmt"
 	"unsafe"
 )
+
+// SetupMemoryBridge sets up bridge functions for memory package to avoid import cycles
+// Call this from packages that need both cgo_bridge and memory functionality
+func SetupMemoryBridge(setupFunc func(
+	func(unsafe.Pointer, int) ([]float32, error),
+	func(unsafe.Pointer, []float32) error,
+	func(unsafe.Pointer, []int32) error,
+)) {
+	setupFunc(
+		CopyMetalBufferToFloat32Array,
+		CopyFloat32ArrayToMetalBuffer,
+		CopyInt32ArrayToMetalBuffer,
+	)
+}
 
 // OptimizerType represents the type of optimizer
 type OptimizerType int
@@ -815,6 +831,50 @@ func CopyInt32ArrayToMetalBuffer(buffer unsafe.Pointer, data []int32) error {
 	}
 
 	return nil
+}
+
+// CopyMetalBufferToFloat32Array copies data from a Metal buffer to a float32 array
+func CopyMetalBufferToFloat32Array(buffer unsafe.Pointer, numElements int) ([]float32, error) {
+	if numElements <= 0 {
+		return nil, fmt.Errorf("invalid number of elements: %d", numElements)
+	}
+
+	// Allocate Go slice
+	data := make([]float32, numElements)
+
+	result := C.copy_metal_buffer_to_float32_array(
+		C.uintptr_t(uintptr(buffer)),
+		(*C.float)(unsafe.Pointer(&data[0])),
+		C.int(numElements),
+	)
+
+	if result != 0 {
+		return nil, fmt.Errorf("failed to copy Metal buffer to float32 array with error code: %d", result)
+	}
+
+	return data, nil
+}
+
+// CopyMetalBufferToInt32Array copies data from a Metal buffer to an int32 array
+func CopyMetalBufferToInt32Array(buffer unsafe.Pointer, numElements int) ([]int32, error) {
+	if numElements <= 0 {
+		return nil, fmt.Errorf("invalid number of elements: %d", numElements)
+	}
+
+	// Allocate Go slice
+	data := make([]int32, numElements)
+
+	result := C.copy_metal_buffer_to_int32_array(
+		C.uintptr_t(uintptr(buffer)),
+		(*C.int)(unsafe.Pointer(&data[0])),
+		C.int(numElements),
+	)
+
+	if result != 0 {
+		return nil, fmt.Errorf("failed to copy Metal buffer to int32 array with error code: %d", result)
+	}
+
+	return data, nil
 }
 
 // CopyDataToMetalBuffer copies raw byte data to a Metal buffer

@@ -256,3 +256,65 @@ int copy_int32_array_to_metal_buffer(uintptr_t buffer_ptr, int* data, int num_el
         return result;
     }
 }
+
+// Copy Metal buffer to float32 array
+int copy_metal_buffer_to_float32_array(uintptr_t buffer_ptr, float* data, int num_elements) {
+    @autoreleasepool {
+        if (buffer_ptr == 0 || data == NULL || num_elements <= 0) {
+            NSLog(@"Invalid parameters for copy_metal_buffer_to_float32_array");
+            return -1;
+        }
+        
+        id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)(void*)buffer_ptr;
+        if (!buffer) {
+            NSLog(@"Buffer is nil in copy_metal_buffer_to_float32_array");
+            return -2;
+        }
+        
+        @try {
+            void* contents = [buffer contents];
+            if (contents) {
+                int size_bytes = num_elements * sizeof(float);
+                memcpy(data, contents, size_bytes);
+                return 0;
+            } else {
+                NSLog(@"Buffer contents not accessible for reading in copy_metal_buffer_to_float32_array");
+                return -3;
+            }
+        } @catch (NSException* exception) {
+            NSLog(@"Exception in copy_metal_buffer_to_float32_array: %@", exception.reason);
+            return -4;
+        }
+    }
+}
+
+// Copy Metal buffer to int32 array
+int copy_metal_buffer_to_int32_array(uintptr_t buffer_ptr, int* data, int num_elements) {
+    @autoreleasepool {
+        if (buffer_ptr == 0 || data == NULL || num_elements <= 0) {
+            NSLog(@"Invalid parameters for copy_metal_buffer_to_int32_array");
+            return -1;
+        }
+        
+        id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)(void*)buffer_ptr;
+        if (!buffer) {
+            NSLog(@"Buffer is nil in copy_metal_buffer_to_int32_array");
+            return -2;
+        }
+        
+        @try {
+            void* contents = [buffer contents];
+            if (contents) {
+                int size_bytes = num_elements * sizeof(int);
+                memcpy(data, contents, size_bytes);
+                return 0;
+            } else {
+                NSLog(@"Buffer contents not accessible for reading in copy_metal_buffer_to_int32_array");
+                return -3;
+            }
+        } @catch (NSException* exception) {
+            NSLog(@"Exception in copy_metal_buffer_to_int32_array: %@", exception.reason);
+            return -4;
+        }
+    }
+}

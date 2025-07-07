@@ -1102,3 +1102,39 @@ func (mt *ModelTrainer) GetSchedulerInfo() string {
 		mt.currentStep,
 	)
 }
+
+// GetParameterTensors returns the parameter tensors for weight extraction
+func (mt *ModelTrainer) GetParameterTensors() []*memory.Tensor {
+	if mt.modelEngine == nil {
+		return nil
+	}
+	return mt.modelEngine.GetParameterTensors()
+}
+
+// GetLRScheduler returns the learning rate scheduler if available
+func (mt *ModelTrainer) GetLRScheduler() interface{} {
+	return mt.lrScheduler
+}
+
+// SetLearningRate sets the learning rate
+func (mt *ModelTrainer) SetLearningRate(lr float32) {
+	mt.config.LearningRate = lr
+	if mt.lrScheduler != nil {
+		// For dynamic LR changes, we'd need to implement this in the scheduler
+		// For now, just update the config
+	}
+}
+
+// GetOptimizerState returns the optimizer state for checkpoint saving
+func (mt *ModelTrainer) GetOptimizerState() *OptimizerStateData {
+	// For now, return nil as we don't have optimizer state extraction implemented
+	// This would need to be implemented based on the specific optimizer being used
+	return nil
+}
+
+// SetOptimizerState restores optimizer state from checkpoint
+func (mt *ModelTrainer) SetOptimizerState(state interface{}) error {
+	// For now, return an error as optimizer state restoration is not implemented
+	// This would need to be implemented based on the specific optimizer being used
+	return fmt.Errorf("optimizer state restoration not yet implemented")
+}

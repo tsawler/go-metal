@@ -204,18 +204,57 @@ func (t *Tensor) CopyInt32Data(data []int32) error {
 
 // copyDataToBuffer is a helper that calls the appropriate CGO bridge function
 func (t *Tensor) copyDataToBuffer(data interface{}) error {
-	// We need to import the CGO bridge package to use the copy functions
-	// This will be handled by the caller importing both packages
-	switch data.(type) {
+	switch d := data.(type) {
 	case []float32:
-		// This will be implemented by importing cgo_bridge package in the caller
-		return fmt.Errorf("float32 data copy not implemented - caller must use cgo_bridge.CopyFloat32ArrayToMetalBuffer")
+		if CopyFloat32DataFunc == nil {
+			return fmt.Errorf("CopyFloat32Data bridge function not initialized - import cgo_bridge package")
+		}
+		return CopyFloat32DataFunc(t.metalBuffer, d)
 	case []int32:
-		// This will be implemented by importing cgo_bridge package in the caller
-		return fmt.Errorf("int32 data copy not implemented - caller must use cgo_bridge.CopyInt32ArrayToMetalBuffer")
+		if CopyInt32DataFunc == nil {
+			return fmt.Errorf("CopyInt32Data bridge function not initialized - import cgo_bridge package")
+		}
+		return CopyInt32DataFunc(t.metalBuffer, d)
 	default:
 		return fmt.Errorf("unsupported data type for copy: %T", data)
 	}
+}
+
+// Bridge functions for data transfer - set up during cgo_bridge initialization
+var ToFloat32SliceFunc func(buffer unsafe.Pointer, numElements int) ([]float32, error)
+var CopyFloat32DataFunc func(buffer unsafe.Pointer, data []float32) error
+var CopyInt32DataFunc func(buffer unsafe.Pointer, data []int32) error
+
+// SetupBridge allows external packages to set up bridge functions
+func SetupBridge(
+	toFloat32SliceFunc func(unsafe.Pointer, int) ([]float32, error),
+	copyFloat32DataFunc func(unsafe.Pointer, []float32) error,
+	copyInt32DataFunc func(unsafe.Pointer, []int32) error,
+) {
+	ToFloat32SliceFunc = toFloat32SliceFunc
+	CopyFloat32DataFunc = copyFloat32DataFunc
+	CopyInt32DataFunc = copyInt32DataFunc
+}
+
+func (t *Tensor) ToFloat32Slice() ([]float32, error) {
+	if t.dtype != Float32 {
+		return nil, fmt.Errorf("tensor data type is %d, expected Float32 (%d)", t.dtype, Float32)
+	}
+	
+	expectedElements := 1
+	for _, dim := range t.shape {
+		expectedElements *= dim
+	}
+	
+	if expectedElements <= 0 {
+		return nil, fmt.Errorf("tensor has invalid shape: %v", t.shape)
+	}
+	
+	if ToFloat32SliceFunc == nil {
+		return nil, fmt.Errorf("ToFloat32Slice bridge function not initialized - import cgo_bridge package")
+	}
+	
+	return ToFloat32SliceFunc(t.metalBuffer, expectedElements)
 }
 
 // String returns a string representation for debugging
