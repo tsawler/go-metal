@@ -655,6 +655,230 @@ func TestBatchNormShapeValidation(t *testing.T) {
 	fmt.Println("✅ BatchNorm shape validation test completed successfully!")
 }
 
+// TestLeakyReLULayer tests the Leaky ReLU layer functionality
+func TestLeakyReLULayer(t *testing.T) {
+	fmt.Println("\n=== Testing Leaky ReLU Layer ===")
+	
+	// Test 1: Leaky ReLU layer creation
+	inputShape := []int{32, 64}
+	
+	builder := layers.NewModelBuilder(inputShape)
+	model, err := builder.
+		AddLeakyReLU(0.2, "leaky_relu1").         // Add Leaky ReLU with 0.2 negative slope
+		AddDense(32, true, "fc1").
+		AddLeakyReLU(0.01, "leaky_relu2").        // Add another with default-like slope
+		AddDense(10, true, "fc2").
+		Compile()
+	
+	if err != nil {
+		t.Fatalf("Failed to compile model with Leaky ReLU: %v", err)
+	}
+	
+	fmt.Printf("✅ Model with Leaky ReLU compiled successfully\n")
+	fmt.Printf("Total layers: %d\n", len(model.Layers))
+	
+	// Test 2: Verify Leaky ReLU layer parameters
+	var leakyReLULayers []*layers.LayerSpec
+	for _, layer := range model.Layers {
+		if layer.Type == layers.LeakyReLU {
+			layerCopy := layer
+			leakyReLULayers = append(leakyReLULayers, &layerCopy)
+		}
+	}
+	
+	if len(leakyReLULayers) != 2 {
+		t.Fatalf("Expected 2 Leaky ReLU layers, found %d", len(leakyReLULayers))
+	}
+	
+	// Check first Leaky ReLU parameters
+	leakyReLU1 := leakyReLULayers[0]
+	negativeSlope1, exists := leakyReLU1.Parameters["negative_slope"]
+	if !exists {
+		t.Fatalf("Leaky ReLU negative_slope parameter not found")
+	}
+	if negativeSlope1 != float32(0.2) {
+		t.Errorf("Expected negative_slope 0.2, got %v", negativeSlope1)
+	}
+	
+	// Check second Leaky ReLU parameters
+	leakyReLU2 := leakyReLULayers[1]
+	negativeSlope2, exists := leakyReLU2.Parameters["negative_slope"]
+	if !exists {
+		t.Fatalf("Leaky ReLU negative_slope parameter not found")
+	}
+	if negativeSlope2 != float32(0.01) {
+		t.Errorf("Expected negative_slope 0.01, got %v", negativeSlope2)
+	}
+	
+	fmt.Printf("✅ Leaky ReLU parameters verified: slopes=%.2f, %.2f\n", negativeSlope1, negativeSlope2)
+	
+	// Test 3: Verify Leaky ReLU has no trainable parameters
+	for i, leakyReLULayer := range leakyReLULayers {
+		if leakyReLULayer.ParameterCount != 0 {
+			t.Errorf("Expected Leaky ReLU %d to have 0 parameters, got %d", i+1, leakyReLULayer.ParameterCount)
+		}
+	}
+	
+	// Test 4: Verify Leaky ReLU doesn't change shape
+	for i, leakyReLULayer := range leakyReLULayers {
+		expectedInputShape := leakyReLULayer.InputShape
+		expectedOutputShape := leakyReLULayer.OutputShape
+		
+		if len(expectedInputShape) != len(expectedOutputShape) {
+			t.Errorf("Leaky ReLU %d changed tensor rank: input %d, output %d", i+1, len(expectedInputShape), len(expectedOutputShape))
+		}
+		
+		for j := range expectedInputShape {
+			if expectedInputShape[j] != expectedOutputShape[j] {
+				t.Errorf("Leaky ReLU %d changed shape at dimension %d: input %d, output %d", i+1, j, expectedInputShape[j], expectedOutputShape[j])
+			}
+		}
+		
+		fmt.Printf("✅ Leaky ReLU %d preserves tensor shape: %v\n", i+1, expectedInputShape)
+	}
+	
+	// Test 5: Test serialization for CGO
+	serialized, err := model.SerializeForCGO()
+	if err != nil {
+		t.Fatalf("Failed to serialize model with Leaky ReLU: %v", err)
+	}
+	
+	// Find Leaky ReLU layers in serialized format
+	foundLeakyReLUs := 0
+	for _, layer := range serialized.Layers {
+		if layer.LayerType == 7 { // LeakyReLU = 7 in Go enum
+			foundLeakyReLUs++
+			
+			// Verify serialized parameters: [negative_slope] in floats
+			if len(layer.ParamFloat) != 1 {
+				t.Errorf("Leaky ReLU should have 1 float param, got %d", len(layer.ParamFloat))
+			}
+			if foundLeakyReLUs == 1 && layer.ParamFloat[0] != 0.2 {
+				t.Errorf("First Leaky ReLU negative_slope not serialized correctly: %f", layer.ParamFloat[0])
+			}
+			if foundLeakyReLUs == 2 && layer.ParamFloat[0] != 0.01 {
+				t.Errorf("Second Leaky ReLU negative_slope not serialized correctly: %f", layer.ParamFloat[0])
+			}
+			
+			if len(layer.ParamInt) != 0 {
+				t.Errorf("Leaky ReLU should have 0 int params, got %d", len(layer.ParamInt))
+			}
+		}
+	}
+	
+	if foundLeakyReLUs != 2 {
+		t.Fatalf("Expected 2 Leaky ReLU layers in serialized model, found %d", foundLeakyReLUs)
+	}
+	
+	fmt.Printf("✅ Leaky ReLU serialization verified\n")
+	
+	// Test 6: Test dynamic layer spec conversion
+	dynamicSpecs, err := model.ConvertToDynamicLayerSpecs()
+	if err != nil {
+		t.Fatalf("Failed to convert to dynamic specs: %v", err)
+	}
+	
+	// Find Leaky ReLU in dynamic specs
+	foundDynamicLeakyReLUs := 0
+	for _, spec := range dynamicSpecs {
+		if spec.LayerType == 7 { // LeakyReLU = 7 in Go enum
+			foundDynamicLeakyReLUs++
+			if spec.ParamFloatCount != 1 {
+				t.Errorf("Dynamic Leaky ReLU should have 1 float param")
+			}
+			if spec.ParamIntCount != 0 {
+				t.Errorf("Dynamic Leaky ReLU should have 0 int params")
+			}
+			if foundDynamicLeakyReLUs == 1 && spec.ParamFloat[0] != 0.2 {
+				t.Errorf("Dynamic first Leaky ReLU negative_slope not correct")
+			}
+			if foundDynamicLeakyReLUs == 2 && spec.ParamFloat[0] != 0.01 {
+				t.Errorf("Dynamic second Leaky ReLU negative_slope not correct")
+			}
+		}
+	}
+	
+	if foundDynamicLeakyReLUs != 2 {
+		t.Fatalf("Expected 2 Leaky ReLU in dynamic specs, found %d", foundDynamicLeakyReLUs)
+	}
+	
+	fmt.Printf("✅ Dynamic spec conversion verified\n")
+	
+	fmt.Println("✅ Leaky ReLU layer test completed successfully!")
+}
+
+// TestLeakyReLUVariousSlopes tests Leaky ReLU with different negative slopes
+func TestLeakyReLUVariousSlopes(t *testing.T) {
+	fmt.Println("\n=== Testing Leaky ReLU with Various Slopes ===")
+	
+	slopes := []float32{0.0, 0.01, 0.1, 0.2, 0.3}
+	
+	for _, slope := range slopes {
+		inputShape := []int{16, 64}
+		
+		builder := layers.NewModelBuilder(inputShape)
+		model, err := builder.
+			AddLeakyReLU(slope, fmt.Sprintf("leaky_relu_%.2f", slope)).
+			AddDense(10, true, "output").
+			Compile()
+		
+		if err != nil {
+			t.Fatalf("Failed to compile model with Leaky ReLU slope %.2f: %v", slope, err)
+		}
+		
+		// Verify the slope was set correctly
+		leakyReLULayer := model.Layers[0]
+		actualSlope := leakyReLULayer.Parameters["negative_slope"].(float32)
+		if actualSlope != slope {
+			t.Errorf("Expected slope %.2f, got %.2f", slope, actualSlope)
+		}
+		
+		fmt.Printf("✅ Leaky ReLU slope %.2f compiled successfully\n", slope)
+	}
+	
+	fmt.Println("✅ Various Leaky ReLU slopes test completed successfully!")
+}
+
+// TestLeakyReLUFactoryCreation tests factory-based Leaky ReLU creation
+func TestLeakyReLUFactoryCreation(t *testing.T) {
+	fmt.Println("\n=== Testing Leaky ReLU Factory Creation ===")
+	
+	factory := layers.NewFactory()
+	
+	// Test factory creation with different slopes
+	testCases := []struct {
+		slope       float32
+		name        string
+		description string
+	}{
+		{0.01, "leaky_relu_default", "default slope"},
+		{0.2, "leaky_relu_high", "high slope"},
+		{0.001, "leaky_relu_low", "low slope"},
+		{0.0, "leaky_relu_zero", "zero slope (equivalent to ReLU)"},
+	}
+	
+	for _, tc := range testCases {
+		spec := factory.CreateLeakyReLUSpec(tc.slope, tc.name)
+		
+		if spec.Type != layers.LeakyReLU {
+			t.Errorf("Expected type LeakyReLU, got %s", spec.Type.String())
+		}
+		
+		if spec.Name != tc.name {
+			t.Errorf("Expected name %s, got %s", tc.name, spec.Name)
+		}
+		
+		actualSlope := spec.Parameters["negative_slope"].(float32)
+		if actualSlope != tc.slope {
+			t.Errorf("Expected slope %.3f, got %.3f", tc.slope, actualSlope)
+		}
+		
+		fmt.Printf("✅ Factory Leaky ReLU with %s (%.3f) created successfully\n", tc.description, tc.slope)
+	}
+	
+	fmt.Println("✅ Leaky ReLU factory creation test completed successfully!")
+}
+
 // BenchmarkCompliantVsOriginal compares performance of compliant vs original architecture
 func BenchmarkCompliantVsOriginal(b *testing.B) {
 	// This benchmark would compare the compliant layer system performance

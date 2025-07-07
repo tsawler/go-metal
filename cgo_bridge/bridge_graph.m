@@ -107,6 +107,17 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     }
                     break;
                     
+                case 7: // LeakyReLU
+                    {
+                        // Leaky ReLU parameters: negative_slope (float)
+                        float negativeSlope = layer->param_float_count > 0 ? layer->param_float[0] : 0.01f;
+                        
+                        currentTensor = [engine->graph leakyReLUWithTensor:currentTensor
+                                                                     alpha:negativeSlope
+                                                                      name:[NSString stringWithFormat:@"leaky_relu_%d", layerIdx]];
+                    }
+                    break;
+                    
                 default:
                     NSLog(@"Unsupported layer type: %d", layer->layer_type);
                     return NO;
