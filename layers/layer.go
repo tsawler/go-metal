@@ -207,6 +207,21 @@ func (mb *ModelBuilder) AddSoftmax(axis int, name string) *ModelBuilder {
 	return mb.AddLayer(layer)
 }
 
+// AddDropout adds a Dropout layer to the model
+// rate: dropout probability (0.0 = no dropout, 1.0 = drop all)
+// training: whether the layer is in training mode (affects dropout behavior)
+func (mb *ModelBuilder) AddDropout(rate float32, name string) *ModelBuilder {
+	layer := LayerSpec{
+		Type: Dropout,
+		Name: name,
+		Parameters: map[string]interface{}{
+			"rate":     rate,
+			"training": true, // Default to training mode, will be controlled by trainer
+		},
+	}
+	return mb.AddLayer(layer)
+}
+
 // Compile compiles the model and computes shapes and parameter counts
 func (mb *ModelBuilder) Compile() (*ModelSpec, error) {
 	if len(mb.layers) == 0 {
@@ -267,7 +282,7 @@ func (mb *ModelBuilder) computeLayerInfo(layer *LayerSpec, inputShape []int) ([]
 		return mb.computeDenseInfo(layer, inputShape)
 	case Conv2D:
 		return mb.computeConv2DInfo(layer, inputShape)
-	case ReLU, Softmax:
+	case ReLU, Softmax, Dropout:
 		return mb.computeActivationInfo(layer, inputShape)
 	default:
 		return nil, nil, 0, fmt.Errorf("unsupported layer type: %s", layer.Type.String())
@@ -602,6 +617,14 @@ func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
 			// ReLU has no parameters
 			break
 			
+		case Dropout:
+			// Dropout parameters: rate, training
+			rate := getFloatParam(layer.Parameters, "rate", 0.5)
+			training := getBoolParam(layer.Parameters, "training", true)
+			
+			cLayer.ParamFloat = []float32{rate}
+			cLayer.ParamInt = []int32{boolToInt32(training)}
+			
 		default:
 			return nil, fmt.Errorf("unsupported layer type for serialization: %s", layer.Type.String())
 		}
@@ -630,6 +653,19 @@ func getBoolParam(params map[string]interface{}, key string, defaultValue bool) 
 	if val, exists := params[key]; exists {
 		if boolVal, ok := val.(bool); ok {
 			return boolVal
+		}
+	}
+	return defaultValue
+}
+
+func getFloatParam(params map[string]interface{}, key string, defaultValue float32) float32 {
+	if val, exists := params[key]; exists {
+		if floatVal, ok := val.(float32); ok {
+			return floatVal
+		}
+		// Handle float64 conversion
+		if floatVal, ok := val.(float64); ok {
+			return float32(floatVal)
 		}
 	}
 	return defaultValue
@@ -730,6 +766,18 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamInt[0] = int32(axis)
 			spec.ParamIntCount = 1
 			// Shape unchanged for Softmax
+
+		case Dropout:
+			spec.LayerType = 5 // Dropout = 5 in Go enum
+			
+			rate := getFloatParam(layer.Parameters, "rate", 0.5)
+			training := getBoolParam(layer.Parameters, "training", true)
+			
+			spec.ParamFloat[0] = rate
+			spec.ParamInt[0] = boolToInt32(training)
+			spec.ParamFloatCount = 1
+			spec.ParamIntCount = 1
+			// Shape unchanged for Dropout
 
 		default:
 			return nil, fmt.Errorf("unsupported layer type for dynamic conversion: %s", layer.Type.String())

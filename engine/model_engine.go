@@ -319,8 +319,8 @@ func (mte *ModelTrainingEngine) initializeModelParameters() error {
 				return fmt.Errorf("failed to initialize conv2d layer %d parameters: %v", layerIndex, err)
 			}
 			
-		case layers.ReLU, layers.Softmax:
-			// Activation layers have no parameters
+		case layers.ReLU, layers.Softmax, layers.Dropout:
+			// Activation layers and dropout have no parameters
 			continue
 			
 		default:

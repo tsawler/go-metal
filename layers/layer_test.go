@@ -202,6 +202,172 @@ func TestTrainerFactoryIntegration(t *testing.T) {
 	fmt.Println("✅ Trainer factory integration test completed successfully!")
 }
 
+// TestDropoutLayer tests the Dropout layer functionality
+func TestDropoutLayer(t *testing.T) {
+	fmt.Println("\n=== Testing Dropout Layer ===")
+	
+	// Test 1: Dropout layer creation
+	inputShape := []int{32, 3, 32, 32}
+	
+	builder := layers.NewModelBuilder(inputShape)
+	model, err := builder.
+		AddConv2D(16, 3, 1, 1, true, "conv1").
+		AddReLU("relu1").
+		AddDense(64, true, "fc1").
+		AddReLU("relu2").
+		AddDropout(0.5, "dropout1").         // Add dropout with 50% rate
+		AddDense(10, true, "fc2").
+		Compile()
+	
+	if err != nil {
+		t.Fatalf("Failed to compile model with Dropout: %v", err)
+	}
+	
+	fmt.Printf("✅ Model with Dropout compiled successfully\n")
+	fmt.Printf("Total layers: %d\n", len(model.Layers))
+	
+	// Test 2: Verify Dropout layer parameters
+	var dropoutLayer *layers.LayerSpec
+	for _, layer := range model.Layers {
+		if layer.Type == layers.Dropout {
+			dropoutLayer = &layer
+			break
+		}
+	}
+	
+	if dropoutLayer == nil {
+		t.Fatalf("Dropout layer not found in compiled model")
+	}
+	
+	// Check dropout parameters
+	rate, exists := dropoutLayer.Parameters["rate"]
+	if !exists {
+		t.Fatalf("Dropout rate parameter not found")
+	}
+	if rate != float32(0.5) {
+		t.Errorf("Expected dropout rate 0.5, got %v", rate)
+	}
+	
+	training, exists := dropoutLayer.Parameters["training"]
+	if !exists {
+		t.Fatalf("Dropout training parameter not found")
+	}
+	if training != true {
+		t.Errorf("Expected training mode true, got %v", training)
+	}
+	
+	fmt.Printf("✅ Dropout parameters verified: rate=%.1f, training=%v\n", rate, training)
+	
+	// Test 3: Verify Dropout has no parameters
+	if dropoutLayer.ParameterCount != 0 {
+		t.Errorf("Expected Dropout to have 0 parameters, got %d", dropoutLayer.ParameterCount)
+	}
+	
+	// Test 4: Verify Dropout doesn't change shape
+	expectedInputShape := dropoutLayer.InputShape
+	expectedOutputShape := dropoutLayer.OutputShape
+	
+	if len(expectedInputShape) != len(expectedOutputShape) {
+		t.Errorf("Dropout changed tensor rank: input %d, output %d", len(expectedInputShape), len(expectedOutputShape))
+	}
+	
+	for i := range expectedInputShape {
+		if expectedInputShape[i] != expectedOutputShape[i] {
+			t.Errorf("Dropout changed shape at dimension %d: input %d, output %d", i, expectedInputShape[i], expectedOutputShape[i])
+		}
+	}
+	
+	fmt.Printf("✅ Dropout preserves tensor shape: %v\n", expectedInputShape)
+	
+	// Test 5: Test serialization for CGO
+	serialized, err := model.SerializeForCGO()
+	if err != nil {
+		t.Fatalf("Failed to serialize model with Dropout: %v", err)
+	}
+	
+	// Find Dropout layer in serialized format
+	var foundDropout bool
+	for _, layer := range serialized.Layers {
+		if layer.LayerType == 5 { // Dropout = 5 in Go enum
+			foundDropout = true
+			if len(layer.ParamFloat) == 0 || layer.ParamFloat[0] != 0.5 {
+				t.Errorf("Dropout rate not serialized correctly: %v", layer.ParamFloat)
+			}
+			if len(layer.ParamInt) == 0 || layer.ParamInt[0] != 1 {
+				t.Errorf("Dropout training mode not serialized correctly: %v", layer.ParamInt)
+			}
+			break
+		}
+	}
+	
+	if !foundDropout {
+		t.Fatalf("Dropout layer not found in serialized model")
+	}
+	
+	fmt.Printf("✅ Dropout serialization verified\n")
+	
+	// Test 6: Test dynamic layer spec conversion
+	dynamicSpecs, err := model.ConvertToDynamicLayerSpecs()
+	if err != nil {
+		t.Fatalf("Failed to convert to dynamic specs: %v", err)
+	}
+	
+	// Find Dropout in dynamic specs
+	var foundDynamicDropout bool
+	for _, spec := range dynamicSpecs {
+		if spec.LayerType == 5 { // Dropout = 5 in Go enum
+			foundDynamicDropout = true
+			if spec.ParamFloatCount != 1 || spec.ParamFloat[0] != 0.5 {
+				t.Errorf("Dynamic Dropout rate not correct")
+			}
+			if spec.ParamIntCount != 1 || spec.ParamInt[0] != 1 {
+				t.Errorf("Dynamic Dropout training mode not correct")
+			}
+			break
+		}
+	}
+	
+	if !foundDynamicDropout {
+		t.Fatalf("Dropout not found in dynamic specs")
+	}
+	
+	fmt.Printf("✅ Dynamic spec conversion verified\n")
+	
+	fmt.Println("✅ Dropout layer test completed successfully!")
+}
+
+// TestDropoutVariousRates tests Dropout with different dropout rates
+func TestDropoutVariousRates(t *testing.T) {
+	fmt.Println("\n=== Testing Dropout with Various Rates ===")
+	
+	rates := []float32{0.0, 0.25, 0.5, 0.75, 0.9}
+	
+	for _, rate := range rates {
+		inputShape := []int{16, 64}
+		
+		builder := layers.NewModelBuilder(inputShape)
+		model, err := builder.
+			AddDropout(rate, fmt.Sprintf("dropout_%.2f", rate)).
+			AddDense(10, true, "output").
+			Compile()
+		
+		if err != nil {
+			t.Fatalf("Failed to compile model with dropout rate %.2f: %v", rate, err)
+		}
+		
+		// Verify the rate was set correctly
+		dropoutLayer := model.Layers[0]
+		actualRate := dropoutLayer.Parameters["rate"].(float32)
+		if actualRate != rate {
+			t.Errorf("Expected rate %.2f, got %.2f", rate, actualRate)
+		}
+		
+		fmt.Printf("✅ Dropout rate %.2f compiled successfully\n", rate)
+	}
+	
+	fmt.Println("✅ Various dropout rates test completed successfully!")
+}
+
 // BenchmarkCompliantVsOriginal compares performance of compliant vs original architecture
 func BenchmarkCompliantVsOriginal(b *testing.B) {
 	// This benchmark would compare the compliant layer system performance

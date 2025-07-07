@@ -7,7 +7,7 @@
 
 // Layer specification structure for dynamic graph creation
 typedef struct {
-    int layer_type;          // 0=Dense, 1=Conv2D, 2=ReLU, 3=Softmax
+    int layer_type;          // 0=Dense, 1=Conv2D, 2=ReLU, 3=Softmax, 4=MaxPool2D, 5=Dropout
     char name[64];           // Layer name
     int input_shape[4];      // Input dimensions [batch, channels, height, width]
     int input_shape_len;     // Number of valid dimensions

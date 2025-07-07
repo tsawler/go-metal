@@ -81,6 +81,22 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     }
                     break;
                     
+                case 5: // Dropout
+                    {
+                        // Dropout parameters: rate (float), training (int)
+                        float rate = layer->param_float_count > 0 ? layer->param_float[0] : 0.5f;
+                        int training = layer->param_int_count > 0 ? layer->param_int[0] : 1;
+                        
+                        if (training) {
+                            // Training mode: Apply dropout with MPSGraph
+                            currentTensor = [engine->graph dropoutTensor:currentTensor
+                                                                    rate:rate
+                                                                    name:[NSString stringWithFormat:@"dropout_%d", layerIdx]];
+                        }
+                        // Inference mode: Pass through unchanged (MPSGraph handles this automatically)
+                    }
+                    break;
+                    
                 default:
                     NSLog(@"Unsupported layer type: %d", layer->layer_type);
                     return NO;
