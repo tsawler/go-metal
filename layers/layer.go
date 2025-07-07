@@ -222,6 +222,28 @@ func (mb *ModelBuilder) AddDropout(rate float32, name string) *ModelBuilder {
 	return mb.AddLayer(layer)
 }
 
+// AddBatchNorm adds a Batch Normalization layer to the model
+// num_features: number of input features (channels for Conv layers, neurons for Dense layers)
+// eps: small value added for numerical stability (default: 1e-5)
+// momentum: momentum for running statistics update (default: 0.1)
+// affine: whether to use learnable scale and shift parameters (default: true)
+// track_running_stats: whether to track running statistics during training (default: true)
+func (mb *ModelBuilder) AddBatchNorm(numFeatures int, eps float32, momentum float32, affine bool, name string) *ModelBuilder {
+	layer := LayerSpec{
+		Type: BatchNorm,
+		Name: name,
+		Parameters: map[string]interface{}{
+			"num_features":        numFeatures,
+			"eps":                eps,
+			"momentum":           momentum,
+			"affine":             affine,
+			"track_running_stats": true, // Always track for training, controlled by trainer mode
+			"training":           true,  // Default to training mode, controlled by trainer
+		},
+	}
+	return mb.AddLayer(layer)
+}
+
 // Compile compiles the model and computes shapes and parameter counts
 func (mb *ModelBuilder) Compile() (*ModelSpec, error) {
 	if len(mb.layers) == 0 {
@@ -282,6 +304,8 @@ func (mb *ModelBuilder) computeLayerInfo(layer *LayerSpec, inputShape []int) ([]
 		return mb.computeDenseInfo(layer, inputShape)
 	case Conv2D:
 		return mb.computeConv2DInfo(layer, inputShape)
+	case BatchNorm:
+		return mb.computeBatchNormInfo(layer, inputShape)
 	case ReLU, Softmax, Dropout:
 		return mb.computeActivationInfo(layer, inputShape)
 	default:
@@ -408,6 +432,52 @@ func (mb *ModelBuilder) computeConv2DInfo(layer *LayerSpec, inputShape []int) ([
 }
 
 // computeActivationInfo computes activation layer information (no parameters)
+// computeBatchNormInfo computes batch normalization layer information
+func (mb *ModelBuilder) computeBatchNormInfo(layer *LayerSpec, inputShape []int) ([]int, [][]int, int64, error) {
+	if len(inputShape) < 2 {
+		return nil, nil, 0, fmt.Errorf("batch norm layer requires at least 2D input")
+	}
+
+	// Get parameters
+	numFeatures, ok := layer.Parameters["num_features"].(int)
+	if !ok {
+		return nil, nil, 0, fmt.Errorf("missing num_features parameter")
+	}
+
+	affine := true
+	if af, exists := layer.Parameters["affine"].(bool); exists {
+		affine = af
+	}
+
+	// BatchNorm doesn't change the input shape - it normalizes along the feature dimension
+	outputShape := make([]int, len(inputShape))
+	copy(outputShape, inputShape)
+
+	// Validate num_features matches the appropriate dimension
+	// For 2D input [batch, features]: features dimension is index 1
+	// For 4D input [batch, channels, height, width]: channels dimension is index 1
+	expectedFeatures := inputShape[1]
+	if numFeatures != expectedFeatures {
+		return nil, nil, 0, fmt.Errorf("num_features (%d) doesn't match input feature dimension (%d)", numFeatures, expectedFeatures)
+	}
+
+	var paramShapes [][]int
+	var paramCount int64
+
+	if affine {
+		// Learnable scale (gamma) and shift (beta) parameters
+		// Both have shape [num_features]
+		paramShapes = append(paramShapes, []int{numFeatures}) // gamma (scale)
+		paramShapes = append(paramShapes, []int{numFeatures}) // beta (shift)
+		paramCount = int64(numFeatures * 2) // gamma + beta
+	}
+
+	// Note: running_mean and running_var are not trainable parameters
+	// They are buffers managed by the training engine and don't count as parameters
+
+	return outputShape, paramShapes, paramCount, nil
+}
+
 func (mb *ModelBuilder) computeActivationInfo(layer *LayerSpec, inputShape []int) ([]int, [][]int, int64, error) {
 	// Activation layers don't change shape and have no parameters
 	outputShape := make([]int, len(inputShape))
@@ -625,6 +695,18 @@ func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
 			cLayer.ParamFloat = []float32{rate}
 			cLayer.ParamInt = []int32{boolToInt32(training)}
 			
+		case BatchNorm:
+			// BatchNorm parameters: [eps, momentum] in floats, [num_features, affine, track_running_stats, training] in ints
+			numFeatures := getIntParam(layer.Parameters, "num_features", 0)
+			eps := getFloatParam(layer.Parameters, "eps", 1e-5)
+			momentum := getFloatParam(layer.Parameters, "momentum", 0.1)
+			affine := getBoolParam(layer.Parameters, "affine", true)
+			trackRunningStats := getBoolParam(layer.Parameters, "track_running_stats", true)
+			training := getBoolParam(layer.Parameters, "training", true)
+			
+			cLayer.ParamFloat = []float32{eps, momentum}
+			cLayer.ParamInt = []int32{int32(numFeatures), boolToInt32(affine), boolToInt32(trackRunningStats), boolToInt32(training)}
+			
 		default:
 			return nil, fmt.Errorf("unsupported layer type for serialization: %s", layer.Type.String())
 		}
@@ -778,6 +860,27 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamFloatCount = 1
 			spec.ParamIntCount = 1
 			// Shape unchanged for Dropout
+
+		case BatchNorm:
+			spec.LayerType = 6 // BatchNorm = 6 in Go enum (next available after Dropout=5)
+			
+			numFeatures := getIntParam(layer.Parameters, "num_features", 0)
+			eps := getFloatParam(layer.Parameters, "eps", 1e-5)
+			momentum := getFloatParam(layer.Parameters, "momentum", 0.1)
+			affine := getBoolParam(layer.Parameters, "affine", true)
+			trackRunningStats := getBoolParam(layer.Parameters, "track_running_stats", true)
+			training := getBoolParam(layer.Parameters, "training", true)
+			
+			// Pack parameters: [eps, momentum] in floats, [num_features, affine, track_running_stats, training] in ints
+			spec.ParamFloat[0] = eps
+			spec.ParamFloat[1] = momentum
+			spec.ParamInt[0] = int32(numFeatures)
+			spec.ParamInt[1] = boolToInt32(affine)
+			spec.ParamInt[2] = boolToInt32(trackRunningStats)
+			spec.ParamInt[3] = boolToInt32(training)
+			spec.ParamFloatCount = 2
+			spec.ParamIntCount = 4
+			// Shape unchanged for BatchNorm
 
 		default:
 			return nil, fmt.Errorf("unsupported layer type for dynamic conversion: %s", layer.Type.String())

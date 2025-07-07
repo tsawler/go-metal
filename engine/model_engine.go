@@ -319,6 +319,12 @@ func (mte *ModelTrainingEngine) initializeModelParameters() error {
 				return fmt.Errorf("failed to initialize conv2d layer %d parameters: %v", layerIndex, err)
 			}
 			
+		case layers.BatchNorm:
+			err := mte.initializeBatchNormParameters(layerIndex, &layerSpec, &paramIndex)
+			if err != nil {
+				return fmt.Errorf("failed to initialize batchnorm layer %d parameters: %v", layerIndex, err)
+			}
+			
 		case layers.ReLU, layers.Softmax, layers.Dropout:
 			// Activation layers and dropout have no parameters
 			continue
@@ -361,6 +367,46 @@ func (mte *ModelTrainingEngine) initializeDenseParameters(
 		err := cgo_bridge.ZeroMetalBuffer(mte.MPSTrainingEngine.GetDevice(), biasTensor.MetalBuffer(), biasTensor.Size())
 		if err != nil {
 			return fmt.Errorf("failed to zero bias: %v", err)
+		}
+		*paramIndex++
+	}
+	
+	return nil
+}
+
+// initializeBatchNormParameters initializes BatchNorm layer parameters
+// gamma (scale) initialized to 1.0, beta (shift) initialized to 0.0
+func (mte *ModelTrainingEngine) initializeBatchNormParameters(
+	layerIndex int,
+	layerSpec *layers.LayerSpec,
+	paramIndex *int,
+) error {
+	// Get BatchNorm parameters - just validate num_features exists
+	_, ok := layerSpec.Parameters["num_features"].(int)
+	if !ok {
+		return fmt.Errorf("missing num_features parameter")
+	}
+	
+	affine := true
+	if af, exists := layerSpec.Parameters["affine"].(bool); exists {
+		affine = af
+	}
+	
+	// Only initialize parameters if affine=true (learnable scale and shift)
+	if affine {
+		// Initialize gamma (scale) parameter to 1.0
+		gammaTensor := mte.parameterTensors[*paramIndex]
+		err := mte.initializeUniform(gammaTensor, 1.0, 1.0) // Constant 1.0
+		if err != nil {
+			return fmt.Errorf("failed to initialize gamma (scale): %v", err)
+		}
+		*paramIndex++
+		
+		// Initialize beta (shift) parameter to 0.0  
+		betaTensor := mte.parameterTensors[*paramIndex]
+		err = cgo_bridge.ZeroMetalBuffer(mte.MPSTrainingEngine.GetDevice(), betaTensor.MetalBuffer(), betaTensor.Size())
+		if err != nil {
+			return fmt.Errorf("failed to initialize beta (shift): %v", err)
 		}
 		*paramIndex++
 	}

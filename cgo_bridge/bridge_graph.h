@@ -21,3 +21,9 @@ MPSGraphTensor* addConv2DLayerToGraph(MPSGraph* graph,
                                      layer_spec_c_t* layerSpec,
                                      int layerIdx,
                                      NSMutableArray* allParameterPlaceholders);
+
+MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
+                                       MPSGraphTensor* input,
+                                       layer_spec_c_t* layerSpec,
+                                       int layerIdx,
+                                       NSMutableArray* allParameterPlaceholders);

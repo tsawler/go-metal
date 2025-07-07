@@ -97,6 +97,16 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     }
                     break;
                     
+                case 6: // BatchNorm
+                    {
+                        currentTensor = addBatchNormLayerToGraph(engine->graph,
+                                                               currentTensor,
+                                                               layer,
+                                                               layerIdx,
+                                                               allParameterPlaceholders);
+                    }
+                    break;
+                    
                 default:
                     NSLog(@"Unsupported layer type: %d", layer->layer_type);
                     return NO;
@@ -703,4 +713,231 @@ MPSGraphTensor* addConv2DLayerToGraph(MPSGraph* graph,
     // Debug: Conv2D layer created with MPSGraph convolution and output shape
     
     return convResult;
+}
+
+// Add Batch Normalization layer to dynamic graph
+MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
+                                       MPSGraphTensor* input,
+                                       layer_spec_c_t* layerSpec,
+                                       int layerIdx,
+                                       NSMutableArray* allParameterPlaceholders) {
+    
+    // Extract BatchNorm parameters: [eps, momentum] in floats, [num_features, affine, track_running_stats, training] in ints
+    if (layerSpec->param_float_count < 2 || layerSpec->param_int_count < 4) {
+        NSLog(@"BatchNorm layer missing required parameters");
+        return nil;
+    }
+    
+    float eps = layerSpec->param_float[0];
+    float momentum = layerSpec->param_float[1];  // Not used in MPSGraph directly - managed by trainer
+    int numFeatures = layerSpec->param_int[0];
+    BOOL affine = layerSpec->param_int[1] != 0;
+    BOOL trackRunningStats = layerSpec->param_int[2] != 0;  // Always true in our implementation
+    BOOL training = layerSpec->param_int[3] != 0;
+    int inputShapeLen = layerSpec->input_shape_len;  // Declare early for use throughout function
+    
+    MPSGraphTensor* normalizedTensor = input;
+    
+    if (affine) {
+        // Create learnable scale (gamma) and shift (beta) parameters
+        // Both have shape [num_features] matching the feature dimension
+        NSArray<NSNumber*>* paramShape = @[@(numFeatures)];
+        
+        // Scale parameter (gamma) - initialized to 1.0
+        MPSGraphTensor* scaleTensor = [graph placeholderWithShape:paramShape
+                                                         dataType:MPSDataTypeFloat32
+                                                             name:[NSString stringWithFormat:@"batchnorm_%d_scale", layerIdx]];
+        [allParameterPlaceholders addObject:scaleTensor];
+        
+        // Shift parameter (beta) - initialized to 0.0
+        MPSGraphTensor* shiftTensor = [graph placeholderWithShape:paramShape
+                                                         dataType:MPSDataTypeFloat32
+                                                             name:[NSString stringWithFormat:@"batchnorm_%d_shift", layerIdx]];
+        [allParameterPlaceholders addObject:shiftTensor];
+        
+        // Reshape gamma and beta for proper broadcasting with 4D inputs
+        // For 4D input [N, C, H, W], gamma and beta should be [1, C, 1, 1]
+        // For 2D input [N, C], gamma and beta should be [1, C]
+        MPSGraphTensor* reshapedScaleTensor = scaleTensor;
+        MPSGraphTensor* reshapedShiftTensor = shiftTensor;
+        
+        if (inputShapeLen == 4) {
+            // Reshape from [C] to [1, C, 1, 1] for 4D broadcasting
+            NSArray<NSNumber*>* broadcastShape = @[@1, @(numFeatures), @1, @1];
+            reshapedScaleTensor = [graph reshapeTensor:scaleTensor
+                                             withShape:broadcastShape
+                                                  name:[NSString stringWithFormat:@"batchnorm_%d_scale_reshaped", layerIdx]];
+            reshapedShiftTensor = [graph reshapeTensor:shiftTensor
+                                             withShape:broadcastShape
+                                                  name:[NSString stringWithFormat:@"batchnorm_%d_shift_reshaped", layerIdx]];
+        } else if (inputShapeLen == 2) {
+            // Reshape from [C] to [1, C] for 2D broadcasting
+            NSArray<NSNumber*>* broadcastShape = @[@1, @(numFeatures)];
+            reshapedScaleTensor = [graph reshapeTensor:scaleTensor
+                                             withShape:broadcastShape
+                                                  name:[NSString stringWithFormat:@"batchnorm_%d_scale_reshaped", layerIdx]];
+            reshapedShiftTensor = [graph reshapeTensor:shiftTensor
+                                             withShape:broadcastShape
+                                                  name:[NSString stringWithFormat:@"batchnorm_%d_shift_reshaped", layerIdx]];
+        }
+        
+        if (training) {
+            // Training mode: Use batch statistics
+            // MPSGraph will compute mean and variance from the current batch
+            
+            // Determine normalization axes based on layer input shape specification
+            // Use the layer spec input shape since MPSGraph tensor shape may not be available at build time
+            NSMutableArray<NSNumber*>* axesArray = [NSMutableArray array];
+            
+            if (inputShapeLen == 4) {
+                // Conv layer output [N, C, H, W] - normalize over N, H, W dimensions
+                [axesArray addObject:@0];
+                [axesArray addObject:@2];
+                [axesArray addObject:@3];
+            } else if (inputShapeLen == 2) {
+                // Dense layer output [N, C] - normalize over N dimension
+                [axesArray addObject:@0];
+            } else {
+                NSLog(@"BatchNorm: Unsupported input shape rank: %d", inputShapeLen);
+                return nil;
+            }
+            
+            
+            // Use MPSGraph's built-in batch normalization for proper gradient computation
+            // For training mode, we need to compute mean and variance from the batch
+            // Then use normalization with those computed statistics
+            
+            // Compute mean and variance from batch using the correct axes
+            MPSGraphTensor* meanTensor = [graph meanOfTensor:input
+                                                        axes:axesArray
+                                                        name:[NSString stringWithFormat:@"batchnorm_%d_mean", layerIdx]];
+            MPSGraphTensor* varianceTensor = [graph varianceOfTensor:input
+                                                          meanTensor:meanTensor
+                                                                axes:axesArray
+                                                                name:[NSString stringWithFormat:@"batchnorm_%d_variance", layerIdx]];
+            
+            // Apply normalization with computed statistics and learnable parameters
+            normalizedTensor = [graph normalizationWithTensor:input
+                                                   meanTensor:meanTensor          // Use computed batch mean
+                                               varianceTensor:varianceTensor      // Use computed batch variance
+                                                  gammaTensor:reshapedScaleTensor // Use properly shaped scale
+                                                   betaTensor:reshapedShiftTensor // Use properly shaped shift
+                                                      epsilon:eps
+                                                         name:[NSString stringWithFormat:@"batchnorm_%d", layerIdx]];
+        } else {
+            // Inference mode: Use running statistics (placeholders for running mean/var)
+            // Create placeholders for running statistics - these will be managed by the training engine
+            NSArray<NSNumber*>* statsShape = @[@(numFeatures)];
+            
+            MPSGraphTensor* runningMeanTensor = [graph placeholderWithShape:statsShape
+                                                                   dataType:MPSDataTypeFloat32
+                                                                       name:[NSString stringWithFormat:@"batchnorm_%d_running_mean", layerIdx]];
+            
+            MPSGraphTensor* runningVarTensor = [graph placeholderWithShape:statsShape
+                                                                  dataType:MPSDataTypeFloat32
+                                                                      name:[NSString stringWithFormat:@"batchnorm_%d_running_var", layerIdx]];
+            
+            // Note: These running statistics placeholders are NOT added to allParameterPlaceholders
+            // because they are buffers managed by the training engine, not learnable parameters
+            
+            // Use MPSGraph's built-in batch normalization with running statistics
+            normalizedTensor = [graph normalizationWithTensor:input
+                                                   meanTensor:runningMeanTensor
+                                               varianceTensor:runningVarTensor
+                                                  gammaTensor:reshapedScaleTensor // Use properly shaped scale
+                                                   betaTensor:reshapedShiftTensor // Use properly shaped shift
+                                                      epsilon:eps
+                                                         name:[NSString stringWithFormat:@"batchnorm_%d", layerIdx]];
+        }
+    } else {
+        // No affine transformation - just normalize without learnable parameters
+        if (training) {
+            // Training mode: compute batch statistics
+            // Use layer spec input shape
+            NSMutableArray<NSNumber*>* axesArray = [NSMutableArray array];
+            
+            if (inputShapeLen == 4) {
+                [axesArray addObject:@0];
+                [axesArray addObject:@2];
+                [axesArray addObject:@3];
+            } else if (inputShapeLen == 2) {
+                [axesArray addObject:@0];
+            } else {
+                NSLog(@"BatchNorm: Unsupported input shape rank: %d", inputShapeLen);
+                return nil;
+            }
+            
+            // For non-affine BatchNorm, compute statistics and normalize without learnable parameters
+            // Compute mean and variance from batch
+            MPSGraphTensor* meanTensor = [graph meanOfTensor:input
+                                                        axes:axesArray
+                                                        name:[NSString stringWithFormat:@"batchnorm_%d_mean", layerIdx]];
+            MPSGraphTensor* varianceTensor = [graph varianceOfTensor:input
+                                                          meanTensor:meanTensor
+                                                                axes:axesArray
+                                                                name:[NSString stringWithFormat:@"batchnorm_%d_variance", layerIdx]];
+            
+            // Create identity scale and zero shift tensors for no affine transformation
+            // Shape them correctly for broadcasting
+            NSArray<NSNumber*>* broadcastShape;
+            if (inputShapeLen == 4) {
+                broadcastShape = @[@1, @(numFeatures), @1, @1]; // [1, C, 1, 1] for 4D
+            } else {
+                broadcastShape = @[@1, @(numFeatures)]; // [1, C] for 2D
+            }
+            
+            MPSGraphTensor* identityScale = [graph constantWithScalar:1.0f
+                                                                shape:broadcastShape
+                                                             dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* zeroShift = [graph constantWithScalar:0.0f
+                                                            shape:broadcastShape
+                                                         dataType:MPSDataTypeFloat32];
+            
+            normalizedTensor = [graph normalizationWithTensor:input
+                                                   meanTensor:meanTensor
+                                               varianceTensor:varianceTensor
+                                                  gammaTensor:identityScale  // Identity scale
+                                                   betaTensor:zeroShift      // Zero shift
+                                                      epsilon:eps
+                                                         name:[NSString stringWithFormat:@"batchnorm_%d_no_affine", layerIdx]];
+        } else {
+            // Inference mode without affine parameters - would need running statistics
+            // This is a less common configuration, but supported
+            NSArray<NSNumber*>* statsShape = @[@(numFeatures)];
+            
+            MPSGraphTensor* runningMeanTensor = [graph placeholderWithShape:statsShape
+                                                                   dataType:MPSDataTypeFloat32
+                                                                       name:[NSString stringWithFormat:@"batchnorm_%d_running_mean", layerIdx]];
+            
+            MPSGraphTensor* runningVarTensor = [graph placeholderWithShape:statsShape
+                                                                  dataType:MPSDataTypeFloat32
+                                                                      name:[NSString stringWithFormat:@"batchnorm_%d_running_var", layerIdx]];
+            
+            // Create identity scale and zero shift tensors for no affine transformation
+            // Shape them correctly for broadcasting
+            NSArray<NSNumber*>* broadcastShape;
+            if (inputShapeLen == 4) {
+                broadcastShape = @[@1, @(numFeatures), @1, @1]; // [1, C, 1, 1] for 4D
+            } else {
+                broadcastShape = @[@1, @(numFeatures)]; // [1, C] for 2D
+            }
+            
+            MPSGraphTensor* identityScale = [graph constantWithScalar:1.0f
+                                                                shape:broadcastShape
+                                                             dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* zeroShift = [graph constantWithScalar:0.0f
+                                                            shape:broadcastShape
+                                                         dataType:MPSDataTypeFloat32];
+            
+            normalizedTensor = [graph normalizationWithTensor:input
+                                                   meanTensor:runningMeanTensor
+                                               varianceTensor:runningVarTensor
+                                                  gammaTensor:identityScale     // Identity scale
+                                                   betaTensor:zeroShift         // Zero shift
+                                                      epsilon:eps
+                                                         name:[NSString stringWithFormat:@"batchnorm_%d_no_affine", layerIdx]];
+        }
+    }
+    
+    return normalizedTensor;
 }
