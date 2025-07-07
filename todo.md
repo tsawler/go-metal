@@ -1,175 +1,79 @@
-# Go-Metal TODO List
+# Go-Metal Project Future Roadmap
 
-## 🏗️ CURRENT ARCHITECTURE OVERVIEW
+This document outlines the strategic roadmap for the go-metal project, building upon its current "production-ready" status and addressing known limitations. The plan is structured into logical phases, prioritizing stability and foundational features before expanding into advanced capabilities and broader ecosystem integration.
 
-**The go-metal project uses a DIRECT CGO ARCHITECTURE for maximum performance:**
+## Executive Summary
 
-### ✅ **ACTIVE COMPONENTS:**
-- **`cgo_bridge/`** - Direct CGO interface to Metal frameworks (MPS/MPSGraph)
-- **`engine/`** - High-level training engine using cgo_bridge
-- **`memory/`** - GPU buffer management and tensor lifecycle
-- **`optimizer/`** - GPU-resident optimizers (SGD, Adam)
-- **`async/`** - Async data loading and command buffer pooling
-- **`training/`** - User-facing training APIs
+The go-metal framework has achieved significant milestones, delivering a high-performance, Apple Silicon-optimized training system. The roadmap focuses on solidifying its core, expanding its utility for common machine learning tasks, and ultimately positioning it as a comprehensive, competitive ML framework.
 
+## Roadmap Phases
 
-### 🎯 **ARCHITECTURE PRINCIPLES:**
-1. **Direct CGO Calls** - Single function call per training step (vs 170+ in old approach)
-2. **Hybrid MPS/MPSGraph** - MPS for convolution, MPSGraph for everything else
-3. **GPU-Resident Everything** - All tensors, state, and computations on GPU
-4. **Zero Memory Leaks** - Reference counting and buffer pooling
-5. **20,000+ batch/s Performance** - Exceeds all targets by 1000x
+### Phase 1: Stability & Foundational Features (Immediate - Next 1-3 Months)
 
----
+This phase prioritizes resolving existing limitations and implementing fundamental features essential for robust, production-grade training.
 
-## ✅ CRITICAL ISSUES - ALL RESOLVED
+* **Core Training Enhancements:**
 
-### 1. **Training Data Not Transferred to GPU** ✅ **RESOLVED**
-**Files:** `training/simple_trainer.go`, `cgo_bridge/bridge.m`, `cgo_bridge/bridge.go`
-```go
-// ✅ IMPLEMENTED: Copy input data to GPU tensor
-err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(inputTensor.MetalBuffer(), inputData)
+    * **Learning Rate Decay/Scheduling:** Implement various learning rate scheduling strategies (e.g., step decay, exponential decay, cosine annealing) to improve model convergence and generalization.
 
-// ✅ IMPLEMENTED: Copy one-hot label data to GPU tensor  
-err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), oneHotData)
-```
-**Solution:** Implemented CGO bridge functions for copying training data to Metal buffers
-**Validation:** Successfully copying 98,304 float32 elements (393KB) per batch
-**Status:** ✅ **COMPLETED** - Real training data now transferred to GPU
+    * **Checkpoint Saving & Loading:** Develop robust mechanisms to save and load model weights, optimizer states, and training progress, enabling interruption and resumption of training.
 
-### 2. **Adam Optimizer Using Dummy Gradients** ✅ **RESOLVED**
-**Files:** `cgo_bridge/bridge.m:2419-2543`
-```objc
-// ✅ IMPLEMENTED: Real gradient computation via MPSGraph automatic differentiation
-// Full MPS convolution + MPSGraph forward+backward pass + real gradient extraction
-```
-**Solution:** Replaced dummy implementation with complete hybrid MPS/MPSGraph pipeline
-**Validation:** Adam optimizer now receives actual computed gradients showing proper convergence
-**Status:** ✅ **COMPLETED** - Real MPSGraph gradients replacing dummy values
+    * **Advanced Layer Types:** Integrate additional common neural network layers such as Batch Normalization, Dropout, and other advanced activation functions (e.g., Leaky ReLU, ELU).
 
-## ⚠️ PERFORMANCE OPTIMIZATIONS - Medium Priority
+    * **Model Serialization:** Implement capabilities to save trained models to disk and load them back for inference or further training.
 
-### 3. **Adam Optimization Could Use MPSGraph Instead of CPU** ✅ **RESOLVED**
-**Files:** `cgo_bridge/bridge.m:2200-2418`
-```objc
-// Implemented using MPSGraph Adam operations for optimal GPU performance
-int execute_adam_step_mpsgraph(...)
-```
-**Solution:** Implemented complete MPSGraph-based Adam optimizer using Apple's optimized tensor operations
-**Implementation:** Created `execute_adam_step_mpsgraph()` function that uses MPSGraph operations for all Adam computations
-**Status:** ✅ **COMPLETED** - Adam now runs entirely on GPU using MPSGraph
+    * **Further Performance Optimization:** Continuously profile and optimize existing components to squeeze out additional performance gains.
 
-### 4. **Memory Manager Uses Hardcoded Buffer Size Estimates** ✅ **RESOLVED**
-**Files:** `memory/manager.go:88-316`
-```go
-// Added buffer size tracking
-bufferSizes     map[unsafe.Pointer]int // Maps buffer pointer to its allocated size
-bufferSizesMutex sync.RWMutex         // Protects bufferSizes map
-```
-**Solution:** Implemented proper buffer size tracking using a map to store actual allocated sizes
-**Implementation:** 
-- Added `bufferSizes` map to track each buffer's allocated size
-- Updated `GetBuffer()` to record buffer sizes when allocated
-- Updated `ReleaseBuffer()` to look up actual size instead of using 4MB default
-- Added cleanup in `ReturnBuffer()` to remove tracking when buffers are deallocated
-**Status:** ✅ **COMPLETED** - Memory management now accurately tracks all buffer sizes
+### Phase 2: Core Library Expansion & Utilities (Short-to-Medium Term - Next 3-6 Months)
 
-### 5. **Buffer Zeroing Limited to CPU-Accessible Buffers** ✅ **RESOLVED**
-**Files:** `cgo_bridge/bridge.m:2546-2640`
-```objc
-// Implemented using MPSGraph operations for GPU-only buffers
-int zero_metal_buffer_mpsgraph(uintptr_t device_ptr, uintptr_t buffer_ptr, int size)
-```
-**Solution:** Implemented MPSGraph-based buffer zeroing that works for all buffer types
-**Implementation:**
-- Created `zero_metal_buffer_mpsgraph()` function using MPSGraph broadcast operations
-- Handles different data types (float32, int32, int8) automatically
-- Updated `zero_metal_buffer()` to fallback to MPSGraph for GPU-only buffers
-- Added Go wrapper `ZeroMetalBufferMPSGraph()` for direct MPSGraph zeroing
-**Status:** ✅ **COMPLETED** - Buffer zeroing now works for all buffer types using MPSGraph
+This phase focuses on building out the core utility of the `go-metal` library by extracting validated components and expanding its fundamental machine learning capabilities.
 
-## 📋 FUTURE ENHANCEMENTS - Lower Priority
+* **Extract CNN & Image Processing Library Components:** Generalize and integrate the high-performance image processing and data loading utilities validated in the cats-dogs application into the main `go-metal` library.
 
-### 6. **Async Staging Buffer Transfers** (FUTURE)
-**Files:** `async/staging_pool.go:176-184`
-```go
-// TODO: Implement actual Metal buffer copy operations
-// This is a placeholder that shows the structure
-```
-**Problem:** Async data loading framework exists but doesn't perform actual GPU transfers
-**Impact:** Async pipeline not fully functional
-**Status:** 🚧 FRAMEWORK COMPLETE - Implementation pending
+    * **Image Preprocessing Package (`go-metal/vision/preprocessing`):** High-performance JPEG decoding, resizing, CHW format conversion, and float32 normalization with buffer reuse.
 
-### 7. **Command Buffer Pooling Implementation** (FUTURE)
-**Files:** `async/command_pool.go` (multiple locations)
-```go
-// TODO: Call CGO function to create MTLCommandBuffer from queue
-// TODO: Implement actual Metal command buffer execution
-```
-**Problem:** Command buffer pooling uses placeholder operations
-**Impact:** Async command optimization not functional
-**Status:** 🚧 FRAMEWORK COMPLETE - Implementation pending
+    * **High-Performance Data Loading (`go-metal/vision/dataloader`):** Memory-efficient batch data loading with smart image caching, buffer reuse, and automatic shuffling.
 
-## 🎯 IMMEDIATE ACTION PLAN
+    * **Dataset Management Utilities (`go-metal/vision/dataset`):** Tools for directory-based dataset loading, train/validation splitting, and class distribution analysis.
 
-### Phase 1: Critical Fixes (This Session)
-1. **✅ Document Issues** - Create this todo.md file
-2. **✅ Fix Data Transfer** - Implement CGO functions to copy training data to GPU tensors
-3. **✅ Fix Adam Gradients** - Complete gradient computation in hybrid forward+backward pass
-4. **✅ Test Real Training** - Validate actual training with real data and gradients
+    * **Enhanced Training Infrastructure (`go-metal/training/session`):** Components for real accuracy calculation, performance monitoring, and professional progress reporting.
 
-### Phase 2: Performance Optimization (Future)
-1. **Optimize Adam with MPSGraph** - Replace CPU Adam with MPSGraph's optimized Adam operations
-2. **Fix Memory Manager Buffer Tracking** - Implement proper buffer size tracking instead of 4MB estimates
-3. **GPU Buffer Zeroing** - Use MPSGraph operations for buffer initialization
-4. **Complete Async Pipeline** - Finish staging buffer and command pool implementations
+    * **Memory Optimization Patterns (`go-metal/memory/optimization`):** Generalized buffer pooling and lifecycle management for various data types to reduce allocations.
 
-### Phase 3: Advanced Features (Future)
-1. **Enhanced Tensor Operations** - Improve dimension handling and edge cases
-2. **Performance Monitoring** - Add detailed metrics for GPU utilization
-3. **Production Hardening** - Add comprehensive error handling and edge cases
+* **Expand Core ML Functionality:**
 
-## 📊 STATUS SUMMARY
+    * **More Optimizers:** Add support for other popular optimization algorithms like RMSprop, Adagrad, and potentially more advanced ones like L-BFGS.
 
-| Component | Status | Performance | Completeness |
-|-----------|--------|-------------|--------------|
-| Core Training Engine | ✅ Working | 20,000+ batch/s | 100% |
-| SGD Optimizer | ✅ Functional | Excellent | 100% |
-| Adam Optimizer | ✅ **FUNCTIONAL** | Excellent | 100% |
-| Data Loading | ✅ **FUNCTIONAL** | Good | 100% |
-| Async Pipeline | 🚧 Framework | N/A | 80% |
-| Memory Management | ✅ Excellent | Optimal | 100% |
-| Hybrid Architecture | ✅ Breakthrough | 1000x target | 100% |
+    * **Common Loss Functions:** Implement a broader range of loss functions, including Mean Squared Error (MSE), Binary Cross-Entropy with Logits (BCEWithLogitsLoss), Categorical Cross-Entropy, and Huber Loss.
 
-## ⚡ CRITICAL PATH TO PRODUCTION
+    * **Evaluation Metrics:** Provide a comprehensive set of evaluation metrics beyond accuracy, such as F1-score, Precision, Recall, AUC, and Mean Average Precision (mAP).
 
-**🎉 ALL CRITICAL ISSUES AND OPTIMIZATIONS COMPLETED!**
-- ✅ Data transfer implementation (real training data now transferred to GPU)
-- ✅ Adam gradient computation (real gradients computed via MPSGraph automatic differentiation)
-- ✅ Adam optimizer using MPSGraph operations for optimal GPU performance
-- ✅ Memory manager buffer size tracking with accurate size management
-- ✅ Buffer zeroing using MPSGraph operations for all buffer types
+### Phase 3: Advanced Architectures & Scalability (Medium-to-Long Term - Next 6-12+ Months)
 
-**PRODUCTION READY:**
-- ✅ Full production readiness for both SGD and Adam optimizers
-- ✅ Real training with actual data and computed gradients
-- ✅ Maintained 20k+ batch/s performance with full training pipeline
-- ✅ Adam optimizer functioning with real gradient descent on GPU
-- ✅ Accurate memory management with proper buffer size tracking
-- ✅ Efficient buffer zeroing for both CPU-accessible and GPU-only buffers
+This phase aims to enable the `go-metal` framework to handle more complex model architectures and scale to larger datasets and computational demands.
 
-**VALIDATION RESULTS:**
-- ✅ SGD Training: 20,000+ batch/s with real loss computation (0.693034 → 0.693158)
-- ✅ Adam Training: Excellent convergence (0.693147 → 0.693102) with proper momentum and variance tracking
-- ✅ Data Transfer: Successfully copying 98,304 float32 elements (393KB) per batch
-- ✅ Gradient Computation: Real MPSGraph gradients replacing dummy values
-- ✅ Memory Management: Accurate buffer size tracking for all allocated buffers
-- ✅ Buffer Zeroing: Efficient zeroing for buffers from 999 bytes to 65KB+
+* **Transformer Support:** Implement core components and layers necessary for building Transformer architectures, including attention mechanisms, multi-head attention, and encoder/decoder blocks.
 
-**REMAINING EFFORT:**
-- Future enhancements (async pipeline completion): 1-2 weeks
-- **All critical optimizations complete - system ready for production deployment**
+* **Recurrent Neural Networks (RNNs):** Add support for recurrent layers like LSTMs and GRUs for sequential data processing.
 
----
-*Last Updated: 2025-06-30*
-*Status: ✅ ALL CRITICAL FIXES COMPLETED - PRODUCTION READY*
+* **Multi-GPU Support:** Develop strategies for model and data parallelism to leverage multiple GPUs for accelerated training on larger models and datasets.
+
+* **Production Tools:** Build out tools for model deployment and serving infrastructure, making it easier to integrate trained `go-metal` models into production applications.
+
+* **Mobile Integration:** Further optimize for iOS/macOS deployment, potentially including tools for model quantization or conversion for on-device inference.
+
+### Phase 4: Ecosystem & Extensibility (Long Term - 12+ Months)
+
+The final phase focuses on positioning `go-metal` as a versatile and integrated part of the broader machine learning ecosystem.
+
+* **Universal ML Framework:** Continue expanding to support a wider array of machine learning tasks and architectures beyond deep learning, such as traditional ML algorithms.
+
+* **Custom Layer SDK:** Provide a software development kit (SDK) that allows users to define and integrate their own custom layer types and Metal operations.
+
+* **Cloud Integration:** Explore capabilities for distributed training across multiple machines, potentially integrating with cloud-based ML platforms.
+
+* **Ecosystem Integration:** Develop tools for seamless import and export of models to and from other popular frameworks like PyTorch and TensorFlow.
+
+## Conclusion
+
+This roadmap outlines a clear path for the `go-metal` project to evolve into a comprehensive, high-performance machine learning framework optimized for Apple Silicon. By systematically addressing limitations and expanding capabilities, `go-metal` will provide developers with a powerful and efficient tool for a wide range of machine learning applications
