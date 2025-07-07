@@ -33,6 +33,82 @@ func TrainingExample() error
 ```
 TrainingExample demonstrates the PyTorch-style progress bar in action
 
+#### type CosineAnnealingLRScheduler
+
+```go
+type CosineAnnealingLRScheduler struct {
+	TMax   int     // Maximum number of epochs
+	EtaMin float64 // Minimum learning rate
+}
+```
+
+CosineAnnealingLRScheduler implements cosine annealing schedule
+
+#### func  NewCosineAnnealingLRScheduler
+
+```go
+func NewCosineAnnealingLRScheduler(tMax int, etaMin float64) *CosineAnnealingLRScheduler
+```
+NewCosineAnnealingLRScheduler creates a cosine annealing scheduler
+
+#### func (*CosineAnnealingLRScheduler) GetLR
+
+```go
+func (s *CosineAnnealingLRScheduler) GetLR(epoch int, step int, baseLR float64) float64
+```
+
+#### func (*CosineAnnealingLRScheduler) GetName
+
+```go
+func (s *CosineAnnealingLRScheduler) GetName() string
+```
+
+#### type ExponentialLRScheduler
+
+```go
+type ExponentialLRScheduler struct {
+	Gamma float64 // Multiplicative factor of LR decay per epoch
+}
+```
+
+ExponentialLRScheduler decays learning rate exponentially
+
+#### func  NewExponentialLRScheduler
+
+```go
+func NewExponentialLRScheduler(gamma float64) *ExponentialLRScheduler
+```
+NewExponentialLRScheduler creates an exponential learning rate scheduler
+
+#### func (*ExponentialLRScheduler) GetLR
+
+```go
+func (s *ExponentialLRScheduler) GetLR(epoch int, step int, baseLR float64) float64
+```
+
+#### func (*ExponentialLRScheduler) GetName
+
+```go
+func (s *ExponentialLRScheduler) GetName() string
+```
+
+#### type LRScheduler
+
+```go
+type LRScheduler interface {
+	// GetLR returns the learning rate for the current epoch/step
+	// This is a pure function - no state modifications
+	GetLR(epoch int, step int, baseLR float64) float64
+
+	// GetName returns the scheduler name for logging
+	GetName() string
+}
+```
+
+LRScheduler defines the interface for learning rate scheduling strategies All
+schedulers must be stateless and pure functions to maintain GPU-resident
+principles
+
 #### type ModelArchitecturePrinter
 
 ```go
@@ -118,6 +194,14 @@ func (mt *ModelTrainer) EnablePersistentBuffers(inputShape []int) error
 EnablePersistentBuffers pre-allocates GPU tensors for reuse across training
 steps This reduces allocation overhead and improves performance
 
+#### func (*ModelTrainer) GetCurrentLearningRate
+
+```go
+func (mt *ModelTrainer) GetCurrentLearningRate() float32
+```
+GetCurrentLearningRate returns the current learning rate based on scheduler This
+is a pure computation - no GPU operations
+
 #### func (*ModelTrainer) GetModelSpec
 
 ```go
@@ -131,6 +215,13 @@ GetModelSpec returns the model specification
 func (mt *ModelTrainer) GetModelSummary() string
 ```
 GetModelSummary returns a human-readable model summary
+
+#### func (*ModelTrainer) GetSchedulerInfo
+
+```go
+func (mt *ModelTrainer) GetSchedulerInfo() string
+```
+GetSchedulerInfo returns current scheduler information for logging
 
 #### func (*ModelTrainer) GetStats
 
@@ -167,6 +258,30 @@ every step (default, maximum accuracy but higher CGO overhead) interval=10:
 every 10 steps (reduces CGO calls by ~40%, slight accuracy tracking lag)
 interval=50: every 50 steps (reduces CGO calls by ~80%, minimal accuracy
 tracking)
+
+#### func (*ModelTrainer) SetEpoch
+
+```go
+func (mt *ModelTrainer) SetEpoch(epoch int)
+```
+SetEpoch updates the current epoch for learning rate scheduling Call this at the
+start of each epoch
+
+#### func (*ModelTrainer) SetLRScheduler
+
+```go
+func (mt *ModelTrainer) SetLRScheduler(scheduler LRScheduler)
+```
+SetLRScheduler sets a learning rate scheduler for the trainer This maintains
+GPU-resident principles by only updating LR between epochs
+
+#### func (*ModelTrainer) StepSchedulerWithMetric
+
+```go
+func (mt *ModelTrainer) StepSchedulerWithMetric(metric float64)
+```
+StepSchedulerWithMetric updates schedulers that depend on validation metrics For
+ReduceLROnPlateauScheduler - call this after validation
 
 #### func (*ModelTrainer) TrainBatch
 
@@ -305,6 +420,26 @@ type ModelTrainingStats struct {
 
 ModelTrainingStats provides comprehensive statistics for model-based training
 
+#### type NoOpScheduler
+
+```go
+type NoOpScheduler struct{}
+```
+
+NoOpScheduler maintains constant learning rate (default behavior)
+
+#### func (*NoOpScheduler) GetLR
+
+```go
+func (s *NoOpScheduler) GetLR(epoch int, step int, baseLR float64) float64
+```
+
+#### func (*NoOpScheduler) GetName
+
+```go
+func (s *NoOpScheduler) GetName() string
+```
+
 #### type OptimizerConfig
 
 ```go
@@ -356,6 +491,47 @@ Update advances the progress bar
 func (pb *ProgressBar) UpdateMetrics(metrics map[string]float64)
 ```
 UpdateMetrics updates metrics without advancing progress
+
+#### type ReduceLROnPlateauScheduler
+
+```go
+type ReduceLROnPlateauScheduler struct {
+	Factor    float64 // Factor by which the learning rate will be reduced
+	Patience  int     // Number of epochs with no improvement after which LR will be reduced
+	Threshold float64 // Threshold for measuring the new optimum
+	Mode      string  // One of "min" or "max"
+}
+```
+
+ReduceLROnPlateauScheduler reduces LR when a metric has stopped improving This
+scheduler requires state tracking, so it's handled differently
+
+#### func  NewReduceLROnPlateauScheduler
+
+```go
+func NewReduceLROnPlateauScheduler(factor float64, patience int, threshold float64, mode string) *ReduceLROnPlateauScheduler
+```
+NewReduceLROnPlateauScheduler creates a plateau-based scheduler
+
+#### func (*ReduceLROnPlateauScheduler) GetLR
+
+```go
+func (s *ReduceLROnPlateauScheduler) GetLR(epoch int, step int, baseLR float64) float64
+```
+
+#### func (*ReduceLROnPlateauScheduler) GetName
+
+```go
+func (s *ReduceLROnPlateauScheduler) GetName() string
+```
+
+#### func (*ReduceLROnPlateauScheduler) Step
+
+```go
+func (s *ReduceLROnPlateauScheduler) Step(metric float64, currentLR float64) float64
+```
+Step checks if LR should be reduced based on metric This is called once per
+epoch with the validation metric
 
 #### type SimpleTrainer
 
@@ -423,6 +599,36 @@ func (st *SimpleTrainer) TrainBatch(
 ) (*TrainingResult, error)
 ```
 TrainBatch trains on a single batch with timing (full training loop)
+
+#### type StepLRScheduler
+
+```go
+type StepLRScheduler struct {
+	StepSize int     // Epochs between LR reductions
+	Gamma    float64 // Multiplicative factor of LR decay
+}
+```
+
+StepLRScheduler reduces learning rate by a factor every stepSize epochs
+
+#### func  NewStepLRScheduler
+
+```go
+func NewStepLRScheduler(stepSize int, gamma float64) *StepLRScheduler
+```
+NewStepLRScheduler creates a step learning rate scheduler
+
+#### func (*StepLRScheduler) GetLR
+
+```go
+func (s *StepLRScheduler) GetLR(epoch int, step int, baseLR float64) float64
+```
+
+#### func (*StepLRScheduler) GetName
+
+```go
+func (s *StepLRScheduler) GetName() string
+```
 
 #### type TrainerConfig
 

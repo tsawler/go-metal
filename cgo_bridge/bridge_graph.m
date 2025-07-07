@@ -255,8 +255,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
         
         // OPTIMIZER-SPECIFIC PRE-COMPILATION: Build optimizer-specific graphs to avoid conflicts
         // This eliminates runtime operation creation and prevents placeholder issues
-        NSLog(@"🔍 PRE-COMPILATION DEBUG: optimizer=%d, params=%lu, adam_state=%d, sgd_state=%d", 
-              engine->config.optimizer_type, [engine->allWeightPlaceholders count], engine->adamStateInitialized, engine->sgdStateInitialized);
+        // NSLog(@"🔍 PRE-COMPILATION DEBUG: optimizer=%d, params=%lu, adam_state=%d, sgd_state=%d", 
+        //       engine->config.optimizer_type, [engine->allWeightPlaceholders count], engine->adamStateInitialized, engine->sgdStateInitialized);
         
         // SGD-SPECIFIC GRAPH COMPILATION: Build SGD graph without Adam dependencies
         if (engine->config.optimizer_type == 0 && engine->allWeightPlaceholders.count > 0 && engine->sgdStateInitialized && !engine->sgdGraphCompiled) { // SGD optimizer
@@ -275,7 +275,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                 NSLog(@"❌ CRITICAL: SGD learning rate tensor not cached! This should have been created in cacheSGDScalarTensors.");
                 return NO;
             }
-            NSLog(@"🔧 DEBUG: SGD using sgdCachedLrTensor with config value: %.6f", engine->config.learning_rate);
+            // NSLog(@"🔧 DEBUG: SGD using sgdCachedLrTensor with config value: %.6f", engine->config.learning_rate);
             
             // Pre-compile gradient computation using automatic differentiation ONCE during graph building (same as Adam)
             NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
@@ -300,7 +300,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             // Also store in legacy array for backward compatibility (same as Adam)
             engine->precompiledGradientTensors = precompiledGradientTensors;
-            NSLog(@"🔧 DEBUG: Set precompiledGradientTensors to %lu items", [precompiledGradientTensors count]);
+            // NSLog(@"🔧 DEBUG: Set precompiledGradientTensors to %lu items", [precompiledGradientTensors count]);
             
             NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
             NSLog(@"🚀 PRE-COMPILATION: Building SGD parameter update operations...");
@@ -387,7 +387,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             // Also store in legacy arrays for backward compatibility (same as Adam)
             engine->precompiledUpdatedParams = precompiledUpdatedParams;
-            NSLog(@"🔧 DEBUG: Set precompiledUpdatedParams to %lu items", [precompiledUpdatedParams count]);
+            // NSLog(@"🔧 DEBUG: Set precompiledUpdatedParams to %lu items", [precompiledUpdatedParams count]);
             engine->precompiledUpdatedMomentum = precompiledUpdatedMomentum;
             
             engine->sgdGraphCompiled = YES;

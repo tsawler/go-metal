@@ -70,7 +70,7 @@ void cacheSGDScalarTensors(training_engine_t* engine) {
         // CRITICAL FIX: Always create SGD-specific learning rate tensor to ensure correct value
         // Don't reuse Adam's tensor as it might have been created with different value or at different time
         engine->sgdCachedLrTensor = [engine->graph constantWithScalar:lr dataType:MPSDataTypeFloat32];
-        NSLog(@"🔧 DEBUG: Created SGD-specific LR tensor with value: %.6f", lr);
+        // NSLog(@"🔧 DEBUG: Created SGD-specific LR tensor with value: %.6f", lr);
         
         // Also set shared tensor if not available (for backward compatibility)
         if (!engine->cachedLrTensor) {

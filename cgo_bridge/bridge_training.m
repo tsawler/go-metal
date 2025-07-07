@@ -923,20 +923,21 @@ int execute_training_step_dynamic_with_gradients_pooled(
                                     [[updatedParamData mpsndarray] readBytes:weightPtr strideBytes:nil];
                                     [weightBuf didModifyRange:NSMakeRange(0, [weightBuf length])];
                                     
-                                    float newValue = weightPtr[0]; // Check if it changed
-                                    if (i == 0 && fabsf(newValue - oldValue) > 1e-5f) {
-                                        // Only log significant parameter changes to reduce noise
-                                        // NSLog(@"🔧 DEBUG: Param[0] updated: %.6f -> %.6f (delta: %.2e)", 
-                                        //       oldValue, newValue, newValue - oldValue);
-                                    } else if (i == 0 && fabsf(newValue - oldValue) <= 1e-6f) {
-                                        // Only warn about very small changes occasionally (every 50 calls)
-                                        static int smallChangeCount = 0;
-                                        smallChangeCount++;
-                                        if (smallChangeCount % 50 == 0) {
-                                            NSLog(@"⚠️ DEBUG: Param[0] small change (last 50 avg): %.6f (delta: %.2e)", 
-                                                  oldValue, newValue - oldValue);
-                                        }
-                                    }
+                                    // DEBUG LOGGING DISABLED FOR CLEAN CONSOLE OUTPUT
+                                    // float newValue = weightPtr[0]; // Check if it changed
+                                    // if (i == 0 && fabsf(newValue - oldValue) > 1e-5f) {
+                                    //     // Only log significant parameter changes to reduce noise
+                                    //     // NSLog(@"🔧 DEBUG: Param[0] updated: %.6f -> %.6f (delta: %.2e)", 
+                                    //     //       oldValue, newValue, newValue - oldValue);
+                                    // } else if (i == 0 && fabsf(newValue - oldValue) <= 1e-6f) {
+                                    //     // Only warn about very small changes occasionally (every 50 calls)
+                                    //     static int smallChangeCount = 0;
+                                    //     smallChangeCount++;
+                                    //     if (smallChangeCount % 50 == 0) {
+                                    //         NSLog(@"⚠️ DEBUG: Param[0] small change (last 50 avg): %.6f (delta: %.2e)", 
+                                    //               oldValue, newValue - oldValue);
+                                    //     }
+                                    // }
                                     updatedCount++;
                                 }
                             }

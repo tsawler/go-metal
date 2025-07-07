@@ -11,7 +11,7 @@ import (
 
 // TrainingExample demonstrates the PyTorch-style progress bar in action
 func TrainingExample() error {
-	fmt.Println("=== Go-Metal Training with Progress Visualization ===\n")
+	fmt.Println("=== Go-Metal Training with Progress Visualization ===")
 	
 	// Create a CNN model similar to the PyTorch example
 	inputShape := []int{32, 3, 32, 32} // CIFAR-10 style input
@@ -199,7 +199,7 @@ func simulateValidationAccuracy(epoch, step, totalSteps int) float64 {
 // RunProgressBarDemo runs a demonstration of the progress bar
 func RunProgressBarDemo() {
 	fmt.Println("Running Go-Metal Progress Bar Demo...")
-	fmt.Println("This will show PyTorch-style training progress with a real model.\n")
+	fmt.Println("This will show PyTorch-style training progress with a real model.")
 	
 	err := TrainingExample()
 	if err != nil {

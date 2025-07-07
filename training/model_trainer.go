@@ -47,6 +47,11 @@ type ModelTrainer struct {
 	// This addresses the 34% performance degradation from MTLCommandBuffer and MPSImage accumulation
 	commandBufferPool  *async.CommandBufferPool
 	commandQueue       unsafe.Pointer  // MTLCommandQueue for command buffer creation
+	
+	// Learning Rate Scheduling - maintains GPU-resident principles
+	lrScheduler      LRScheduler // Optional learning rate scheduler
+	baseLearningRate float32     // Original learning rate from config
+	currentEpoch     int         // Current epoch for scheduler
 }
 
 // NewModelTrainer creates a new model-based trainer using the existing TrainingEngine architecture
@@ -129,6 +134,11 @@ func NewModelTrainer(
 		// RESOURCE LEAK FIX: Store command buffer pool and queue for resource management
 		commandBufferPool: commandBufferPool,
 		commandQueue:      commandQueue,
+		
+		// Learning rate scheduling initialization
+		baseLearningRate: config.LearningRate,
+		currentEpoch:     0,
+		lrScheduler:      nil, // No scheduler by default (constant LR)
 	}, nil
 }
 
@@ -1039,4 +1049,56 @@ func shapesEqual(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// SetLRScheduler sets a learning rate scheduler for the trainer
+// This maintains GPU-resident principles by only updating LR between epochs
+func (mt *ModelTrainer) SetLRScheduler(scheduler LRScheduler) {
+	mt.lrScheduler = scheduler
+}
+
+// GetCurrentLearningRate returns the current learning rate based on scheduler
+// This is a pure computation - no GPU operations
+func (mt *ModelTrainer) GetCurrentLearningRate() float32 {
+	if mt.lrScheduler == nil {
+		return mt.config.LearningRate
+	}
+	
+	// Get scheduled learning rate
+	scheduledLR := mt.lrScheduler.GetLR(mt.currentEpoch, mt.currentStep, float64(mt.baseLearningRate))
+	return float32(scheduledLR)
+}
+
+// SetEpoch updates the current epoch for learning rate scheduling
+// Call this at the start of each epoch
+func (mt *ModelTrainer) SetEpoch(epoch int) {
+	mt.currentEpoch = epoch
+	
+	// Update the learning rate in the config for next training steps
+	mt.config.LearningRate = mt.GetCurrentLearningRate()
+}
+
+// StepSchedulerWithMetric updates schedulers that depend on validation metrics
+// For ReduceLROnPlateauScheduler - call this after validation
+func (mt *ModelTrainer) StepSchedulerWithMetric(metric float64) {
+	if scheduler, ok := mt.lrScheduler.(*ReduceLROnPlateauScheduler); ok {
+		// Update the scheduler's internal state
+		newLR := scheduler.Step(metric, float64(mt.config.LearningRate))
+		mt.config.LearningRate = float32(newLR)
+	}
+}
+
+// GetSchedulerInfo returns current scheduler information for logging
+func (mt *ModelTrainer) GetSchedulerInfo() string {
+	if mt.lrScheduler == nil {
+		return "No scheduler (constant LR)"
+	}
+	
+	currentLR := mt.GetCurrentLearningRate()
+	return fmt.Sprintf("%s scheduler: LR=%.6f (epoch=%d, step=%d)", 
+		mt.lrScheduler.GetName(), 
+		currentLR, 
+		mt.currentEpoch,
+		mt.currentStep,
+	)
 }
