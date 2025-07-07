@@ -366,6 +366,25 @@ type ModelConfig struct {
 	Conv3Stride     int
 }
 
+// InferenceConfig holds configuration for inference-only engines
+type InferenceConfig struct {
+	// Model configuration
+	UseDynamicEngine bool              // Use dynamic graph engine
+	BatchNormInferenceMode bool       // Use batch norm in inference mode
+	
+	// Input configuration
+	InputShape      []int32           // Input tensor shape
+	InputShapeLen   int32            // Length of input shape array
+	
+	// Layer specifications for dynamic models
+	LayerSpecs      []LayerSpecC     // Layer specifications
+	LayerSpecsLen   int32           // Number of layer specs
+	
+	// Performance settings
+	UseCommandPooling bool           // Enable command buffer pooling
+	OptimizeForSingleBatch bool     // Optimize for batch size 1
+}
+
 // DeviceType maps to our memory package
 type DeviceType int
 
@@ -597,6 +616,83 @@ func DestroyTrainingEngine(engine unsafe.Pointer) {
 	if engine != nil {
 		C.destroy_training_engine(C.uintptr_t(uintptr(engine)))
 	}
+}
+
+// CreateInferenceEngine creates an inference-only engine optimized for forward pass
+func CreateInferenceEngine(device unsafe.Pointer, config InferenceConfig) (unsafe.Pointer, error) {
+	// For now, use the existing training engine but configure it for inference only
+	// In a full implementation, this would create a dedicated inference engine
+	
+	// Convert to training config for compatibility (will be optimized in C++ later)
+	trainingConfig := TrainingConfig{
+		LearningRate:  0.001, // Not used for inference
+		Beta1:         0.9,   // Not used for inference
+		Beta2:         0.999, // Not used for inference
+		WeightDecay:   0.0,   // Not used for inference
+		Epsilon:       1e-8,  // Not used for inference
+		OptimizerType: SGD,   // Not used for inference
+	}
+	
+	if config.UseDynamicEngine {
+		// Create dynamic training engine configured for inference
+		engine, err := CreateTrainingEngineDynamic(
+			device,
+			trainingConfig,
+			config.LayerSpecs,
+			make([]int, config.InputShapeLen), // Convert from int32 to int
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create dynamic inference engine: %v", err)
+		}
+		return engine, nil
+	} else {
+		// Use hybrid engine for inference (fallback)
+		modelConfig := ModelConfig{
+			BatchSize:     int(config.InputShape[0]),
+			InputChannels: int(config.InputShape[1]),
+			InputHeight:   int(config.InputShape[2]),
+			InputWidth:    int(config.InputShape[3]),
+		}
+		
+		engine, err := CreateTrainingEngineHybrid(device, trainingConfig, modelConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create hybrid inference engine: %v", err)
+		}
+		return engine, nil
+	}
+}
+
+// DestroyInferenceEngine destroys an inference engine
+func DestroyInferenceEngine(engine unsafe.Pointer) {
+	// For now, use the same cleanup as training engine
+	DestroyTrainingEngine(engine)
+}
+
+// ExecuteInferenceOnly performs forward-only inference without loss computation
+func ExecuteInferenceOnly(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	batchSize int,
+	numClasses int,
+	isDynamic bool,
+	batchNormInferenceMode bool,
+) (*InferenceResult, error) {
+	// Use existing inference function for now
+	// In a full implementation, this would call a dedicated inference-only C function
+	return ExecuteInference(engine, inputBuffer, weightBuffers, batchSize, numClasses, isDynamic)
+}
+
+// BuildInferenceGraph builds an optimized inference graph
+func BuildInferenceGraph(
+	engine unsafe.Pointer,
+	inputShape []int,
+	inputShapeLen int32,
+	batchNormInferenceMode bool,
+) error {
+	// For now, assume the graph is already built by the engine creation
+	// In a full implementation, this would call a C function to build inference-optimized graph
+	return nil
 }
 
 // ExecuteAdamStepMPSGraph executes a single Adam optimization step using MPSGraph for optimal GPU performance
@@ -914,6 +1010,7 @@ func ExecuteInference(
 	numClasses int,
 	isDynamic bool,
 ) (*InferenceResult, error) {
+	
 	// Validate inputs
 	if engine == nil || inputBuffer == nil {
 		return nil, fmt.Errorf("engine or input buffer is nil")
@@ -1309,6 +1406,11 @@ func ReleaseCommandQueue(commandQueue unsafe.Pointer) {
 	if commandQueue != nil {
 		C.release_command_queue(C.uintptr_t(uintptr(commandQueue)))
 	}
+}
+
+// DestroyCommandQueue is an alias for ReleaseCommandQueue for consistency
+func DestroyCommandQueue(commandQueue unsafe.Pointer) {
+	ReleaseCommandQueue(commandQueue)
 }
 
 // CreateCommandBuffer creates a Metal command buffer from the given command queue

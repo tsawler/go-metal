@@ -570,7 +570,9 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
         return YES;
         
     } @catch (NSException* exception) {
-        NSLog(@"Exception building dynamic graph: %@", exception.reason);
+        NSLog(@"❌ Exception building dynamic graph: %@", exception.reason);
+        NSLog(@"❌ Exception name: %@", exception.name);
+        NSLog(@"❌ Exception stack trace: %@", [exception callStackSymbols]);
         return NO;
     }
 }
@@ -735,7 +737,7 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
     
     // Extract BatchNorm parameters: [eps, momentum] in floats, [num_features, affine, track_running_stats, training] in ints
     if (layerSpec->param_float_count < 2 || layerSpec->param_int_count < 4) {
-        NSLog(@"BatchNorm layer missing required parameters");
+        NSLog(@"BatchNorm layer missing required parameters (need: float_count>=2, int_count>=4)");
         return nil;
     }
     
@@ -836,27 +838,67 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
                                                       epsilon:eps
                                                          name:[NSString stringWithFormat:@"batchnorm_%d", layerIdx]];
         } else {
-            // Inference mode: Use running statistics (placeholders for running mean/var)
-            // Create placeholders for running statistics - these will be managed by the training engine
+            // Inference mode: Use running statistics as constant tensors
+            // For ONNX models, running mean and variance are provided as initializers (constants)
+            // We'll create constant tensors with default values - these will be replaced with actual values
+            // from the ONNX model during the conversion process
             NSArray<NSNumber*>* statsShape = @[@(numFeatures)];
             
-            MPSGraphTensor* runningMeanTensor = [graph placeholderWithShape:statsShape
-                                                                   dataType:MPSDataTypeFloat32
-                                                                       name:[NSString stringWithFormat:@"batchnorm_%d_running_mean", layerIdx]];
+            // Create default constant data for running statistics
+            // These values will be overwritten by the actual running stats from the ONNX model
+            NSMutableData* meanData = [[NSMutableData alloc] initWithLength:numFeatures * sizeof(float)];
+            NSMutableData* varData = [[NSMutableData alloc] initWithLength:numFeatures * sizeof(float)];
             
-            MPSGraphTensor* runningVarTensor = [graph placeholderWithShape:statsShape
-                                                                  dataType:MPSDataTypeFloat32
-                                                                      name:[NSString stringWithFormat:@"batchnorm_%d_running_var", layerIdx]];
+            // Initialize with default values (mean=0, variance=1)
+            float* meanValues = (float*)meanData.mutableBytes;
+            float* varValues = (float*)varData.mutableBytes;
+            for (int i = 0; i < numFeatures; i++) {
+                meanValues[i] = 0.0f;  // Default running mean
+                varValues[i] = 1.0f;   // Default running variance
+            }
             
-            // Note: These running statistics placeholders are NOT added to allParameterPlaceholders
-            // because they are buffers managed by the training engine, not learnable parameters
+            // Create constant tensors for running statistics
+            MPSGraphTensor* runningMeanTensor = [graph constantWithData:meanData
+                                                                  shape:statsShape
+                                                               dataType:MPSDataTypeFloat32];
+            
+            MPSGraphTensor* runningVarTensor = [graph constantWithData:varData
+                                                                 shape:statsShape
+                                                              dataType:MPSDataTypeFloat32];
+            
+            // Note: These are constant tensors, not placeholders, so they don't need to be fed during execution
+            
+            // Reshape running mean and variance for proper broadcasting with 4D inputs
+            // Same reshaping logic as gamma/beta tensors
+            MPSGraphTensor* reshapedRunningMeanTensor = runningMeanTensor;
+            MPSGraphTensor* reshapedRunningVarTensor = runningVarTensor;
+            
+            if (inputShapeLen == 4) {
+                // Reshape from [C] to [1, C, 1, 1] for 4D broadcasting
+                NSArray<NSNumber*>* broadcastShape = @[@1, @(numFeatures), @1, @1];
+                reshapedRunningMeanTensor = [graph reshapeTensor:runningMeanTensor
+                                                       withShape:broadcastShape
+                                                            name:[NSString stringWithFormat:@"batchnorm_%d_running_mean_reshaped", layerIdx]];
+                reshapedRunningVarTensor = [graph reshapeTensor:runningVarTensor
+                                                      withShape:broadcastShape
+                                                           name:[NSString stringWithFormat:@"batchnorm_%d_running_var_reshaped", layerIdx]];
+            } else if (inputShapeLen == 2) {
+                // Reshape from [C] to [1, C] for 2D broadcasting
+                NSArray<NSNumber*>* broadcastShape = @[@1, @(numFeatures)];
+                reshapedRunningMeanTensor = [graph reshapeTensor:runningMeanTensor
+                                                       withShape:broadcastShape
+                                                            name:[NSString stringWithFormat:@"batchnorm_%d_running_mean_reshaped", layerIdx]];
+                reshapedRunningVarTensor = [graph reshapeTensor:runningVarTensor
+                                                      withShape:broadcastShape
+                                                           name:[NSString stringWithFormat:@"batchnorm_%d_running_var_reshaped", layerIdx]];
+            }
             
             // Use MPSGraph's built-in batch normalization with running statistics
             normalizedTensor = [graph normalizationWithTensor:input
-                                                   meanTensor:runningMeanTensor
-                                               varianceTensor:runningVarTensor
-                                                  gammaTensor:reshapedScaleTensor // Use properly shaped scale
-                                                   betaTensor:reshapedShiftTensor // Use properly shaped shift
+                                                   meanTensor:reshapedRunningMeanTensor  // Use properly shaped running mean
+                                               varianceTensor:reshapedRunningVarTensor   // Use properly shaped running variance
+                                                  gammaTensor:reshapedScaleTensor        // Use properly shaped scale
+                                                   betaTensor:reshapedShiftTensor        // Use properly shaped shift
                                                       epsilon:eps
                                                          name:[NSString stringWithFormat:@"batchnorm_%d", layerIdx]];
         }

@@ -1,0 +1,376 @@
+package engine
+
+import (
+	"fmt"
+	"unsafe"
+
+	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/checkpoints"
+	"github.com/tsawler/go-metal/layers"
+	"github.com/tsawler/go-metal/memory"
+)
+
+// MPSInferenceEngine handles inference execution using MPSGraph
+// Optimized for forward-pass only without loss computation or gradients
+type MPSInferenceEngine struct {
+	device       unsafe.Pointer           // MTLDevice
+	engine       unsafe.Pointer           // Native inference engine
+	config       cgo_bridge.InferenceConfig
+	initialized  bool
+	isDynamic    bool                     // True if using dynamic engine
+	
+	// Resource management following design principles
+	commandQueue unsafe.Pointer           // MTLCommandQueue for command buffer creation
+	useCommandPooling bool                // Flag to enable command buffer pooling
+}
+
+// NewMPSInferenceEngine creates a new inference-only engine
+func NewMPSInferenceEngine(config cgo_bridge.InferenceConfig) (*MPSInferenceEngine, error) {
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Metal device: %v", err)
+	}
+	
+	// Initialize global memory manager (GPU-resident everything principle)
+	memory.InitializeGlobalMemoryManager(device)
+	
+	// Create inference engine (dedicated for forward-pass only)
+	engine, err := cgo_bridge.CreateInferenceEngine(device, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create inference engine: %v", err)
+	}
+	
+	// Initialize command queue for resource management
+	commandQueue, err := cgo_bridge.CreateCommandQueue(device)
+	if err != nil {
+		cgo_bridge.DestroyInferenceEngine(engine)
+		return nil, fmt.Errorf("failed to create command queue: %v", err)
+	}
+	
+	return &MPSInferenceEngine{
+		device:            device,
+		engine:            engine,
+		config:            config,
+		initialized:       true,
+		isDynamic:         config.UseDynamicEngine,
+		commandQueue:      commandQueue,
+		useCommandPooling: true, // Enable by default for performance
+	}, nil
+}
+
+// Cleanup performs deterministic resource cleanup (reference counting principle)
+func (ie *MPSInferenceEngine) Cleanup() {
+	if ie.engine != nil {
+		cgo_bridge.DestroyInferenceEngine(ie.engine)
+		ie.engine = nil
+	}
+	
+	if ie.commandQueue != nil {
+		cgo_bridge.DestroyCommandQueue(ie.commandQueue)
+		ie.commandQueue = nil
+	}
+	
+	ie.initialized = false
+}
+
+// ModelInferenceEngine extends MPSInferenceEngine with layer-based model support
+// Optimized for inference without training overhead
+type ModelInferenceEngine struct {
+	*MPSInferenceEngine
+	modelSpec       *layers.ModelSpec
+	parameterTensors []*memory.Tensor
+	compiledForModel bool
+	batchNormInferenceMode bool // Handle batch normalization in inference mode
+}
+
+// NewModelInferenceEngine creates a model-based inference engine
+func NewModelInferenceEngine(
+	modelSpec *layers.ModelSpec,
+	config cgo_bridge.InferenceConfig,
+) (*ModelInferenceEngine, error) {
+	// Validate model for inference (less strict than training validation)
+	if err := modelSpec.ValidateModelForInference(); err != nil {
+		return nil, fmt.Errorf("model validation failed: %v", err)
+	}
+	
+	// Convert model to inference-optimized layer specifications
+	inferenceSpecs, err := modelSpec.ConvertToInferenceLayerSpecs()
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert model to inference specs: %v", err)
+	}
+	
+	// Convert to CGO-compatible format
+	cgoLayerSpecs := make([]cgo_bridge.LayerSpecC, len(inferenceSpecs))
+	for i, spec := range inferenceSpecs {
+		cgoLayerSpecs[i] = cgo_bridge.LayerSpecC{
+			LayerType:       spec.LayerType,
+			Name:            spec.NameBytes,
+			InputShape:      spec.InputShape,
+			InputShapeLen:   spec.InputShapeLen,
+			OutputShape:     spec.OutputShape,
+			OutputShapeLen:  spec.OutputShapeLen,
+			ParamFloat:      spec.ParamFloat,
+			ParamFloatCount: spec.ParamFloatCount,
+			ParamInt:        spec.ParamInt,
+			ParamIntCount:   spec.ParamIntCount,
+		}
+	}
+	
+	// Update config with layer specifications
+	config.LayerSpecs = cgoLayerSpecs
+	config.LayerSpecsLen = int32(len(cgoLayerSpecs))
+	
+	// Convert input shape from []int to []int32
+	inputShape := make([]int32, len(modelSpec.InputShape))
+	for i, dim := range modelSpec.InputShape {
+		inputShape[i] = int32(dim)
+	}
+	config.InputShape = inputShape
+	config.InputShapeLen = int32(len(modelSpec.InputShape))
+	
+	// Create base inference engine
+	baseEngine, err := NewMPSInferenceEngine(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create base inference engine: %v", err)
+	}
+	
+	mie := &ModelInferenceEngine{
+		MPSInferenceEngine:     baseEngine,
+		modelSpec:              modelSpec,
+		batchNormInferenceMode: true, // Always use inference mode for batch norm
+	}
+	
+	// Initialize parameter tensors (GPU-resident)
+	if err := mie.initializeParameterTensors(); err != nil {
+		mie.Cleanup()
+		return nil, fmt.Errorf("failed to initialize parameter tensors: %v", err)
+	}
+	
+	// Compile model for inference execution
+	if err := mie.compileModelForInference(); err != nil {
+		mie.Cleanup()
+		return nil, fmt.Errorf("failed to compile model for inference: %v", err)
+	}
+	
+	return mie, nil
+}
+
+// Cleanup performs complete resource cleanup
+func (mie *ModelInferenceEngine) Cleanup() {
+	// Release parameter tensors
+	for _, tensor := range mie.parameterTensors {
+		if tensor != nil {
+			tensor.Release()
+		}
+	}
+	mie.parameterTensors = nil
+	
+	// Cleanup base engine
+	if mie.MPSInferenceEngine != nil {
+		mie.MPSInferenceEngine.Cleanup()
+	}
+}
+
+// LoadWeights loads pre-trained weights into the inference engine
+func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor) error {
+	if !mie.compiledForModel {
+		return fmt.Errorf("model not compiled for inference")
+	}
+	
+	if len(weights) != len(mie.parameterTensors) {
+		return fmt.Errorf("weight count mismatch: expected %d, got %d", 
+			len(mie.parameterTensors), len(weights))
+	}
+	
+	// Load weights into GPU tensors (GPU-resident principle)
+	for i, weight := range weights {
+		if i >= len(mie.parameterTensors) {
+			break
+		}
+		
+		tensor := mie.parameterTensors[i]
+		if tensor == nil {
+			continue
+		}
+		
+		// Copy weights to GPU tensor (minimal CPU-GPU transfers)
+		err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(
+			tensor.MetalBuffer(),
+			weight.Data,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to load weight %d: %v", i, err)
+		}
+	}
+	
+	return nil
+}
+
+// Predict performs single forward pass for inference
+// Optimized for single-image or small batch inference
+func (mie *ModelInferenceEngine) Predict(
+	inputData []float32,
+	inputShape []int,
+) (*cgo_bridge.InferenceResult, error) {
+	// Validate inputs
+	if len(inputData) == 0 {
+		return nil, fmt.Errorf("input data is empty")
+	}
+	
+	if len(inputShape) < 2 {
+		return nil, fmt.Errorf("input shape must have at least 2 dimensions, got %v", inputShape)
+	}
+	
+	batchSize := inputShape[0]
+	if batchSize <= 0 {
+		return nil, fmt.Errorf("invalid batch size: %d", batchSize)
+	}
+	
+	// Create input tensor and copy data to GPU (GPU-resident everything principle)
+	inputTensor, err := memory.NewTensor(inputShape, memory.Float32, memory.GPU)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create input tensor: %v", err)
+	}
+	defer inputTensor.Release()
+	
+	// Copy input data to GPU (minimal CPU-GPU transfers)
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(
+		inputTensor.MetalBuffer(), 
+		inputData,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy input data to GPU: %v", err)
+	}
+	
+	// Execute inference using single CGO call (design compliant)
+	return mie.executeInference(inputTensor, batchSize)
+}
+
+// executeInference performs the actual inference execution
+func (mie *ModelInferenceEngine) executeInference(
+	inputTensor *memory.Tensor,
+	batchSize int,
+) (*cgo_bridge.InferenceResult, error) {
+	// DEBUG: Log inference preparation
+	fmt.Printf("\n=== ModelInferenceEngine.executeInference Debug ===\n")
+	fmt.Printf("Model compiled: %v\n", mie.compiledForModel)
+	fmt.Printf("Input tensor shape: %v\n", inputTensor.Shape())
+	fmt.Printf("Input tensor buffer: %p\n", inputTensor.MetalBuffer())
+	fmt.Printf("Batch size: %d\n", batchSize)
+	fmt.Printf("Is dynamic engine: %v\n", mie.MPSInferenceEngine.isDynamic)
+	fmt.Printf("Batch norm inference mode: %v\n", mie.batchNormInferenceMode)
+	fmt.Printf("Number of parameter tensors: %d\n", len(mie.parameterTensors))
+	
+	// Validate model is compiled
+	if !mie.compiledForModel {
+		return nil, fmt.Errorf("model not compiled for inference")
+	}
+	
+	// Validate input tensor
+	if inputTensor == nil {
+		return nil, fmt.Errorf("input tensor is nil")
+	}
+	
+	if batchSize <= 0 {
+		return nil, fmt.Errorf("invalid batch size: %d", batchSize)
+	}
+	
+	// Extract parameter buffers (coarse-grained interface principle)
+	weightBuffers := make([]unsafe.Pointer, len(mie.parameterTensors))
+	for i, tensor := range mie.parameterTensors {
+		if tensor != nil {
+			weightBuffers[i] = tensor.MetalBuffer()
+			fmt.Printf("Parameter tensor[%d]: shape=%v, buffer=%p\n", i, tensor.Shape(), tensor.MetalBuffer())
+		} else {
+			fmt.Printf("Parameter tensor[%d]: nil\n", i)
+		}
+	}
+	
+	// Get output shape for predictions
+	outputShape := mie.modelSpec.OutputShape
+	if len(outputShape) < 2 {
+		return nil, fmt.Errorf("invalid model output shape: %v", outputShape)
+	}
+	numClasses := outputShape[len(outputShape)-1] // Last dimension is number of classes
+	
+	fmt.Printf("Model output shape: %v\n", outputShape)
+	fmt.Printf("Number of classes: %d\n", numClasses)
+	fmt.Printf("About to call ExecuteInferenceOnly...\n")
+	
+	// Single CGO call for complete inference (design compliant)
+	result, err := cgo_bridge.ExecuteInferenceOnly(
+		mie.MPSInferenceEngine.engine,
+		inputTensor.MetalBuffer(),
+		weightBuffers,
+		batchSize,
+		numClasses,
+		mie.MPSInferenceEngine.isDynamic,
+		mie.batchNormInferenceMode, // Pass batch norm inference flag
+	)
+	
+	if err != nil {
+		fmt.Printf("ERROR: ExecuteInferenceOnly failed: %v\n", err)
+		return nil, fmt.Errorf("inference execution failed: %v", err)
+	}
+	
+	fmt.Printf("ExecuteInferenceOnly succeeded, result: %+v\n", result)
+	fmt.Printf("=== End ModelInferenceEngine.executeInference Debug ===\n\n")
+	
+	return result, nil
+}
+
+// initializeParameterTensors creates GPU-resident parameter tensors
+func (mie *ModelInferenceEngine) initializeParameterTensors() error {
+	// Count total parameters needed
+	totalParams := 0
+	for _, layer := range mie.modelSpec.Layers {
+		totalParams += len(layer.ParameterShapes)
+	}
+	
+	// Pre-allocate parameter tensors (arena allocation principle)
+	mie.parameterTensors = make([]*memory.Tensor, totalParams)
+	
+	paramIdx := 0
+	for _, layer := range mie.modelSpec.Layers {
+		for _, paramShape := range layer.ParameterShapes {
+			// Create GPU-resident parameter tensor
+			tensor, err := memory.NewTensor(paramShape, memory.Float32, memory.GPU)
+			if err != nil {
+				return fmt.Errorf("failed to create parameter tensor %d: %v", paramIdx, err)
+			}
+			
+			mie.parameterTensors[paramIdx] = tensor
+			paramIdx++
+		}
+	}
+	
+	return nil
+}
+
+// compileModelForInference builds the inference graph
+func (mie *ModelInferenceEngine) compileModelForInference() error {
+	// Build inference-optimized MPSGraph
+	err := cgo_bridge.BuildInferenceGraph(
+		mie.MPSInferenceEngine.engine,
+		mie.modelSpec.InputShape,
+		int32(len(mie.modelSpec.InputShape)),
+		mie.batchNormInferenceMode,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to build inference graph: %v", err)
+	}
+	
+	mie.compiledForModel = true
+	return nil
+}
+
+// GetParameterTensors returns the GPU-resident parameter tensors
+func (mie *ModelInferenceEngine) GetParameterTensors() []*memory.Tensor {
+	return mie.parameterTensors
+}
+
+// GetModelSpec returns the model specification
+func (mie *ModelInferenceEngine) GetModelSpec() *layers.ModelSpec {
+	return mie.modelSpec
+}

@@ -81,6 +81,7 @@ func NewModelTrainer(
 	// Choose engine type based on configuration
 	if config.UseDynamicEngine {
 		// Use new dynamic engine for any architecture
+		fmt.Printf("🔧 Creating dynamic engine (UseDynamicEngine=true)\n")
 		modelEngine, err = engine.NewModelTrainingEngineDynamic(modelSpec, bridgeConfig)
 	} else if config.OptimizerType == cgo_bridge.Adam {
 		// Create with Adam optimizer (legacy hybrid approach)
@@ -101,6 +102,9 @@ func NewModelTrainer(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create model training engine: %v", err)
 	}
+	
+	// Debug: Show which engine type was actually created
+	fmt.Printf("✅ Created engine: isDynamic=%t\n", modelEngine.IsDynamicEngine())
 	
 	// RESOURCE LEAK FIX: Initialize command buffer pool for Metal resource management
 	// This prevents MTLCommandBuffer and MPSImage accumulation that causes 34% performance degradation
@@ -1137,4 +1141,15 @@ func (mt *ModelTrainer) SetOptimizerState(state interface{}) error {
 	// For now, return an error as optimizer state restoration is not implemented
 	// This would need to be implemented based on the specific optimizer being used
 	return fmt.Errorf("optimizer state restoration not yet implemented")
+}
+
+// Predict provides a lightweight inference method for backward compatibility
+// For optimal inference performance, use ModelInferencer instead
+func (mt *ModelTrainer) Predict(
+	inputData []float32,
+	inputShape []int,
+) (*cgo_bridge.InferenceResult, error) {
+	// Use the existing InferBatch method for compatibility
+	// This maintains the proven single-CGO-call architecture
+	return mt.InferBatch(inputData, inputShape)
 }

@@ -239,6 +239,7 @@ type TrainerConfig struct {
 	// Training behavior
 	UseHybridEngine  bool `json:"use_hybrid_engine"`  // Use hybrid MPS/MPSGraph (recommended: true)
 	UseDynamicEngine bool `json:"use_dynamic_engine"` // Use dynamic graph creation for any architecture (recommended: true)
+	InferenceOnly    bool `json:"inference_only"`     // Skip training setup, optimize for inference (forward-pass only)
 }
 
 // OptimizerConfig provides optimizer-specific configurations

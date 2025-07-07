@@ -614,6 +614,234 @@ func (ms *ModelSpec) ValidateModelForTrainingEngine() error {
 	return nil
 }
 
+// ValidateModelForInference checks if model is compatible with InferenceEngine
+// More lenient than training validation - supports Dense-only models
+func (ms *ModelSpec) ValidateModelForInference() error {
+	if !ms.Compiled {
+		return fmt.Errorf("model not compiled")
+	}
+
+	if len(ms.Layers) == 0 {
+		return fmt.Errorf("empty model")
+	}
+
+	// Check input shape compatibility (support both 2D and 4D)
+	if len(ms.InputShape) < 2 {
+		return fmt.Errorf("InferenceEngine requires at least 2D input [batch, features]")
+	}
+
+	// Must have at least one Dense layer for classification output
+	hasDense := false
+	for _, layer := range ms.Layers {
+		if layer.Type == Dense {
+			hasDense = true
+			break
+		}
+	}
+
+	if !hasDense {
+		return fmt.Errorf("InferenceEngine requires at least one Dense layer for output")
+	}
+
+	return nil
+}
+
+// ConvertToInferenceLayerSpecs converts ModelSpec to inference-optimized layer specifications
+func (ms *ModelSpec) ConvertToInferenceLayerSpecs() ([]DynamicLayerSpec, error) {
+	if err := ms.ValidateModelForInference(); err != nil {
+		return nil, fmt.Errorf("model validation failed: %v", err)
+	}
+
+	// Convert layers to inference-optimized specifications
+	specs := make([]DynamicLayerSpec, len(ms.Layers))
+	
+	for i, layer := range ms.Layers {
+		spec := DynamicLayerSpec{
+			LayerType:       int32(layer.Type),
+			InputShape:      convertIntSliceToInt32Array(layer.InputShape),
+			InputShapeLen:   int32(len(layer.InputShape)),
+			OutputShape:     convertIntSliceToInt32Array(layer.OutputShape),
+			OutputShapeLen:  int32(len(layer.OutputShape)),
+		}
+		
+		// Copy layer name
+		nameBytes := [64]byte{}
+		copy(nameBytes[:], []byte(layer.Name))
+		spec.NameBytes = nameBytes
+		
+		// Copy parameters for inference
+		if layer.Parameters != nil {
+			// Convert layer-specific parameters
+			switch layer.Type {
+			case Dense:
+				if inputSize, ok := layer.Parameters["input_size"].(int); ok {
+					spec.ParamInt[0] = int32(inputSize)
+					spec.ParamIntCount++
+				}
+				if outputSize, ok := layer.Parameters["output_size"].(int); ok {
+					spec.ParamInt[1] = int32(outputSize)
+					spec.ParamIntCount++
+				}
+				if useBias, ok := layer.Parameters["use_bias"].(bool); ok {
+					if useBias {
+						spec.ParamInt[2] = 1
+					} else {
+						spec.ParamInt[2] = 0
+					}
+					spec.ParamIntCount++
+				}
+				
+			case Conv2D:
+				// JSON numbers are often decoded as float64, so try both int and float64
+				// Check for input_channels/in_channels
+				if inChannels, ok := layer.Parameters["input_channels"].(int); ok {
+					spec.ParamInt[0] = int32(inChannels)
+					spec.ParamIntCount++
+				} else if inChannels, ok := layer.Parameters["in_channels"].(int); ok {
+					spec.ParamInt[0] = int32(inChannels)
+					spec.ParamIntCount++
+				} else if inChannelsFloat, ok := layer.Parameters["input_channels"].(float64); ok {
+					spec.ParamInt[0] = int32(inChannelsFloat)
+					spec.ParamIntCount++
+				} else if inChannelsFloat, ok := layer.Parameters["in_channels"].(float64); ok {
+					spec.ParamInt[0] = int32(inChannelsFloat)
+					spec.ParamIntCount++
+				}
+				
+				// Check for output_channels/out_channels
+				if outChannels, ok := layer.Parameters["output_channels"].(int); ok {
+					spec.ParamInt[1] = int32(outChannels)
+					spec.ParamIntCount++
+				} else if outChannels, ok := layer.Parameters["out_channels"].(int); ok {
+					spec.ParamInt[1] = int32(outChannels)
+					spec.ParamIntCount++
+				} else if outChannelsFloat, ok := layer.Parameters["output_channels"].(float64); ok {
+					spec.ParamInt[1] = int32(outChannelsFloat)
+					spec.ParamIntCount++
+				} else if outChannelsFloat, ok := layer.Parameters["out_channels"].(float64); ok {
+					spec.ParamInt[1] = int32(outChannelsFloat)
+					spec.ParamIntCount++
+				}
+				
+				if kernelSize, ok := layer.Parameters["kernel_size"].(int); ok {
+					spec.ParamInt[2] = int32(kernelSize)
+					spec.ParamIntCount++
+				} else if kernelSizeFloat, ok := layer.Parameters["kernel_size"].(float64); ok {
+					spec.ParamInt[2] = int32(kernelSizeFloat)
+					spec.ParamIntCount++
+				}
+				
+				if stride, ok := layer.Parameters["stride"].(int); ok {
+					spec.ParamInt[3] = int32(stride)
+					spec.ParamIntCount++
+				} else if strideFloat, ok := layer.Parameters["stride"].(float64); ok {
+					spec.ParamInt[3] = int32(strideFloat)
+					spec.ParamIntCount++
+				}
+				
+				if padding, ok := layer.Parameters["padding"].(int); ok {
+					spec.ParamInt[4] = int32(padding)
+					spec.ParamIntCount++
+				} else if paddingFloat, ok := layer.Parameters["padding"].(float64); ok {
+					spec.ParamInt[4] = int32(paddingFloat)
+					spec.ParamIntCount++
+				}
+				
+				// Handle use_bias
+				if useBias, ok := layer.Parameters["use_bias"].(bool); ok {
+					if useBias {
+						spec.ParamInt[5] = 1
+					} else {
+						spec.ParamInt[5] = 0
+					}
+					spec.ParamIntCount++
+				}
+			
+			case BatchNorm:
+				// Handle num_features
+				if numFeatures, ok := layer.Parameters["num_features"].(int); ok {
+					spec.ParamInt[0] = int32(numFeatures)
+					spec.ParamIntCount++
+				} else if numFeaturesFloat, ok := layer.Parameters["num_features"].(float64); ok {
+					spec.ParamInt[0] = int32(numFeaturesFloat)
+					spec.ParamIntCount++
+				}
+				
+				// Handle eps (epsilon) - check both float32 and float64
+				if eps, ok := layer.Parameters["eps"].(float32); ok {
+					spec.ParamFloat[0] = eps
+					spec.ParamFloatCount++
+				} else if eps, ok := layer.Parameters["epsilon"].(float32); ok {
+					spec.ParamFloat[0] = eps
+					spec.ParamFloatCount++
+				} else if eps, ok := layer.Parameters["eps"].(float64); ok {
+					spec.ParamFloat[0] = float32(eps)
+					spec.ParamFloatCount++
+				} else if eps, ok := layer.Parameters["epsilon"].(float64); ok {
+					spec.ParamFloat[0] = float32(eps)
+					spec.ParamFloatCount++
+				}
+				
+				// Handle momentum - check both float32 and float64
+				if momentum, ok := layer.Parameters["momentum"].(float32); ok {
+					spec.ParamFloat[1] = momentum
+					spec.ParamFloatCount++
+				} else if momentum, ok := layer.Parameters["momentum"].(float64); ok {
+					spec.ParamFloat[1] = float32(momentum)
+					spec.ParamFloatCount++
+				}
+				
+				// Handle affine flag
+				if affine, ok := layer.Parameters["affine"].(bool); ok {
+					if affine {
+						spec.ParamInt[1] = 1
+					} else {
+						spec.ParamInt[1] = 0
+					}
+					spec.ParamIntCount++
+				}
+				
+				// Handle track_running_stats flag
+				if trackRunningStats, ok := layer.Parameters["track_running_stats"].(bool); ok {
+					if trackRunningStats {
+						spec.ParamInt[2] = 1
+					} else {
+						spec.ParamInt[2] = 0
+					}
+					spec.ParamIntCount++
+				}
+				
+				// For inference, set training=false regardless of stored value
+				spec.ParamInt[3] = 0 // training = false for inference
+				spec.ParamIntCount++
+				
+			case LeakyReLU:
+				if negativeSlope, ok := layer.Parameters["negative_slope"].(float64); ok {
+					spec.ParamFloat[0] = float32(negativeSlope)
+					spec.ParamFloatCount++
+				} else {
+					// Default negative slope
+					spec.ParamFloat[0] = 0.01
+					spec.ParamFloatCount++
+				}
+				
+			case Dropout:
+				if dropRate, ok := layer.Parameters["drop_rate"].(float64); ok {
+					spec.ParamFloat[0] = float32(dropRate)
+					spec.ParamFloatCount++
+				}
+				// For inference, dropout is disabled (rate = 0.0)
+				spec.ParamFloat[0] = 0.0
+				spec.ParamFloatCount = 1
+			}
+		}
+		
+		specs[i] = spec
+	}
+	
+	return specs, nil
+}
+
 // GetTrainingEngineConfig generates configuration for the existing TrainingEngine
 // This bridges the new layer system with the proven high-performance engine
 func (ms *ModelSpec) GetTrainingEngineConfig() (map[string]interface{}, error) {
@@ -971,6 +1199,15 @@ func boolToInt32(b bool) int32 {
 }
 
 // ConvertToCGOLayerSpecs converts DynamicLayerSpec array to CGO-compatible format
+// convertIntSliceToInt32Array converts []int to [4]int32 for CGO compatibility
+func convertIntSliceToInt32Array(slice []int) [4]int32 {
+	var arr [4]int32
+	for i := 0; i < len(slice) && i < 4; i++ {
+		arr[i] = int32(slice[i])
+	}
+	return arr
+}
+
 func ConvertToCGOLayerSpecs(dynamicSpecs []DynamicLayerSpec) []interface{} {
 	// We need to import the cgo_bridge package to use LayerSpecC
 	// For now, return interface{} and handle conversion in the engine

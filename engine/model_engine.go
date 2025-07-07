@@ -1279,7 +1279,7 @@ func (mte *ModelTrainingEngine) ExecuteInference(
 	
 	// Extract parameters based on engine type
 	var weightBuffers []unsafe.Pointer
-	if mte.MPSTrainingEngine.isDynamic {
+	if mte.isDynamicEngine {
 		// Dynamic engines need ALL parameters in order
 		allParameters := mte.getAllParameterTensors()
 		if len(allParameters) == 0 {
@@ -1323,7 +1323,7 @@ func (mte *ModelTrainingEngine) ExecuteInference(
 		weightBuffers,
 		batchSize,
 		numClasses,
-		mte.MPSTrainingEngine.isDynamic, // Pass dynamic engine flag
+		mte.isDynamicEngine, // Pass correct dynamic engine flag
 	)
 	
 	if err != nil {
