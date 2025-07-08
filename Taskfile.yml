@@ -35,10 +35,22 @@ tasks:
       - task: docs-optimizer
       - task: docs-training
       - task: docs-layers
-      - task: docs-vision
+      - task: docs-vision-dataloader
+      - task: docs-vision-dataset
+      - task: docs-vision-preprocessing
 
-  docs-vision:
-    dir: ./vision
+  docs-vision-dataloader:
+    dir: ./vision/dataloader
+    cmds:
+      - godocdown -output docs.md
+
+  docs-vision-dataset:
+    dir: ./vision/dataset
+    cmds:
+      - godocdown -output docs.md
+
+  docs-vision-preprocessing:
+    dir: ./vision/preprocessing
     cmds:
       - godocdown -output docs.md
 
