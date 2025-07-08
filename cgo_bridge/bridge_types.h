@@ -19,6 +19,12 @@ typedef struct {
     float param_float[8];    // Float parameters (e.g., dropout_rate)
     int param_int_count;     // Number of valid int parameters
     int param_float_count;   // Number of valid float parameters
+    
+    // Running statistics for layers like BatchNorm (non-learnable parameters)
+    float* running_mean;     // Running mean data
+    float* running_var;      // Running variance data
+    int running_stats_size;  // Size of running statistics arrays
+    int has_running_stats;   // Boolean flag indicating if running stats are available
 } layer_spec_c_t;
 
 // Model configuration structure for dynamic dimensions

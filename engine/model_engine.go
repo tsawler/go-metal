@@ -12,6 +12,14 @@ import (
 	"github.com/tsawler/go-metal/optimizer"
 )
 
+// Helper function to convert bool to int32
+func boolToInt32(b bool) int32 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // ModelTrainingEngine extends the existing MPSTrainingEngine with layer-based model support
 // This maintains the proven single-CGO-call architecture while adding layer abstraction
 type ModelTrainingEngine struct {
@@ -54,6 +62,11 @@ func NewModelTrainingEngineDynamic(
 			ParamFloat:      spec.ParamFloat,
 			ParamIntCount:   spec.ParamIntCount,
 			ParamFloatCount: spec.ParamFloatCount,
+			// ARCHITECTURAL FIX: Copy running statistics from DynamicLayerSpec
+			RunningMean:     spec.RunningMean,
+			RunningVar:      spec.RunningVar,
+			RunningStatsSize: int32(len(spec.RunningMean)),
+			HasRunningStats:  boolToInt32(spec.HasRunningStats),
 		}
 	}
 	

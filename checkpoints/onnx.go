@@ -990,6 +990,11 @@ func (oi *ONNXImporter) convertBatchNormNode(node *NodeProto, weightMap map[stri
 			"track_running_stats": true, // Always true since we have running stats
 			"training":     false, // INFERENCE MODE: Use pre-trained running stats, not batch stats
 		},
+		// ARCHITECTURAL FIX: Embed running statistics in LayerSpec for graph construction
+		RunningStatistics: map[string][]float32{
+			"running_mean": runningMeanData,
+			"running_var":  runningVarData,
+		},
 	}
 	
 	return layerSpec, layerWeights, nil

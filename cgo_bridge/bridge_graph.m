@@ -864,15 +864,26 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
             
             // UNIFIED SOLUTION: Use constants with default values for inference mode
             // This avoids MPSGraph placeholder issues during inference execution
-            // Default values: mean=0, variance=1 (standard normalized values)
+            
+            // ARCHITECTURAL FIX: Use actual running statistics from layer specification
+            // This fixes the limitation where inference mode used ONNX defaults instead of trained values
             
             // Create NSData from float arrays for MPSGraph constants
             float* meanData = (float*)malloc(numFeatures * sizeof(float));
             float* varData = (float*)malloc(numFeatures * sizeof(float));
             
-            for (int i = 0; i < numFeatures; i++) {
-                meanData[i] = 0.0f;  // Running mean = 0
-                varData[i] = 1.0f;   // Running variance = 1
+            if (layerSpec->has_running_stats && layerSpec->running_mean && layerSpec->running_var) {
+                // Use actual trained running statistics from the model
+                for (int i = 0; i < numFeatures && i < layerSpec->running_stats_size; i++) {
+                    meanData[i] = layerSpec->running_mean[i];
+                    varData[i] = layerSpec->running_var[i];
+                }
+            } else {
+                // Fallback to ONNX standard defaults if running stats not available
+                for (int i = 0; i < numFeatures; i++) {
+                    meanData[i] = 0.0f;  // ONNX standard default: Running mean = 0
+                    varData[i] = 1.0f;   // ONNX standard default: Running variance = 1
+                }
             }
             
             NSData* meanNSData = [NSData dataWithBytes:meanData length:numFeatures * sizeof(float)];
@@ -980,13 +991,25 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
             
             // UNIFIED SOLUTION: Use constants for non-affine inference mode as well
             
+            // ARCHITECTURAL FIX: Use actual running statistics for non-affine BatchNorm too
+            // This fixes the same limitation as the affine case above
+            
             // Create NSData from float arrays for MPSGraph constants (non-affine case)
             float* meanData = (float*)malloc(numFeatures * sizeof(float));
             float* varData = (float*)malloc(numFeatures * sizeof(float));
             
-            for (int i = 0; i < numFeatures; i++) {
-                meanData[i] = 0.0f;  // Running mean = 0
-                varData[i] = 1.0f;   // Running variance = 1
+            if (layerSpec->has_running_stats && layerSpec->running_mean && layerSpec->running_var) {
+                // Use actual trained running statistics from the model
+                for (int i = 0; i < numFeatures && i < layerSpec->running_stats_size; i++) {
+                    meanData[i] = layerSpec->running_mean[i];
+                    varData[i] = layerSpec->running_var[i];
+                }
+            } else {
+                // Fallback to ONNX standard defaults if running stats not available
+                for (int i = 0; i < numFeatures; i++) {
+                    meanData[i] = 0.0f;  // ONNX standard default: Running mean = 0
+                    varData[i] = 1.0f;   // ONNX standard default: Running variance = 1
+                }
             }
             
             NSData* meanNSData = [NSData dataWithBytes:meanData length:numFeatures * sizeof(float)];

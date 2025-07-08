@@ -218,6 +218,12 @@ typedef struct {
     float param_float[8];    // Float parameters (e.g., dropout_rate)
     int param_int_count;     // Number of valid int parameters
     int param_float_count;   // Number of valid float parameters
+    
+    // Running statistics for layers like BatchNorm (non-learnable parameters)
+    float* running_mean;     // Running mean data
+    float* running_var;      // Running variance data
+    int running_stats_size;  // Size of running statistics arrays
+    int has_running_stats;   // Boolean flag indicating if running stats are available
 } layer_spec_c_t;
 
 uintptr_t create_training_engine_dynamic(
@@ -1083,6 +1089,11 @@ type LayerSpecC struct {
 	ParamFloat      [8]float32
 	ParamIntCount   int32
 	ParamFloatCount int32
+	// Running statistics for layers like BatchNorm (non-learnable parameters)
+	RunningMean     []float32
+	RunningVar      []float32
+	RunningStatsSize int32
+	HasRunningStats  int32 // Boolean flag (0 or 1)
 }
 
 // CreateTrainingEngineDynamic creates a training engine with dynamic graph from model specification
@@ -1119,6 +1130,8 @@ func CreateTrainingEngineDynamic(
 			output_shape_len:  C.int(spec.OutputShapeLen),
 			param_int_count:   C.int(spec.ParamIntCount),
 			param_float_count: C.int(spec.ParamFloatCount),
+			running_stats_size: C.int(spec.RunningStatsSize),
+			has_running_stats:  C.int(spec.HasRunningStats),
 		}
 
 		// Copy name (null-terminated string)
@@ -1146,6 +1159,26 @@ func CreateTrainingEngineDynamic(
 		}
 		for j := 0; j < int(spec.ParamFloatCount) && j < 8; j++ {
 			cLayerSpecs[i].param_float[j] = C.float(spec.ParamFloat[j])
+		}
+		
+		// ARCHITECTURAL FIX: Copy running statistics if available
+		if spec.HasRunningStats == 1 && len(spec.RunningMean) > 0 && len(spec.RunningVar) > 0 {
+			// Allocate C arrays for running statistics
+			cLayerSpecs[i].running_mean = (*C.float)(C.calloc(C.size_t(len(spec.RunningMean)), C.sizeof_float))
+			cLayerSpecs[i].running_var = (*C.float)(C.calloc(C.size_t(len(spec.RunningVar)), C.sizeof_float))
+			
+			// Copy running mean data
+			for j := 0; j < len(spec.RunningMean); j++ {
+				*(*C.float)(unsafe.Pointer(uintptr(unsafe.Pointer(cLayerSpecs[i].running_mean)) + uintptr(j)*unsafe.Sizeof(C.float(0)))) = C.float(spec.RunningMean[j])
+			}
+			
+			// Copy running variance data
+			for j := 0; j < len(spec.RunningVar); j++ {
+				*(*C.float)(unsafe.Pointer(uintptr(unsafe.Pointer(cLayerSpecs[i].running_var)) + uintptr(j)*unsafe.Sizeof(C.float(0)))) = C.float(spec.RunningVar[j])
+			}
+		} else {
+			cLayerSpecs[i].running_mean = nil
+			cLayerSpecs[i].running_var = nil
 		}
 	}
 

@@ -57,6 +57,10 @@ type LayerSpec struct {
 	// Parameter metadata (computed during model compilation)
 	ParameterShapes [][]int `json:"parameter_shapes,omitempty"`
 	ParameterCount  int64   `json:"parameter_count,omitempty"`
+
+	// Non-learnable parameters (e.g., BatchNorm running statistics)
+	// These are used during graph construction but not counted as learnable parameters
+	RunningStatistics map[string][]float32 `json:"running_statistics,omitempty"`
 }
 
 // ModelSpec defines a complete neural network model as layer configuration
@@ -1149,6 +1153,17 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamInt[3] = boolToInt32(training)
 			spec.ParamFloatCount = 2
 			spec.ParamIntCount = 4
+			
+			// ARCHITECTURAL FIX: Extract running statistics from LayerSpec for graph construction
+			if layer.RunningStatistics != nil {
+				if runningMean, exists := layer.RunningStatistics["running_mean"]; exists {
+					spec.RunningMean = runningMean
+				}
+				if runningVar, exists := layer.RunningStatistics["running_var"]; exists {
+					spec.RunningVar = runningVar
+				}
+				spec.HasRunningStats = true
+			}
 			// Shape unchanged for BatchNorm
 
 		default:
@@ -1176,6 +1191,10 @@ type DynamicLayerSpec struct {
 	ParamFloat      [8]float32
 	ParamIntCount   int32
 	ParamFloatCount int32
+	// Running statistics for layers like BatchNorm (non-learnable parameters)
+	RunningMean     []float32
+	RunningVar      []float32
+	HasRunningStats bool
 }
 
 // Helper functions
