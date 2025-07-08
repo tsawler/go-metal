@@ -34,6 +34,12 @@ tasks:
       - task: docs-memory
       - task: docs-optimizer
       - task: docs-training
+      - task: docs-layers
+
+  docs-layers:
+    dir: ./layers
+    cmds:
+      - godocdown -output docs.md
 
   docs-async:
     dir: ./async

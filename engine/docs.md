@@ -97,6 +97,30 @@ type BatchedTrainingResult struct {
 BatchedTrainingResult represents the result of an optimized batched training
 step
 
+#### type MPSInferenceEngine
+
+```go
+type MPSInferenceEngine struct {
+}
+```
+
+MPSInferenceEngine handles inference execution using MPSGraph Optimized for
+forward-pass only without loss computation or gradients
+
+#### func  NewMPSInferenceEngine
+
+```go
+func NewMPSInferenceEngine(config cgo_bridge.InferenceConfig) (*MPSInferenceEngine, error)
+```
+NewMPSInferenceEngine creates a new inference-only engine
+
+#### func (*MPSInferenceEngine) Cleanup
+
+```go
+func (ie *MPSInferenceEngine) Cleanup()
+```
+Cleanup performs deterministic resource cleanup (reference counting principle)
+
 #### type MPSTrainingEngine
 
 ```go
@@ -234,6 +258,66 @@ GetDevice returns the Metal device
 func (e *MPSTrainingEngine) UpdateAdamLearningRate(newLR float32) error
 ```
 UpdateAdamLearningRate updates the Adam optimizer learning rate
+
+#### type ModelInferenceEngine
+
+```go
+type ModelInferenceEngine struct {
+	*MPSInferenceEngine
+}
+```
+
+ModelInferenceEngine extends MPSInferenceEngine with layer-based model support
+Optimized for inference without training overhead
+
+#### func  NewModelInferenceEngine
+
+```go
+func NewModelInferenceEngine(
+	modelSpec *layers.ModelSpec,
+	config cgo_bridge.InferenceConfig,
+) (*ModelInferenceEngine, error)
+```
+NewModelInferenceEngine creates a model-based inference engine
+
+#### func (*ModelInferenceEngine) Cleanup
+
+```go
+func (mie *ModelInferenceEngine) Cleanup()
+```
+Cleanup performs complete resource cleanup
+
+#### func (*ModelInferenceEngine) GetModelSpec
+
+```go
+func (mie *ModelInferenceEngine) GetModelSpec() *layers.ModelSpec
+```
+GetModelSpec returns the model specification
+
+#### func (*ModelInferenceEngine) GetParameterTensors
+
+```go
+func (mie *ModelInferenceEngine) GetParameterTensors() []*memory.Tensor
+```
+GetParameterTensors returns the GPU-resident parameter tensors
+
+#### func (*ModelInferenceEngine) LoadWeights
+
+```go
+func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor) error
+```
+LoadWeights loads pre-trained weights into the inference engine
+
+#### func (*ModelInferenceEngine) Predict
+
+```go
+func (mie *ModelInferenceEngine) Predict(
+	inputData []float32,
+	inputShape []int,
+) (*cgo_bridge.InferenceResult, error)
+```
+Predict performs single forward pass for inference Optimized for single-image or
+small batch inference
 
 #### type ModelTrainingEngine
 

@@ -12,6 +12,18 @@ func AllocateMetalBuffer(device unsafe.Pointer, size int, deviceType DeviceType)
 ```
 AllocateMetalBuffer allocates a Metal buffer
 
+#### func  BuildInferenceGraph
+
+```go
+func BuildInferenceGraph(
+	engine unsafe.Pointer,
+	inputShape []int,
+	inputShapeLen int32,
+	batchNormInferenceMode bool,
+) error
+```
+BuildInferenceGraph builds an optimized inference graph
+
 #### func  CommitCommandBuffer
 
 ```go
@@ -40,6 +52,20 @@ func CopyInt32ArrayToMetalBuffer(buffer unsafe.Pointer, data []int32) error
 ```
 CopyInt32ArrayToMetalBuffer copies int32 array data to a Metal buffer
 
+#### func  CopyMetalBufferToFloat32Array
+
+```go
+func CopyMetalBufferToFloat32Array(buffer unsafe.Pointer, numElements int) ([]float32, error)
+```
+CopyMetalBufferToFloat32Array copies data from a Metal buffer to a float32 array
+
+#### func  CopyMetalBufferToInt32Array
+
+```go
+func CopyMetalBufferToInt32Array(buffer unsafe.Pointer, numElements int) ([]int32, error)
+```
+CopyMetalBufferToInt32Array copies data from a Metal buffer to an int32 array
+
 #### func  CreateCommandBuffer
 
 ```go
@@ -53,6 +79,14 @@ CreateCommandBuffer creates a Metal command buffer from the given command queue
 func CreateCommandQueue(device unsafe.Pointer) (unsafe.Pointer, error)
 ```
 CreateCommandQueue creates a Metal command queue for the given device
+
+#### func  CreateInferenceEngine
+
+```go
+func CreateInferenceEngine(device unsafe.Pointer, config InferenceConfig) (unsafe.Pointer, error)
+```
+CreateInferenceEngine creates an inference-only engine optimized for forward
+pass
 
 #### func  CreateMetalDevice
 
@@ -102,6 +136,20 @@ CreateTrainingEngineHybrid creates a hybrid MPS/MPSGraph training engine
 func DeallocateMetalBuffer(buffer unsafe.Pointer)
 ```
 DeallocateMetalBuffer deallocates a Metal buffer
+
+#### func  DestroyCommandQueue
+
+```go
+func DestroyCommandQueue(commandQueue unsafe.Pointer)
+```
+DestroyCommandQueue is an alias for ReleaseCommandQueue for consistency
+
+#### func  DestroyInferenceEngine
+
+```go
+func DestroyInferenceEngine(engine unsafe.Pointer)
+```
+DestroyInferenceEngine destroys an inference engine
 
 #### func  DestroyMetalDevice
 
@@ -374,6 +422,19 @@ func SetupAutoreleasePool()
 ```
 SetupAutoreleasePool sets up an autorelease pool for Metal resource management
 
+#### func  SetupMemoryBridge
+
+```go
+func SetupMemoryBridge(setupFunc func(
+	func(unsafe.Pointer, int) ([]float32, error),
+	func(unsafe.Pointer, []float32) error,
+	func(unsafe.Pointer, []int32) error,
+))
+```
+SetupMemoryBridge sets up bridge functions for memory package to avoid import
+cycles Call this from packages that need both cgo_bridge and memory
+functionality
+
 #### func  WaitCommandBufferCompletion
 
 ```go
@@ -413,6 +474,30 @@ const (
 )
 ```
 
+#### type InferenceConfig
+
+```go
+type InferenceConfig struct {
+	// Model configuration
+	UseDynamicEngine       bool // Use dynamic graph engine
+	BatchNormInferenceMode bool // Use batch norm in inference mode
+
+	// Input configuration
+	InputShape    []int32 // Input tensor shape
+	InputShapeLen int32   // Length of input shape array
+
+	// Layer specifications for dynamic models
+	LayerSpecs    []LayerSpecC // Layer specifications
+	LayerSpecsLen int32        // Number of layer specs
+
+	// Performance settings
+	UseCommandPooling      bool // Enable command buffer pooling
+	OptimizeForSingleBatch bool // Optimize for batch size 1
+}
+```
+
+InferenceConfig holds configuration for inference-only engines
+
 #### type InferenceResult
 
 ```go
@@ -441,6 +526,21 @@ func ExecuteInference(
 ExecuteInference performs forward-only pass and returns predictions Conforms to
 design requirements: single CGO call, GPU-resident, shared resources
 
+#### func  ExecuteInferenceOnly
+
+```go
+func ExecuteInferenceOnly(
+	engine unsafe.Pointer,
+	inputBuffer unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	batchSize int,
+	numClasses int,
+	isDynamic bool,
+	batchNormInferenceMode bool,
+) (*InferenceResult, error)
+```
+ExecuteInferenceOnly performs forward-only inference without loss computation
+
 #### type LayerSpecC
 
 ```go
@@ -455,6 +555,11 @@ type LayerSpecC struct {
 	ParamFloat      [8]float32
 	ParamIntCount   int32
 	ParamFloatCount int32
+	// Running statistics for layers like BatchNorm (non-learnable parameters)
+	RunningMean      []float32
+	RunningVar       []float32
+	RunningStatsSize int32
+	HasRunningStats  int32 // Boolean flag (0 or 1)
 }
 ```
 

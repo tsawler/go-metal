@@ -5,6 +5,19 @@
 
 ## Usage
 
+```go
+var CopyFloat32DataFunc func(buffer unsafe.Pointer, data []float32) error
+```
+
+```go
+var CopyInt32DataFunc func(buffer unsafe.Pointer, data []int32) error
+```
+
+```go
+var ToFloat32SliceFunc func(buffer unsafe.Pointer, numElements int) ([]float32, error)
+```
+Bridge functions for data transfer - set up during cgo_bridge initialization
+
 #### func  CreateMockCommandQueue
 
 ```go
@@ -25,6 +38,17 @@ CreateMockDevice creates a mock Metal device for testing
 func InitializeGlobalMemoryManager(device unsafe.Pointer)
 ```
 InitializeGlobalMemoryManager initializes the global memory manager
+
+#### func  SetupBridge
+
+```go
+func SetupBridge(
+	toFloat32SliceFunc func(unsafe.Pointer, int) ([]float32, error),
+	copyFloat32DataFunc func(unsafe.Pointer, []float32) error,
+	copyInt32DataFunc func(unsafe.Pointer, []int32) error,
+)
+```
+SetupBridge allows external packages to set up bridge functions
 
 #### type BufferPool
 
@@ -265,3 +289,9 @@ Size returns the total size in bytes
 func (t *Tensor) String() string
 ```
 String returns a string representation for debugging
+
+#### func (*Tensor) ToFloat32Slice
+
+```go
+func (t *Tensor) ToFloat32Slice() ([]float32, error)
+```

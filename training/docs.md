@@ -33,6 +33,88 @@ func TrainingExample() error
 ```
 TrainingExample demonstrates the PyTorch-style progress bar in action
 
+#### type CheckpointCapable
+
+```go
+type CheckpointCapable interface {
+	GetModelSpec() *layers.ModelSpec
+	GetParameterTensors() []*memory.Tensor
+	GetCurrentLearningRate() float32
+	GetLRScheduler() interface{} // Returns the scheduler if available
+	SetLearningRate(lr float32)
+	GetOptimizerState() *OptimizerStateData
+	SetOptimizerState(state *checkpoints.OptimizerState) error
+}
+```
+
+Add checkpoint methods to ModelTrainer interface
+
+#### type CheckpointConfig
+
+```go
+type CheckpointConfig struct {
+	SaveDirectory   string                       // Directory to save checkpoints
+	SaveFrequency   int                          // Save every N epochs (0 = disabled)
+	SaveBest        bool                         // Save checkpoint when validation improves
+	MaxCheckpoints  int                          // Maximum number of checkpoints to keep (0 = unlimited)
+	Format          checkpoints.CheckpointFormat // JSON or ONNX
+	FilenamePattern string                       // Pattern for checkpoint filenames
+}
+```
+
+CheckpointConfig configures checkpoint saving behavior
+
+#### func  DefaultCheckpointConfig
+
+```go
+func DefaultCheckpointConfig() CheckpointConfig
+```
+DefaultCheckpointConfig returns a sensible default configuration
+
+#### type CheckpointManager
+
+```go
+type CheckpointManager struct {
+}
+```
+
+CheckpointManager handles checkpoint saving and loading for ModelTrainer
+
+#### func  NewCheckpointManager
+
+```go
+func NewCheckpointManager(trainer *ModelTrainer, config CheckpointConfig) *CheckpointManager
+```
+NewCheckpointManager creates a new checkpoint manager
+
+#### func (*CheckpointManager) LoadCheckpoint
+
+```go
+func (cm *CheckpointManager) LoadCheckpoint(filepath string) error
+```
+LoadCheckpoint loads a checkpoint and restores trainer state
+
+#### func (*CheckpointManager) SaveBestCheckpoint
+
+```go
+func (cm *CheckpointManager) SaveBestCheckpoint(epoch int, step int, loss float32, accuracy float32) (bool, error)
+```
+SaveBestCheckpoint saves a checkpoint if it's better than previous best
+
+#### func (*CheckpointManager) SaveCheckpoint
+
+```go
+func (cm *CheckpointManager) SaveCheckpoint(epoch int, step int, loss float32, accuracy float32, description string) error
+```
+SaveCheckpoint saves the current model state
+
+#### func (*CheckpointManager) SavePeriodicCheckpoint
+
+```go
+func (cm *CheckpointManager) SavePeriodicCheckpoint(epoch int, step int, loss float32, accuracy float32) (bool, error)
+```
+SavePeriodicCheckpoint saves a checkpoint if it's time based on frequency
+
 #### type CosineAnnealingLRScheduler
 
 ```go
@@ -92,6 +174,30 @@ func (s *ExponentialLRScheduler) GetLR(epoch int, step int, baseLR float64) floa
 func (s *ExponentialLRScheduler) GetName() string
 ```
 
+#### type InferencerConfig
+
+```go
+type InferencerConfig struct {
+	// Performance settings
+	BatchSize              int  `json:"batch_size"`            // Target batch size for inference
+	UseDynamicEngine       bool `json:"use_dynamic_engine"`    // Use dynamic graph (recommended: true)
+	OptimizeForSingleBatch bool `json:"optimize_single_batch"` // Optimize for batch size 1
+	UseCommandPooling      bool `json:"use_command_pooling"`   // Enable command buffer pooling
+
+	// Batch normalization mode
+	BatchNormInferenceMode bool `json:"batchnorm_inference_mode"` // Use running stats for batch norm
+}
+```
+
+InferencerConfig holds configuration for inference-only operations
+
+#### func  DefaultInferencerConfig
+
+```go
+func DefaultInferencerConfig() InferencerConfig
+```
+DefaultInferencerConfig returns a sensible default configuration for inference
+
 #### type LRScheduler
 
 ```go
@@ -131,6 +237,83 @@ NewModelArchitecturePrinter creates a new model architecture printer
 func (p *ModelArchitecturePrinter) PrintArchitecture(modelSpec *layers.ModelSpec)
 ```
 PrintArchitecture prints the model architecture in PyTorch style
+
+#### type ModelInferencer
+
+```go
+type ModelInferencer struct {
+}
+```
+
+ModelInferencer provides inference-only functionality using dedicated
+InferenceEngine Optimized for forward-pass only without training overhead
+
+#### func  NewModelInferencer
+
+```go
+func NewModelInferencer(
+	modelSpec *layers.ModelSpec,
+	config InferencerConfig,
+) (*ModelInferencer, error)
+```
+NewModelInferencer creates a new inference-only engine
+
+#### func (*ModelInferencer) Cleanup
+
+```go
+func (mi *ModelInferencer) Cleanup()
+```
+Cleanup performs deterministic resource cleanup
+
+#### func (*ModelInferencer) GetModelSpec
+
+```go
+func (mi *ModelInferencer) GetModelSpec() *layers.ModelSpec
+```
+GetModelSpec returns the model specification
+
+#### func (*ModelInferencer) GetParameterTensors
+
+```go
+func (mi *ModelInferencer) GetParameterTensors() []*memory.Tensor
+```
+GetParameterTensors returns the GPU-resident parameter tensors
+
+#### func (*ModelInferencer) LoadWeights
+
+```go
+func (mi *ModelInferencer) LoadWeights(weights []checkpoints.WeightTensor) error
+```
+LoadWeights loads pre-trained weights into the inference engine
+
+#### func (*ModelInferencer) LoadWeightsFromCheckpoint
+
+```go
+func (mi *ModelInferencer) LoadWeightsFromCheckpoint(weights []checkpoints.WeightTensor) error
+```
+LoadWeightsFromCheckpoint loads weights from a checkpoint
+
+#### func (*ModelInferencer) Predict
+
+```go
+func (mi *ModelInferencer) Predict(
+	inputData []float32,
+	inputShape []int,
+) (*cgo_bridge.InferenceResult, error)
+```
+Predict performs single forward pass for inference This is the lightweight
+method optimized for single-image or small batch inference
+
+#### func (*ModelInferencer) PredictBatch
+
+```go
+func (mi *ModelInferencer) PredictBatch(
+	inputData []float32,
+	inputShape []int,
+) (*cgo_bridge.InferenceResult, error)
+```
+PredictBatch performs inference on a batch of data Optimized for larger batches
+with efficient GPU utilization
 
 #### type ModelTrainer
 
@@ -202,6 +385,13 @@ func (mt *ModelTrainer) GetCurrentLearningRate() float32
 GetCurrentLearningRate returns the current learning rate based on scheduler This
 is a pure computation - no GPU operations
 
+#### func (*ModelTrainer) GetLRScheduler
+
+```go
+func (mt *ModelTrainer) GetLRScheduler() interface{}
+```
+GetLRScheduler returns the learning rate scheduler if available
+
 #### func (*ModelTrainer) GetModelSpec
 
 ```go
@@ -215,6 +405,20 @@ GetModelSpec returns the model specification
 func (mt *ModelTrainer) GetModelSummary() string
 ```
 GetModelSummary returns a human-readable model summary
+
+#### func (*ModelTrainer) GetOptimizerState
+
+```go
+func (mt *ModelTrainer) GetOptimizerState() *OptimizerStateData
+```
+GetOptimizerState returns the optimizer state for checkpoint saving
+
+#### func (*ModelTrainer) GetParameterTensors
+
+```go
+func (mt *ModelTrainer) GetParameterTensors() []*memory.Tensor
+```
+GetParameterTensors returns the parameter tensors for weight extraction
 
 #### func (*ModelTrainer) GetSchedulerInfo
 
@@ -240,6 +444,17 @@ func (mt *ModelTrainer) InferBatch(
 ```
 InferBatch performs inference on a batch of data Conforms to design
 requirements: single CGO call, GPU-resident, shared resources
+
+#### func (*ModelTrainer) Predict
+
+```go
+func (mt *ModelTrainer) Predict(
+	inputData []float32,
+	inputShape []int,
+) (*cgo_bridge.InferenceResult, error)
+```
+Predict provides a lightweight inference method for backward compatibility For
+optimal inference performance, use ModelInferencer instead
 
 #### func (*ModelTrainer) PrintModelArchitecture
 
@@ -274,6 +489,20 @@ func (mt *ModelTrainer) SetLRScheduler(scheduler LRScheduler)
 ```
 SetLRScheduler sets a learning rate scheduler for the trainer This maintains
 GPU-resident principles by only updating LR between epochs
+
+#### func (*ModelTrainer) SetLearningRate
+
+```go
+func (mt *ModelTrainer) SetLearningRate(lr float32)
+```
+SetLearningRate sets the learning rate
+
+#### func (*ModelTrainer) SetOptimizerState
+
+```go
+func (mt *ModelTrainer) SetOptimizerState(state interface{}) error
+```
+SetOptimizerState restores optimizer state from checkpoint
 
 #### func (*ModelTrainer) StepSchedulerWithMetric
 
@@ -454,6 +683,18 @@ type OptimizerConfig struct {
 ```
 
 OptimizerConfig provides optimizer-specific configurations
+
+#### type OptimizerStateData
+
+```go
+type OptimizerStateData struct {
+	Type       string
+	Parameters map[string]interface{}
+	StateData  []checkpoints.OptimizerTensor
+}
+```
+
+OptimizerStateData represents internal optimizer state
 
 #### type ProgressBar
 
@@ -650,6 +891,7 @@ type TrainerConfig struct {
 	// Training behavior
 	UseHybridEngine  bool `json:"use_hybrid_engine"`  // Use hybrid MPS/MPSGraph (recommended: true)
 	UseDynamicEngine bool `json:"use_dynamic_engine"` // Use dynamic graph creation for any architecture (recommended: true)
+	InferenceOnly    bool `json:"inference_only"`     // Skip training setup, optimize for inference (forward-pass only)
 }
 ```
 
