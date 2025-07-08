@@ -740,7 +740,7 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamicWithGradients(
 	
 	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
 		// Use pooled version with command queue for resource leak prevention
-		fmt.Printf("🚀 Using POOLED execution (commandQueue: %v)\n", mte.MPSTrainingEngine.commandQueue != nil)
+		// fmt.Printf("🚀 Using POOLED execution (commandQueue: %v)\n", mte.MPSTrainingEngine.commandQueue != nil)
 		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradientsPooled(
 			unsafe.Pointer(mte.MPSTrainingEngine.engine),
 			inputTensor.MetalBuffer(),

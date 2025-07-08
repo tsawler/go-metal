@@ -26,4 +26,5 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
                                        MPSGraphTensor* input,
                                        layer_spec_c_t* layerSpec,
                                        int layerIdx,
-                                       NSMutableArray* allParameterPlaceholders);
+                                       NSMutableArray* allParameterPlaceholders,
+                                       training_engine_t* engine);

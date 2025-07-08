@@ -119,6 +119,7 @@ typedef struct {
     // Dynamic graph placeholders (for complex architectures)
     NSMutableArray* allWeightPlaceholders;                  // All weight placeholders in order
     NSMutableArray* allBiasPlaceholders;                    // All bias placeholders in order
+    NSMutableArray* batchnormRunningStatsPlaceholders;      // BatchNorm running mean/variance placeholders
     
     // MEMORY LEAK FIX: Cached buffers to avoid per-step allocations
     id<MTLBuffer> cachedConvOutputBuffer;                   // Reusable buffer for conv output

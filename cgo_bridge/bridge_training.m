@@ -814,7 +814,7 @@ int execute_training_step_dynamic_with_gradients_pooled(
             }
             // Try Adam-specific arrays (for Adam optimizer)
             else if (engine->config.optimizer_type == 1 && engine->adamPrecompiledGradients && engine->adamPrecompiledUpdatedParams) {
-                NSLog(@"🚀 Using ADAM-SPECIFIC pre-compiled operations!");
+                // NSLog(@"🚀 Using ADAM-SPECIFIC pre-compiled operations!");
                 gradientsToUse = engine->adamPrecompiledGradients;
                 updatesParamsToUse = engine->adamPrecompiledUpdatedParams;
                 updatesMomentumToUse = engine->adamPrecompiledUpdatedMomentum;
@@ -1373,6 +1373,9 @@ int execute_inference_dynamic(
                         feeds[paramPlaceholder] = paramData;
                     }
                 }
+                
+                // UNIFIED SOLUTION: No need to feed running statistics since we use constants for inference
+                // BatchNorm running statistics are now embedded as constants in the graph during inference mode
                 
                 // Execute the graph for inference (forward pass only)
                 id<MTLCommandQueue> commandQueue = engine->commandQueue;

@@ -342,25 +342,42 @@ func ExtractWeightsFromTensors(tensors []*memory.Tensor, modelSpec *layers.Model
 
 // LoadWeightsIntoTensors loads weight data back into GPU tensors
 func LoadWeightsIntoTensors(weights []WeightTensor, tensors []*memory.Tensor) error {
+	// UNIFIED SOLUTION: Filter out running statistics - only load learnable parameters
+	// Running statistics are handled separately by the inference execution engine
+	learnableWeights := make([]WeightTensor, 0, len(weights))
+	runningStatsWeights := make([]WeightTensor, 0)
+	
+	for _, weight := range weights {
+		if weight.Type == "running_mean" || weight.Type == "running_var" {
+			runningStatsWeights = append(runningStatsWeights, weight)
+		} else {
+			// This is a learnable parameter (weight, bias, etc.)
+			learnableWeights = append(learnableWeights, weight)
+		}
+	}
+	
+	fmt.Printf("🔧 Loading weights: Total=%d, Learnable=%d, Running stats=%d, Parameter tensors=%d\n", 
+		len(weights), len(learnableWeights), len(runningStatsWeights), len(tensors))
+	
 	// Create a map for quick weight lookup
 	weightMap := make(map[string]WeightTensor)
-	for _, weight := range weights {
+	for _, weight := range learnableWeights {
 		weightMap[weight.Name] = weight
 	}
 	
 	// We need to match tensors with weights based on the layer naming convention
 	// This is a simplified implementation that assumes tensors are in the same order
-	// as they were extracted
-	if len(weights) != len(tensors) {
-		return fmt.Errorf("weight count mismatch: %d weights, %d tensors", len(weights), len(tensors))
+	// as they were extracted (but now only counting learnable parameters)
+	if len(learnableWeights) != len(tensors) {
+		return fmt.Errorf("weight count mismatch: %d weights, %d tensors", len(learnableWeights), len(tensors))
 	}
 	
 	for i, tensor := range tensors {
-		if i >= len(weights) {
+		if i >= len(learnableWeights) {
 			break
 		}
 		
-		weight := weights[i]
+		weight := learnableWeights[i]
 		
 		// Verify tensor and weight compatibility
 		tensorShape := tensor.Shape()

@@ -945,22 +945,37 @@ func (oi *ONNXImporter) convertBatchNormNode(node *NodeProto, weightMap map[stri
 	// However, for compatibility with the go-metal engine, we include them
 	// as separate tensors but don't count them toward the parameter count.
 	
-	// Store running statistics for reference but don't include in weight tensors
-	// The go-metal inference engine handles batch norm differently in inference mode
-	
-	// Extract running mean and variance for potential use in pre-computation
-	_, exists = weightMap[meanName]
+	// UNIFIED SOLUTION: Extract running mean and variance data for inference mode
+	// These will be fed to BatchNorm placeholders during inference execution
+	runningMeanData, exists := weightMap[meanName]
 	if !exists {
 		return nil, nil, fmt.Errorf("BatchNorm node %s: mean tensor %s not found", node.Name, meanName)
 	}
-	_, exists = weightMap[varName]
+	runningVarData, exists := weightMap[varName]
 	if !exists {
 		return nil, nil, fmt.Errorf("BatchNorm node %s: variance tensor %s not found", node.Name, varName)
 	}
 	
-	// For inference mode, we could pre-compute the normalization parameters
-	// and fold them into the weight and bias, but for now we'll skip the
-	// running statistics to match the expected parameter count
+	// Create running statistics tensors - these are NOT counted as learnable parameters
+	// but are needed to feed the BatchNorm placeholders during inference
+	runningMeanTensor := WeightTensor{
+		Name:  fmt.Sprintf("%s.running_mean", node.Name),
+		Shape: meanShape,
+		Data:  runningMeanData,
+		Layer: node.Name,
+		Type:  "running_mean",
+	}
+	runningVarTensor := WeightTensor{
+		Name:  fmt.Sprintf("%s.running_var", node.Name),
+		Shape: meanShape, // Same shape as mean
+		Data:  runningVarData,
+		Layer: node.Name,
+		Type:  "running_var",
+	}
+	
+	// Add running statistics to layer weights (they will be handled separately from learnable parameters)
+	layerWeights = append(layerWeights, runningMeanTensor)
+	layerWeights = append(layerWeights, runningVarTensor)
 	
 	// Create go-metal BatchNorm layer specification 
 	// (MPSGraph-centric: will use MPSGraph batch normalization operations)

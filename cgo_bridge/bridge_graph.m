@@ -103,7 +103,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                currentTensor,
                                                                layer,
                                                                layerIdx,
-                                                               allParameterPlaceholders);
+                                                               allParameterPlaceholders,
+                                                               engine);
                     }
                     break;
                     
@@ -175,6 +176,12 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
         // Clear the old arrays and copy from our correctly ordered array
         [engine->allWeightPlaceholders removeAllObjects];
         [engine->allBiasPlaceholders removeAllObjects];
+        
+        // Initialize BatchNorm running stats placeholders array
+        if (!engine->batchnormRunningStatsPlaceholders) {
+            engine->batchnormRunningStatsPlaceholders = [[NSMutableArray alloc] init];
+        }
+        [engine->batchnormRunningStatsPlaceholders removeAllObjects];
         
         // Store all parameters in the correct order (weight, bias, weight, bias...)
         // This matches exactly how Go CreateParameterTensors works
@@ -463,6 +470,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
             NSLog(@"🚀 PRE-COMPILATION: Building Adam parameter update operations...");
             
+            
             // Pre-compile Adam parameter updates only if properly initialized
             NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
             NSMutableArray<MPSGraphTensor*>* precompiledUpdatedMomentum = [[NSMutableArray alloc] init];
@@ -474,18 +482,22 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                 MPSGraphTensor* momentumTensor = [engine->momentumPlaceholders objectAtIndex:i];
                 MPSGraphTensor* varianceTensor = [engine->variancePlaceholders objectAtIndex:i];
                 
+                
                 if (gradTensor && momentumTensor && varianceTensor) {
                     // Adam update equations:
                     // m = beta1 * m + (1 - beta1) * g
                     // v = beta2 * v + (1 - beta2) * g^2
                     // param = param - lr * m_hat / (sqrt(v_hat) + epsilon)
                     
+                    
                     MPSGraphTensor* scaledMomentum = [engine->graph multiplicationWithPrimaryTensor:engine->cachedBeta1Tensor
                                                                                    secondaryTensor:momentumTensor
                                                                                               name:nil];
+                    
                     MPSGraphTensor* scaledGradient = [engine->graph multiplicationWithPrimaryTensor:engine->cachedOneMinusBeta1
                                                                                    secondaryTensor:gradTensor
                                                                                               name:nil];
+                    
                     MPSGraphTensor* updatedMomentum = [engine->graph additionWithPrimaryTensor:scaledMomentum
                                                                                secondaryTensor:scaledGradient
                                                                                           name:nil];
@@ -493,11 +505,14 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     MPSGraphTensor* scaledVariance = [engine->graph multiplicationWithPrimaryTensor:engine->cachedBeta2Tensor
                                                                                    secondaryTensor:varianceTensor
                                                                                               name:nil];
+                    
                     MPSGraphTensor* squaredGradient = [engine->graph squareWithTensor:gradTensor
                                                                                  name:nil];
+                    
                     MPSGraphTensor* scaledSquaredGradient = [engine->graph multiplicationWithPrimaryTensor:engine->cachedOneMinusBeta2
                                                                                            secondaryTensor:squaredGradient
                                                                                                       name:nil];
+                    
                     MPSGraphTensor* updatedVariance = [engine->graph additionWithPrimaryTensor:scaledVariance
                                                                                secondaryTensor:scaledSquaredGradient
                                                                                           name:nil];
@@ -506,6 +521,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     MPSGraphTensor* biasCorrection1 = [engine->graph divisionWithPrimaryTensor:updatedMomentum
                                                                                secondaryTensor:engine->biasCorr1Placeholder
                                                                                           name:nil];
+                    
                     MPSGraphTensor* biasCorrection2 = [engine->graph divisionWithPrimaryTensor:updatedVariance
                                                                                secondaryTensor:engine->biasCorr2Placeholder
                                                                                           name:nil];
@@ -513,12 +529,15 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     // Parameter update
                     MPSGraphTensor* sqrtVariance = [engine->graph squareRootWithTensor:biasCorrection2
                                                                                   name:nil];
+                    
                     MPSGraphTensor* denominator = [engine->graph additionWithPrimaryTensor:sqrtVariance
                                                                            secondaryTensor:engine->cachedEpsilonTensor
                                                                                       name:nil];
+                    
                     MPSGraphTensor* updateDirection = [engine->graph divisionWithPrimaryTensor:biasCorrection1
                                                                                secondaryTensor:denominator
                                                                                           name:nil];
+                    
                     MPSGraphTensor* scaledUpdate = [engine->graph multiplicationWithPrimaryTensor:engine->cachedLrTensor
                                                                                   secondaryTensor:updateDirection
                                                                                              name:nil];
@@ -733,7 +752,8 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
                                        MPSGraphTensor* input,
                                        layer_spec_c_t* layerSpec,
                                        int layerIdx,
-                                       NSMutableArray* allParameterPlaceholders) {
+                                       NSMutableArray* allParameterPlaceholders,
+                                       training_engine_t* engine) {
     
     // Extract BatchNorm parameters: [eps, momentum] in floats, [num_features, affine, track_running_stats, training] in ints
     if (layerSpec->param_float_count < 2 || layerSpec->param_int_count < 4) {
@@ -838,35 +858,36 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
                                                       epsilon:eps
                                                          name:[NSString stringWithFormat:@"batchnorm_%d", layerIdx]];
         } else {
-            // Inference mode: Use running statistics as constant tensors
-            // For ONNX models, running mean and variance are provided as initializers (constants)
-            // We'll create constant tensors with default values - these will be replaced with actual values
-            // from the ONNX model during the conversion process
+            // Inference mode: Use running statistics as constants (standard for inference)
+            // For inference, running statistics are fixed values, not variables needing feeding
             NSArray<NSNumber*>* statsShape = @[@(numFeatures)];
             
-            // Create default constant data for running statistics
-            // These values will be overwritten by the actual running stats from the ONNX model
-            NSMutableData* meanData = [[NSMutableData alloc] initWithLength:numFeatures * sizeof(float)];
-            NSMutableData* varData = [[NSMutableData alloc] initWithLength:numFeatures * sizeof(float)];
+            // UNIFIED SOLUTION: Use constants with default values for inference mode
+            // This avoids MPSGraph placeholder issues during inference execution
+            // Default values: mean=0, variance=1 (standard normalized values)
             
-            // Initialize with default values (mean=0, variance=1)
-            float* meanValues = (float*)meanData.mutableBytes;
-            float* varValues = (float*)varData.mutableBytes;
+            // Create NSData from float arrays for MPSGraph constants
+            float* meanData = (float*)malloc(numFeatures * sizeof(float));
+            float* varData = (float*)malloc(numFeatures * sizeof(float));
+            
             for (int i = 0; i < numFeatures; i++) {
-                meanValues[i] = 0.0f;  // Default running mean
-                varValues[i] = 1.0f;   // Default running variance
+                meanData[i] = 0.0f;  // Running mean = 0
+                varData[i] = 1.0f;   // Running variance = 1
             }
             
-            // Create constant tensors for running statistics
-            MPSGraphTensor* runningMeanTensor = [graph constantWithData:meanData
+            NSData* meanNSData = [NSData dataWithBytes:meanData length:numFeatures * sizeof(float)];
+            NSData* varNSData = [NSData dataWithBytes:varData length:numFeatures * sizeof(float)];
+            
+            free(meanData);
+            free(varData);
+            
+            MPSGraphTensor* runningMeanTensor = [graph constantWithData:meanNSData
                                                                   shape:statsShape
                                                                dataType:MPSDataTypeFloat32];
             
-            MPSGraphTensor* runningVarTensor = [graph constantWithData:varData
+            MPSGraphTensor* runningVarTensor = [graph constantWithData:varNSData
                                                                  shape:statsShape
                                                               dataType:MPSDataTypeFloat32];
-            
-            // Note: These are constant tensors, not placeholders, so they don't need to be fed during execution
             
             // Reshape running mean and variance for proper broadcasting with 4D inputs
             // Same reshaping logic as gamma/beta tensors
@@ -954,17 +975,33 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
                                                       epsilon:eps
                                                          name:[NSString stringWithFormat:@"batchnorm_%d_no_affine", layerIdx]];
         } else {
-            // Inference mode without affine parameters - would need running statistics
-            // This is a less common configuration, but supported
+            // Inference mode without affine parameters - use constant running statistics
             NSArray<NSNumber*>* statsShape = @[@(numFeatures)];
             
-            MPSGraphTensor* runningMeanTensor = [graph placeholderWithShape:statsShape
-                                                                   dataType:MPSDataTypeFloat32
-                                                                       name:[NSString stringWithFormat:@"batchnorm_%d_running_mean", layerIdx]];
+            // UNIFIED SOLUTION: Use constants for non-affine inference mode as well
             
-            MPSGraphTensor* runningVarTensor = [graph placeholderWithShape:statsShape
-                                                                  dataType:MPSDataTypeFloat32
-                                                                      name:[NSString stringWithFormat:@"batchnorm_%d_running_var", layerIdx]];
+            // Create NSData from float arrays for MPSGraph constants (non-affine case)
+            float* meanData = (float*)malloc(numFeatures * sizeof(float));
+            float* varData = (float*)malloc(numFeatures * sizeof(float));
+            
+            for (int i = 0; i < numFeatures; i++) {
+                meanData[i] = 0.0f;  // Running mean = 0
+                varData[i] = 1.0f;   // Running variance = 1
+            }
+            
+            NSData* meanNSData = [NSData dataWithBytes:meanData length:numFeatures * sizeof(float)];
+            NSData* varNSData = [NSData dataWithBytes:varData length:numFeatures * sizeof(float)];
+            
+            free(meanData);
+            free(varData);
+            
+            MPSGraphTensor* runningMeanTensor = [graph constantWithData:meanNSData
+                                                                  shape:statsShape
+                                                               dataType:MPSDataTypeFloat32];
+            
+            MPSGraphTensor* runningVarTensor = [graph constantWithData:varNSData
+                                                                 shape:statsShape
+                                                              dataType:MPSDataTypeFloat32];
             
             // Create identity scale and zero shift tensors for no affine transformation
             // Shape them correctly for broadcasting

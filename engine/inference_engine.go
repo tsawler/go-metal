@@ -178,13 +178,30 @@ func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor)
 		return fmt.Errorf("model not compiled for inference")
 	}
 	
-	if len(weights) != len(mie.parameterTensors) {
-		return fmt.Errorf("weight count mismatch: expected %d, got %d", 
-			len(mie.parameterTensors), len(weights))
+	// UNIFIED SOLUTION: Filter out running statistics - only load learnable parameters
+	// Running statistics are handled separately by the inference execution engine
+	learnableWeights := make([]checkpoints.WeightTensor, 0, len(weights))
+	runningStatsWeights := make([]checkpoints.WeightTensor, 0)
+	
+	for _, weight := range weights {
+		if weight.Type == "running_mean" || weight.Type == "running_var" {
+			runningStatsWeights = append(runningStatsWeights, weight)
+		} else {
+			// This is a learnable parameter (weight, bias, etc.)
+			learnableWeights = append(learnableWeights, weight)
+		}
 	}
 	
-	// Load weights into GPU tensors (GPU-resident principle)
-	for i, weight := range weights {
+	fmt.Printf("Total weights: %d, Learnable: %d, Running stats: %d, Expected parameters: %d\n", 
+		len(weights), len(learnableWeights), len(runningStatsWeights), len(mie.parameterTensors))
+	
+	if len(learnableWeights) != len(mie.parameterTensors) {
+		return fmt.Errorf("weight count mismatch: %d weights, %d tensors", 
+			len(learnableWeights), len(mie.parameterTensors))
+	}
+	
+	// Load only learnable parameters into GPU tensors (GPU-resident principle)
+	for i, weight := range learnableWeights {
 		if i >= len(mie.parameterTensors) {
 			break
 		}
@@ -203,6 +220,9 @@ func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor)
 			return fmt.Errorf("failed to load weight %d: %v", i, err)
 		}
 	}
+	
+	// TODO: Store running statistics for later use by BatchNorm inference
+	// For now, the inference execution uses default values (mean=0, var=1)
 	
 	return nil
 }

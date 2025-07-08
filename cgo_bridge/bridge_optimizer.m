@@ -20,11 +20,13 @@ void cacheAdamScalarTensors(training_engine_t* engine) {
         float beta1 = engine->config.beta1;
         float beta2 = engine->config.beta2;
         float epsilon = engine->config.epsilon;
+        float weight_decay = engine->config.weight_decay;
         
         engine->cachedLrTensor = [engine->graph constantWithScalar:lr dataType:MPSDataTypeFloat32];
         engine->cachedBeta1Tensor = [engine->graph constantWithScalar:beta1 dataType:MPSDataTypeFloat32];
         engine->cachedBeta2Tensor = [engine->graph constantWithScalar:beta2 dataType:MPSDataTypeFloat32];
         engine->cachedEpsilonTensor = [engine->graph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+        engine->cachedWeightDecayTensor = [engine->graph constantWithScalar:weight_decay dataType:MPSDataTypeFloat32];
         engine->cachedOneTensor = [engine->graph constantWithScalar:1.0f dataType:MPSDataTypeFloat32];
         
         // Create derived constant tensors ONCE
