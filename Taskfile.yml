@@ -35,6 +35,12 @@ tasks:
       - task: docs-optimizer
       - task: docs-training
       - task: docs-layers
+      - task: docs-vision
+
+  docs-vision:
+    dir: ./vision
+    cmds:
+      - godocdown -output docs.md
 
   docs-layers:
     dir: ./layers
