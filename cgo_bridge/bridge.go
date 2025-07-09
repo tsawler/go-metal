@@ -7,11 +7,16 @@ package cgo_bridge
 // Training configuration
 typedef struct {
     float learning_rate;
-    float beta1;
-    float beta2;
-    float weight_decay;
-    float epsilon;
-    int optimizer_type; // 0 = SGD, 1 = Adam
+    float beta1;             // Adam momentum decay / RMSProp momentum (if > 0)
+    float beta2;             // Adam variance decay (unused for RMSProp)
+    float weight_decay;      // L2 regularization
+    float epsilon;           // Numerical stability constant
+    float alpha;             // RMSProp smoothing constant (typically 0.99)
+    float momentum;          // RMSProp momentum coefficient (typically 0.0)
+    int centered;            // RMSProp centered variant flag (0=false, 1=true)
+    int optimizer_type;      // 0 = SGD, 1 = Adam, 2 = RMSProp
+    int problem_type;        // 0 = Classification, 1 = Regression
+    int loss_function;       // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = MSE, 3 = MAE, 4 = Huber
 } training_config_t;
 
 // Model configuration structure for dynamic dimensions
@@ -298,6 +303,25 @@ void drain_autorelease_pool();
 // RESOURCE LEAK FIX: Command buffer pool management functions for Metal level
 uintptr_t get_command_buffer_from_pool(uintptr_t command_pool);
 void return_command_buffer_to_pool(uintptr_t command_pool, uintptr_t command_buffer);
+
+// RMSProp optimizer functions
+int execute_rmsprop_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    uintptr_t* momentum_buffers,
+    uintptr_t* gradient_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float alpha,
+    float epsilon,
+    float weight_decay,
+    float momentum,
+    _Bool centered,
+    int step_count
+);
 */
 import "C"
 import (
@@ -325,16 +349,22 @@ type OptimizerType int
 const (
 	SGD OptimizerType = iota
 	Adam
+	RMSProp
 )
 
 // TrainingConfig holds training configuration
 type TrainingConfig struct {
 	LearningRate  float32
-	Beta1         float32
-	Beta2         float32
+	Beta1         float32         // Adam momentum decay (or RMSProp momentum if > 0)
+	Beta2         float32         // Adam variance decay (unused for RMSProp)
 	WeightDecay   float32
 	Epsilon       float32
+	Alpha         float32         // RMSProp smoothing constant (typically 0.99)
+	Momentum      float32         // RMSProp momentum (typically 0.0 or 0.9)
+	Centered      bool            // RMSProp centered variant
 	OptimizerType OptimizerType
+	ProblemType   int             // 0 = Classification, 1 = Regression
+	LossFunction  int             // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = MSE, 3 = MAE, 4 = Huber
 }
 
 // ModelConfig holds model architecture configuration for dynamic dimensions
@@ -424,7 +454,12 @@ func CreateTrainingEngine(device unsafe.Pointer, config TrainingConfig) (unsafe.
 		beta2:         C.float(config.Beta2),
 		weight_decay:  C.float(config.WeightDecay),
 		epsilon:       C.float(config.Epsilon),
+		alpha:         C.float(config.Alpha),
+		momentum:      C.float(config.Momentum),
+		centered:      C.int(func() int { if config.Centered { return 1 } else { return 0 } }()),
 		optimizer_type: C.int(config.OptimizerType),
+		problem_type:   C.int(config.ProblemType),
+		loss_function:  C.int(config.LossFunction),
 	}
 	
 	engine := C.create_training_engine(C.uintptr_t(uintptr(device)), &cConfig)
@@ -443,7 +478,12 @@ func CreateTrainingEngineConstantWeights(device unsafe.Pointer, config TrainingC
 		beta2:         C.float(config.Beta2),
 		weight_decay:  C.float(config.WeightDecay),
 		epsilon:       C.float(config.Epsilon),
+		alpha:         C.float(config.Alpha),
+		momentum:      C.float(config.Momentum),
+		centered:      C.int(func() int { if config.Centered { return 1 } else { return 0 } }()),
 		optimizer_type: C.int(config.OptimizerType),
+		problem_type:   C.int(config.ProblemType),
+		loss_function:  C.int(config.LossFunction),
 	}
 	
 	engine := C.create_training_engine_constant_weights(C.uintptr_t(uintptr(device)), &cConfig)
@@ -462,7 +502,12 @@ func CreateTrainingEngineHybrid(device unsafe.Pointer, config TrainingConfig, mo
 		beta2:         C.float(config.Beta2),
 		weight_decay:  C.float(config.WeightDecay),
 		epsilon:       C.float(config.Epsilon),
+		alpha:         C.float(config.Alpha),
+		momentum:      C.float(config.Momentum),
+		centered:      C.int(func() int { if config.Centered { return 1 } else { return 0 } }()),
 		optimizer_type: C.int(config.OptimizerType),
+		problem_type:   C.int(config.ProblemType),
+		loss_function:  C.int(config.LossFunction),
 	}
 	
 	cModelConfig := C.model_config_t{
@@ -636,6 +681,9 @@ func CreateInferenceEngine(device unsafe.Pointer, config InferenceConfig) (unsaf
 		Beta2:         0.999, // Not used for inference
 		WeightDecay:   0.0,   // Not used for inference
 		Epsilon:       1e-8,  // Not used for inference
+		Alpha:         0.99,  // Not used for inference
+		Momentum:      0.0,   // Not used for inference
+		Centered:      false, // Not used for inference
 		OptimizerType: SGD,   // Not used for inference
 	}
 	
@@ -1118,7 +1166,12 @@ func CreateTrainingEngineDynamic(
 		beta2:         C.float(config.Beta2),
 		weight_decay:  C.float(config.WeightDecay),
 		epsilon:       C.float(config.Epsilon),
+		alpha:         C.float(config.Alpha),
+		momentum:      C.float(config.Momentum),
+		centered:      C.int(func() int { if config.Centered { return 1 } else { return 0 } }()),
 		optimizer_type: C.int(config.OptimizerType),
+		problem_type:   C.int(config.ProblemType),
+		loss_function:  C.int(config.LossFunction),
 	}
 
 	// Convert Go layer specs to C array
@@ -1707,5 +1760,83 @@ func ExecuteAdamStepMPSGraphPooled(
 		return fmt.Errorf("pooled Adam step failed with code: %d", result)
 	}
 	
+	return nil
+}
+
+// ExecuteRMSPropStepMPSGraph executes a single RMSProp optimization step using MPSGraph for optimal GPU performance
+func ExecuteRMSPropStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	gradientAvgBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	alpha float32,
+	epsilon float32,
+	weightDecay float32,
+	momentum float32,
+	centered bool,
+	stepCount int,
+) error {
+	if len(weightBuffers) != len(gradientBuffers) ||
+		len(weightBuffers) != len(squaredGradAvgBuffers) ||
+		len(weightBuffers) != len(bufferSizes) {
+		return fmt.Errorf("weight, gradient, squared gradient average, and buffer size arrays must have the same length")
+	}
+
+	numWeights := len(weightBuffers)
+
+	// Convert Go slices to C arrays
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cSquaredGradAvgBuffers := make([]C.uintptr_t, numWeights)
+	cMomentumBuffers := make([]C.uintptr_t, numWeights)
+	cGradientAvgBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		cSquaredGradAvgBuffers[i] = C.uintptr_t(uintptr(squaredGradAvgBuffers[i]))
+		cBufferSizes[i] = C.int(bufferSizes[i])
+		
+		// Optional buffers
+		if momentum > 0.0 && i < len(momentumBuffers) && momentumBuffers[i] != nil {
+			cMomentumBuffers[i] = C.uintptr_t(uintptr(momentumBuffers[i]))
+		} else {
+			cMomentumBuffers[i] = 0
+		}
+		
+		if centered && i < len(gradientAvgBuffers) && gradientAvgBuffers[i] != nil {
+			cGradientAvgBuffers[i] = C.uintptr_t(uintptr(gradientAvgBuffers[i]))
+		} else {
+			cGradientAvgBuffers[i] = 0
+		}
+	}
+
+	result := C.execute_rmsprop_step_mpsgraph(
+		C.uintptr_t(uintptr(device)),
+		&cWeightBuffers[0],
+		&cGradientBuffers[0],
+		&cSquaredGradAvgBuffers[0],
+		&cMomentumBuffers[0],
+		&cGradientAvgBuffers[0],
+		C.int(numWeights),
+		&cBufferSizes[0],
+		C.float(learningRate),
+		C.float(alpha),
+		C.float(epsilon),
+		C.float(weightDecay),
+		C.float(momentum),
+		C._Bool(centered),
+		C.int(stepCount),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("RMSProp MPSGraph step failed with error code: %d", result)
+	}
+
 	return nil
 }

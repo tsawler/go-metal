@@ -577,24 +577,29 @@ func (ms *ModelSpec) Summary() string {
 }
 
 // ValidateModelForTrainingEngine checks if model is compatible with existing TrainingEngine
+// DEPRECATED: Use ValidateModelForHybridEngine or ValidateModelForDynamicEngine instead
 func (ms *ModelSpec) ValidateModelForTrainingEngine() error {
+	// For backward compatibility, default to hybrid engine validation
+	return ms.ValidateModelForHybridEngine()
+}
+
+// ValidateModelForHybridEngine checks if model is compatible with Hybrid TrainingEngine
+// Optimized for CNN architectures with 4D input and Conv+Dense layer combinations
+func (ms *ModelSpec) ValidateModelForHybridEngine() error {
 	if !ms.Compiled {
 		return fmt.Errorf("model not compiled")
 	}
-
-	// Current TrainingEngine supports specific architectures
-	// For now, validate against the existing hybrid CNN architecture
 
 	if len(ms.Layers) == 0 {
 		return fmt.Errorf("empty model")
 	}
 
-	// Check input shape compatibility (must be 4D for CNN)
+	// Hybrid engine is optimized for 4D CNN inputs
 	if len(ms.InputShape) != 4 {
-		return fmt.Errorf("TrainingEngine currently requires 4D input [batch, channels, height, width]")
+		return fmt.Errorf("Hybrid TrainingEngine requires 4D input [batch, channels, height, width]")
 	}
 
-	// Check that we have at least one Conv2D and one Dense layer
+	// Check that we have both Conv2D and Dense layers (CNN pattern)
 	hasConv := false
 	hasDense := false
 
@@ -608,11 +613,44 @@ func (ms *ModelSpec) ValidateModelForTrainingEngine() error {
 	}
 
 	if !hasConv {
-		return fmt.Errorf("TrainingEngine currently requires at least one Conv2D layer")
+		return fmt.Errorf("Hybrid TrainingEngine requires at least one Conv2D layer")
 	}
 
 	if !hasDense {
-		return fmt.Errorf("TrainingEngine currently requires at least one Dense layer")
+		return fmt.Errorf("Hybrid TrainingEngine requires at least one Dense layer")
+	}
+
+	return nil
+}
+
+// ValidateModelForDynamicEngine checks if model is compatible with Dynamic TrainingEngine
+// Supports any architecture with flexible input dimensions (2D, 4D, etc.)
+func (ms *ModelSpec) ValidateModelForDynamicEngine() error {
+	if !ms.Compiled {
+		return fmt.Errorf("model not compiled")
+	}
+
+	if len(ms.Layers) == 0 {
+		return fmt.Errorf("empty model")
+	}
+
+	// Dynamic engine supports flexible input dimensions
+	if len(ms.InputShape) < 2 {
+		return fmt.Errorf("Dynamic TrainingEngine requires at least 2D input [batch, features]")
+	}
+
+	// Check that we have at least one trainable layer
+	hasTrainableLayer := false
+	for _, layer := range ms.Layers {
+		switch layer.Type {
+		case Dense, Conv2D:
+			hasTrainableLayer = true
+			break
+		}
+	}
+
+	if !hasTrainableLayer {
+		return fmt.Errorf("Dynamic TrainingEngine requires at least one trainable layer (Dense or Conv2D)")
 	}
 
 	return nil

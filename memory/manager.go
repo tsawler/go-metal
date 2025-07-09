@@ -217,9 +217,9 @@ func calculateMaxPoolSize(bufferSize int) int {
 	case bufferSize <= 1048576:  // <= 1MB
 		return 20
 	case bufferSize <= 16777216: // <= 16MB
-		return 10
+		return 20  // Increased from 10 for CNN gradient tensors
 	default:                     // > 16MB
-		return 5
+		return 15  // Increased from 5 for large CNN models
 	}
 }
 

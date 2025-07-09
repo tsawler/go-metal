@@ -65,11 +65,16 @@ typedef struct {
 // Training configuration struct from Go
 typedef struct {
     float learning_rate;
-    float beta1;
-    float beta2;
-    float weight_decay;
-    float epsilon;
-    int optimizer_type; // 0 = SGD, 1 = Adam
+    float beta1;             // Adam momentum decay / RMSProp momentum (if > 0)
+    float beta2;             // Adam variance decay (unused for RMSProp)
+    float weight_decay;      // L2 regularization
+    float epsilon;           // Numerical stability constant
+    float alpha;             // RMSProp smoothing constant (typically 0.99)
+    float momentum;          // RMSProp momentum coefficient (typically 0.0)
+    int centered;            // RMSProp centered variant flag (0=false, 1=true)
+    int optimizer_type;      // 0 = SGD, 1 = Adam, 2 = RMSProp
+    int problem_type;        // 0 = Classification, 1 = Regression
+    int loss_function;       // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = MSE, 3 = MAE, 4 = Huber
 } training_config_t;
 
 // Training engine structure - Hybrid MPS/MPSGraph approach
@@ -201,6 +206,30 @@ typedef struct {
     NSMutableArray* adamPrecompiledUpdatedParams;          // Adam pre-compiled parameter updates
     NSMutableArray* adamPrecompiledUpdatedMomentum;        // Adam pre-compiled momentum updates  
     NSMutableArray* adamPrecompiledUpdatedVariance;        // Adam pre-compiled variance updates
+    
+    // RMSProp-specific graph compilation
+    BOOL rmspropGraphCompiled;                             // Flag indicating RMSProp graph is compiled
+    BOOL rmspropStateInitialized;                          // Flag indicating RMSProp state is ready
+    NSMutableArray* rmspropPrecompiledGradients;           // RMSProp pre-compiled gradient tensors
+    NSMutableArray* rmspropPrecompiledUpdatedParams;       // RMSProp pre-compiled parameter updates
+    NSMutableArray* rmspropPrecompiledUpdatedMomentum;     // RMSProp pre-compiled momentum updates (if momentum > 0)
+    NSMutableArray* rmspropPrecompiledUpdatedSquaredGrad;  // RMSProp pre-compiled squared gradient averages
+    NSMutableArray* rmspropPrecompiledUpdatedGradAvg;      // RMSProp pre-compiled gradient averages (if centered)
+    
+    // RMSProp-specific state arrays
+    NSMutableArray* squaredGradPlaceholders;               // Squared gradient average state for each parameter
+    NSMutableArray* squaredGradVariables;                  // MPSGraph variables for squared gradient state
+    NSMutableArray* squaredGradBuffers;                    // Metal buffers for squared gradient state
+    NSMutableArray* gradAvgPlaceholders;                   // Gradient average state for each parameter (centered RMSProp)
+    NSMutableArray* gradAvgVariables;                      // MPSGraph variables for gradient average state
+    NSMutableArray* gradAvgBuffers;                        // Metal buffers for gradient average state
+    
+    // RMSProp-specific cached scalars
+    MPSGraphTensor* cachedAlphaTensor;                     // Cached alpha (smoothing constant) scalar
+    MPSGraphTensor* cachedOneMinusAlphaTensor;             // Cached (1 - alpha) scalar
+    MPSGraphTensor* rmspropCachedMomentumTensor;           // Cached RMSProp momentum scalar
+    MPSGraphTensor* rmspropCachedEpsilonTensor;            // Cached RMSProp epsilon scalar
+    BOOL rmspropScalarsCached;                             // Flag indicating RMSProp scalars are cached
     
     // Model configuration for dynamic dimensions
     model_config_t model_config;                             // Model architecture configuration

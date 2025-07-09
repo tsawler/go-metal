@@ -2,6 +2,7 @@ package training
 
 import (
 	"fmt"
+	"math"
 	"time"
 	"unsafe"
 
@@ -19,6 +20,7 @@ type ModelTrainer struct {
 	modelSpec   *layers.ModelSpec
 	batchSize   int
 	config      cgo_bridge.TrainingConfig
+	trainerConfig TrainerConfig  // High-level config for type checking
 	currentStep int
 	
 	// Performance tracking
@@ -71,32 +73,66 @@ func NewModelTrainer(
 		Beta2:         config.Beta2,
 		WeightDecay:   config.WeightDecay,
 		Epsilon:       config.Epsilon,
+		Alpha:         config.Alpha,
+		Momentum:      config.Momentum,
+		Centered:      config.Centered,
 		OptimizerType: config.OptimizerType,
+		ProblemType:   int(config.ProblemType),
+		LossFunction:  int(config.LossFunction),
 	}
 	
-	// Create model training engine
+	// SMART ROUTING: Select optimal engine based on model architecture
+	// Maintains GPU-resident architecture compliance across all engine types
 	var modelEngine *engine.ModelTrainingEngine
 	var err error
 	
-	// Choose engine type based on configuration
-	if config.UseDynamicEngine {
-		// Use new dynamic engine for any architecture
-		fmt.Printf("🔧 Creating dynamic engine (UseDynamicEngine=true)\n")
+	// Determine optimal engine type using smart routing
+	selectedEngine := SelectOptimalEngine(modelSpec, config)
+	archInfo := AnalyzeModelArchitecture(modelSpec)
+	
+	fmt.Printf("🧠 Smart Routing Analysis:\n")
+	fmt.Printf("   - Input: %dD %v\n", archInfo.InputDimensions, modelSpec.InputShape)
+	fmt.Printf("   - Architecture: %s (%d layers, %d params)\n", 
+		archInfo.Complexity, archInfo.LayerCount, archInfo.ParameterCount)
+	fmt.Printf("   - Pattern: CNN=%v, MLP=%v\n", archInfo.IsCNNPattern, archInfo.IsMLPOnly)
+	fmt.Printf("   - Selected Engine: %s\n", selectedEngine.String())
+	
+	// Create engine based on smart routing decision
+	switch selectedEngine {
+	case Dynamic:
+		// Dynamic Engine: Maximum flexibility for any architecture
+		// - Supports 2D, 4D, or any dimensional input
+		// - Supports any layer combination (Dense, Conv2D, etc.)
+		// - MPSGraph-centric architecture with automatic kernel fusion
+		fmt.Printf("🔧 Creating Dynamic Engine (any architecture support)\n")
 		modelEngine, err = engine.NewModelTrainingEngineDynamic(modelSpec, bridgeConfig)
-	} else if config.OptimizerType == cgo_bridge.Adam {
-		// Create with Adam optimizer (legacy hybrid approach)
-		adamConfig := map[string]interface{}{
-			"learning_rate": config.LearningRate,
-			"beta1":         config.Beta1,
-			"beta2":         config.Beta2,
-			"epsilon":       config.Epsilon,
-			"weight_decay":  config.WeightDecay,
+		
+	case Hybrid:
+		// Hybrid Engine: Maximum performance for CNN architectures
+		// - Optimized for 4D input [batch, channels, height, width]
+		// - MPS for convolutions + MPSGraph for dense layers
+		// - Achieves 20k+ batches/second performance
+		fmt.Printf("🚀 Creating Hybrid Engine (CNN optimization)\n")
+		
+		// Route to appropriate hybrid engine based on optimizer
+		if config.OptimizerType == cgo_bridge.Adam {
+			adamConfig := map[string]interface{}{
+				"learning_rate": config.LearningRate,
+				"beta1":         config.Beta1,
+				"beta2":         config.Beta2,
+				"epsilon":       config.Epsilon,
+				"weight_decay":  config.WeightDecay,
+			}
+			modelEngine, err = engine.NewModelTrainingEngineWithAdam(modelSpec, bridgeConfig, adamConfig)
+		} else {
+			// SGD or RMSProp with hybrid engine
+			modelEngine, err = engine.NewModelTrainingEngine(modelSpec, bridgeConfig)
 		}
 		
-		modelEngine, err = engine.NewModelTrainingEngineWithAdam(modelSpec, bridgeConfig, adamConfig)
-	} else {
-		// Create with SGD optimizer (legacy hybrid approach)
-		modelEngine, err = engine.NewModelTrainingEngine(modelSpec, bridgeConfig)
+	default:
+		// Fallback to dynamic engine for unknown types
+		fmt.Printf("⚠️  Unknown engine type, falling back to Dynamic Engine\n")
+		modelEngine, err = engine.NewModelTrainingEngineDynamic(modelSpec, bridgeConfig)
 	}
 	
 	if err != nil {
@@ -128,6 +164,7 @@ func NewModelTrainer(
 		modelSpec:   modelSpec,
 		batchSize:   config.BatchSize,
 		config:      bridgeConfig,
+		trainerConfig: config,
 		currentStep: 0,
 		
 		// Default: calculate accuracy every step (traditional behavior)
@@ -674,13 +711,75 @@ func (mt *ModelTrainer) TrainBatchWithCommandPool(
 	}, nil
 }
 
+// TrainBatchUnified executes a training step with flexible label types
+// This is the recommended API for new code as it supports both classification and regression
+// while maintaining GPU-residency and minimizing CGO calls
+func (mt *ModelTrainer) TrainBatchUnified(
+	inputData []float32,
+	inputShape []int,
+	labelData LabelData,
+) (*TrainingResultOptimized, error) {
+	// Validate label data compatibility with trainer configuration
+	if err := mt.validateLabelCompatibility(labelData); err != nil {
+		return nil, err
+	}
+	
+	// Convert labels to float32 for GPU consumption (zero-cost for regression)
+	labels := labelData.ToFloat32Slice()
+	labelShape := labelData.Shape()
+	
+	// Call the internal training function with converted labels
+	return mt.trainBatchPersistentWithCommandPoolInternal(
+		inputData, inputShape, labels, labelShape, labelData.DataType())
+}
+
+// validateLabelCompatibility ensures label data matches the configured problem type
+func (mt *ModelTrainer) validateLabelCompatibility(labelData LabelData) error {
+	configType := mt.trainerConfig.ProblemType
+	dataType := labelData.DataType()
+	
+	switch configType {
+	case Classification:
+		if dataType != LabelTypeInt32 {
+			return fmt.Errorf("classification trainer requires Int32Labels, got %v", dataType)
+		}
+	case Regression:
+		if dataType != LabelTypeFloat32 {
+			return fmt.Errorf("regression trainer requires Float32Labels, got %v", dataType)
+		}
+	default:
+		return fmt.Errorf("unsupported problem type: %v", configType)
+	}
+	
+	return nil
+}
+
 // TrainBatchPersistentWithCommandPool executes a training step using both persistent tensors 
 // and pooled command buffers for maximum performance and resource efficiency
+// DEPRECATED: Use TrainBatchUnified for new code
 func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
 	inputData []float32,
 	inputShape []int,
 	labelData []int32,
 	labelShape []int,
+) (*TrainingResultOptimized, error) {
+	// Convert int32 labels to LabelData for unified processing
+	labels, err := NewInt32Labels(labelData, labelShape)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create label data: %v", err)
+	}
+	
+	return mt.TrainBatchUnified(inputData, inputShape, labels)
+}
+
+// trainBatchPersistentWithCommandPoolInternal is the internal implementation
+// that works with float32 labels for both classification and regression
+func (mt *ModelTrainer) trainBatchPersistentWithCommandPoolInternal(
+	inputData []float32,
+	inputShape []int,
+	labelData []float32,
+	labelShape []int,
+	labelType LabelDataType,
 ) (*TrainingResultOptimized, error) {
 	if !mt.persistentEnabled {
 		return nil, fmt.Errorf("persistent buffers not enabled - call EnablePersistentBuffers() first")
@@ -721,9 +820,27 @@ func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
 			currentBatchSize, persistentBatchSize)
 	}
 	
-	// Convert labels to one-hot format (reuses buffer)
-	oneHotShape := []int{labelShape[0], mt.getOutputSize()}
-	oneHotData := mt.labelsToOneHot(labelData, oneHotShape)
+	// Handle labels based on problem type
+	var processedLabels []float32
+	
+	if mt.trainerConfig.ProblemType == Classification {
+		// Convert labels to one-hot format for classification
+		if labelType == LabelTypeInt32 {
+			// Labels are int32, convert back from float32 to int32 for one-hot encoding
+			int32Labels := make([]int32, len(labelData))
+			for i, v := range labelData {
+				int32Labels[i] = int32(v)
+			}
+			oneHotShape := []int{labelShape[0], mt.getOutputSize()}
+			processedLabels = mt.labelsToOneHot(int32Labels, oneHotShape)
+		} else {
+			// This shouldn't happen with proper validation, but handle it
+			return nil, fmt.Errorf("classification requires int32 labels")
+		}
+	} else {
+		// For regression, use float32 labels directly
+		processedLabels = labelData
+	}
 	
 	// Copy data to persistent GPU tensors
 	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(mt.persistentInputTensor.MetalBuffer(), inputData)
@@ -731,7 +848,7 @@ func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
 		return nil, fmt.Errorf("failed to copy input data to GPU: %v", err)
 	}
 	
-	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(mt.persistentLabelTensor.MetalBuffer(), oneHotData)
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(mt.persistentLabelTensor.MetalBuffer(), processedLabels)
 	if err != nil {
 		return nil, fmt.Errorf("failed to copy label data to GPU: %v", err)
 	}
@@ -759,11 +876,12 @@ func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
 		// Perform inference using persistent tensors
 		inferenceResult, inferErr := mt.modelEngine.ExecuteInference(mt.persistentInputTensor, currentBatchSize)
 		if inferErr == nil {
-			accuracy = mt.CalculateAccuracy(
+			accuracy = mt.CalculateAccuracyUnified(
 				inferenceResult.Predictions, 
 				labelData, 
 				currentBatchSize, 
 				mt.getOutputSize(),
+				labelType,
 			)
 			mt.lastAccuracy = accuracy
 			hasAccuracy = true
@@ -989,6 +1107,61 @@ func (mt *ModelTrainer) InferBatch(
 	
 	// Execute inference using single CGO call (design compliant)
 	return mt.modelEngine.ExecuteInference(inputTensor, batchSize)
+}
+
+// CalculateAccuracyUnified calculates accuracy for both classification and regression
+// For classification: returns percentage of correct predictions
+// For regression: returns 1 - normalized mean absolute error
+func (mt *ModelTrainer) CalculateAccuracyUnified(
+	predictions []float32,
+	trueLabels []float32,
+	batchSize int,
+	outputSize int,
+	labelType LabelDataType,
+) float64 {
+	if mt.trainerConfig.ProblemType == Classification {
+		// Convert float32 labels back to int32 for classification
+		int32Labels := make([]int32, len(trueLabels))
+		for i, v := range trueLabels {
+			int32Labels[i] = int32(v)
+		}
+		return mt.CalculateAccuracy(predictions, int32Labels, batchSize, outputSize)
+	} else {
+		// For regression, calculate R² or 1-NMAE
+		return mt.CalculateRegressionMetric(predictions, trueLabels, batchSize)
+	}
+}
+
+// CalculateRegressionMetric calculates a metric for regression
+// Returns 1 - normalized mean absolute error (closer to 1 is better)
+func (mt *ModelTrainer) CalculateRegressionMetric(
+	predictions []float32,
+	trueLabels []float32,
+	batchSize int,
+) float64 {
+	if len(predictions) < batchSize || len(trueLabels) < batchSize {
+		return 0.0
+	}
+	
+	var sumAbsError float64
+	var sumTrue float64
+	
+	for i := 0; i < batchSize; i++ {
+		pred := float64(predictions[i])
+		true := float64(trueLabels[i])
+		sumAbsError += math.Abs(pred - true)
+		sumTrue += math.Abs(true)
+	}
+	
+	if sumTrue == 0 {
+		return 0.0
+	}
+	
+	// Normalized mean absolute error
+	nmae := sumAbsError / sumTrue
+	
+	// Return 1 - NMAE so higher is better (like accuracy)
+	return math.Max(0, 1.0 - nmae)
 }
 
 // CalculateAccuracy computes accuracy from inference results and true labels

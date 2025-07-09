@@ -33,6 +33,9 @@ func testAdamWithRealGradients() error {
 		Beta2:         0.999,
 		WeightDecay:   0.0,
 		Epsilon:       1e-8,
+		Alpha:         0.99,  // Not used for Adam
+		Momentum:      0.0,   // Not used for Adam
+		Centered:      false, // Not used for Adam
 		OptimizerType: cgo_bridge.Adam,
 	}
 	

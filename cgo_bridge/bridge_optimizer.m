@@ -56,6 +56,43 @@ void cacheAdamScalarTensors(training_engine_t* engine) {
     }
 }
 
+// PRODUCTION OPTIMIZATION: Cache RMSProp scalar tensors to eliminate allocation overhead
+void cacheRMSPropScalarTensors(training_engine_t* engine) {
+    @autoreleasepool {
+        if (engine->rmspropScalarsCached || !engine->graph) {
+            return; // Already cached or no graph available
+        }
+        
+        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching RMSProp scalar tensors to eliminate allocation overhead...");
+        
+        // Create scalar tensors for RMSProp hyperparameters ONCE
+        float lr = engine->config.learning_rate;
+        float alpha = engine->config.alpha;
+        float epsilon = engine->config.epsilon;
+        float weight_decay = engine->config.weight_decay;
+        float momentum = engine->config.momentum;
+        
+        engine->cachedLrTensor = [engine->graph constantWithScalar:lr dataType:MPSDataTypeFloat32];
+        engine->cachedAlphaTensor = [engine->graph constantWithScalar:alpha dataType:MPSDataTypeFloat32];
+        engine->cachedEpsilonTensor = [engine->graph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+        engine->cachedWeightDecayTensor = [engine->graph constantWithScalar:weight_decay dataType:MPSDataTypeFloat32];
+        engine->cachedOneTensor = [engine->graph constantWithScalar:1.0f dataType:MPSDataTypeFloat32];
+        
+        // Create derived constant tensors ONCE
+        engine->cachedOneMinusAlphaTensor = [engine->graph subtractionWithPrimaryTensor:engine->cachedOneTensor
+                                                                           secondaryTensor:engine->cachedAlphaTensor
+                                                                                      name:@"cached_1_minus_alpha"];
+        
+        // Cache momentum tensor if momentum is used
+        if (momentum > 0.0f) {
+            engine->cachedMomentumTensor = [engine->graph constantWithScalar:momentum dataType:MPSDataTypeFloat32];
+        }
+        
+        engine->rmspropScalarsCached = YES;
+        NSLog(@"✅ PRODUCTION OPTIMIZATION: RMSProp scalar tensors cached - zero scalar allocations during training");
+    }
+}
+
 // PRODUCTION OPTIMIZATION: Cache SGD scalar tensors to eliminate allocation overhead
 void cacheSGDScalarTensors(training_engine_t* engine) {
     @autoreleasepool {
@@ -537,6 +574,250 @@ int execute_adam_step_mpsgraph_pooled(
             return_command_buffer_to_pool(command_pool, pooledCommandBuffer);
             
             return -13;
+        }
+    }
+}
+
+// Execute RMSProp optimization step using MPSGraph for optimal GPU performance
+int execute_rmsprop_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    uintptr_t* momentum_buffers,
+    uintptr_t* gradient_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float alpha,
+    float epsilon,
+    float weight_decay,
+    float momentum,
+    bool centered,
+    int step_count
+) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
+        if (!device) {
+            NSLog(@"Device is nil in RMSProp step");
+            return -1;
+        }
+        
+        // Create MPSGraph for RMSProp optimization
+        MPSGraph* rmspropGraph = [[MPSGraph alloc] init];
+        if (!rmspropGraph) {
+            NSLog(@"Failed to create MPSGraph for RMSProp optimization");
+            return -2;
+        }
+        
+        // Create command queue
+        id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+        if (!commandQueue) {
+            NSLog(@"Failed to create command queue for RMSProp step");
+            return -3;
+        }
+        
+        @try {
+            // Process each weight tensor using MPSGraph
+            for (int i = 0; i < num_weights; i++) {
+                id<MTLBuffer> weightsBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                id<MTLBuffer> gradientsBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                id<MTLBuffer> squaredGradAvgBuffer = (__bridge id<MTLBuffer>)(void*)squared_grad_avg_buffers[i];
+                
+                if (!weightsBuffer || !gradientsBuffer || !squaredGradAvgBuffer) {
+                    NSLog(@"Required buffers are nil for weight %d", i);
+                    return -4;
+                }
+                
+                // Optional buffers for momentum and centered variants
+                id<MTLBuffer> momentumBuffer = (momentum > 0.0f) ? (__bridge id<MTLBuffer>)(void*)momentum_buffers[i] : nil;
+                id<MTLBuffer> gradientAvgBuffer = centered ? (__bridge id<MTLBuffer>)(void*)gradient_avg_buffers[i] : nil;
+                
+                if (momentum > 0.0f && !momentumBuffer) {
+                    NSLog(@"Momentum buffer is nil for weight %d but momentum > 0", i);
+                    return -5;
+                }
+                
+                if (centered && !gradientAvgBuffer) {
+                    NSLog(@"Gradient average buffer is nil for weight %d but centered=true", i);
+                    return -6;
+                }
+                
+                int size_bytes = buffer_sizes[i];
+                int num_elements = size_bytes / sizeof(float);
+                NSArray<NSNumber*>* shape = @[@(num_elements)];
+                
+                // Create placeholder tensors for inputs
+                MPSGraphTensor* weightsTensor = [rmspropGraph placeholderWithShape:shape
+                                                                          dataType:MPSDataTypeFloat32
+                                                                              name:[NSString stringWithFormat:@"weights_%d", i]];
+                MPSGraphTensor* gradientsTensor = [rmspropGraph placeholderWithShape:shape
+                                                                            dataType:MPSDataTypeFloat32
+                                                                                name:[NSString stringWithFormat:@"gradients_%d", i]];
+                MPSGraphTensor* squaredGradAvgTensor = [rmspropGraph placeholderWithShape:shape
+                                                                                 dataType:MPSDataTypeFloat32
+                                                                                     name:[NSString stringWithFormat:@"squared_grad_avg_%d", i]];
+                
+                // Create constant tensors for hyperparameters
+                MPSGraphTensor* alphaTensor = [rmspropGraph constantWithScalar:alpha
+                                                                      dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* oneMinusAlphaTensor = [rmspropGraph constantWithScalar:(1.0f - alpha)
+                                                                              dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* epsilonTensor = [rmspropGraph constantWithScalar:epsilon
+                                                                        dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* lrTensor = [rmspropGraph constantWithScalar:learning_rate
+                                                                   dataType:MPSDataTypeFloat32];
+                
+                // RMSProp algorithm using MPSGraph operations:
+                // squared_grad_avg = α * squared_grad_avg + (1 - α) * grad^2
+                MPSGraphTensor* gradientSquared = [rmspropGraph multiplicationWithPrimaryTensor:gradientsTensor
+                                                                                secondaryTensor:gradientsTensor
+                                                                                           name:nil];
+                MPSGraphTensor* oldSquaredGradAvgScaled = [rmspropGraph multiplicationWithPrimaryTensor:squaredGradAvgTensor
+                                                                                       secondaryTensor:alphaTensor
+                                                                                                  name:nil];
+                MPSGraphTensor* newSquaredGradAvgTerm = [rmspropGraph multiplicationWithPrimaryTensor:gradientSquared
+                                                                                     secondaryTensor:oneMinusAlphaTensor
+                                                                                                name:nil];
+                MPSGraphTensor* newSquaredGradAvg = [rmspropGraph additionWithPrimaryTensor:oldSquaredGradAvgScaled
+                                                                            secondaryTensor:newSquaredGradAvgTerm
+                                                                                       name:nil];
+                
+                // Calculate denominator based on whether centered or not
+                MPSGraphTensor* denominator;
+                if (centered) {
+                    // For centered RMSProp: denominator = sqrt(squared_grad_avg - grad_avg^2 + ε)
+                    MPSGraphTensor* gradientAvgTensor = [rmspropGraph placeholderWithShape:shape
+                                                                                  dataType:MPSDataTypeFloat32
+                                                                                      name:[NSString stringWithFormat:@"gradient_avg_%d", i]];
+                    
+                    // Update gradient average: grad_avg = α * grad_avg + (1 - α) * grad
+                    MPSGraphTensor* oldGradAvgScaled = [rmspropGraph multiplicationWithPrimaryTensor:gradientAvgTensor
+                                                                                    secondaryTensor:alphaTensor
+                                                                                               name:nil];
+                    MPSGraphTensor* newGradAvgTerm = [rmspropGraph multiplicationWithPrimaryTensor:gradientsTensor
+                                                                                  secondaryTensor:oneMinusAlphaTensor
+                                                                                             name:nil];
+                    MPSGraphTensor* newGradientAvg = [rmspropGraph additionWithPrimaryTensor:oldGradAvgScaled
+                                                                            secondaryTensor:newGradAvgTerm
+                                                                                       name:nil];
+                    
+                    // Calculate variance: squared_grad_avg - grad_avg^2
+                    MPSGraphTensor* gradientAvgSquared = [rmspropGraph multiplicationWithPrimaryTensor:newGradientAvg
+                                                                                      secondaryTensor:newGradientAvg
+                                                                                                 name:nil];
+                    MPSGraphTensor* variance = [rmspropGraph subtractionWithPrimaryTensor:newSquaredGradAvg
+                                                                          secondaryTensor:gradientAvgSquared
+                                                                                     name:nil];
+                    MPSGraphTensor* varianceWithEpsilon = [rmspropGraph additionWithPrimaryTensor:variance
+                                                                                  secondaryTensor:epsilonTensor
+                                                                                             name:nil];
+                    denominator = [rmspropGraph squareRootWithTensor:varianceWithEpsilon name:nil];
+                } else {
+                    // For standard RMSProp: denominator = sqrt(squared_grad_avg + ε)
+                    MPSGraphTensor* squaredGradAvgWithEpsilon = [rmspropGraph additionWithPrimaryTensor:newSquaredGradAvg
+                                                                                        secondaryTensor:epsilonTensor
+                                                                                                   name:nil];
+                    denominator = [rmspropGraph squareRootWithTensor:squaredGradAvgWithEpsilon name:nil];
+                }
+                
+                // Calculate basic update: grad / denominator
+                MPSGraphTensor* update = [rmspropGraph divisionWithPrimaryTensor:gradientsTensor
+                                                                 secondaryTensor:denominator
+                                                                            name:nil];
+                
+                // Apply momentum if specified
+                if (momentum > 0.0f) {
+                    MPSGraphTensor* momentumTensor = [rmspropGraph placeholderWithShape:shape
+                                                                               dataType:MPSDataTypeFloat32
+                                                                                   name:[NSString stringWithFormat:@"momentum_%d", i]];
+                    MPSGraphTensor* momentumScalar = [rmspropGraph constantWithScalar:momentum
+                                                                             dataType:MPSDataTypeFloat32];
+                    
+                    // New momentum = momentum * old_momentum + update
+                    MPSGraphTensor* momentumScaled = [rmspropGraph multiplicationWithPrimaryTensor:momentumTensor
+                                                                                   secondaryTensor:momentumScalar
+                                                                                              name:nil];
+                    MPSGraphTensor* newMomentum = [rmspropGraph additionWithPrimaryTensor:momentumScaled
+                                                                          secondaryTensor:update
+                                                                                     name:nil];
+                    update = newMomentum;
+                }
+                
+                // Add weight decay if specified
+                if (weight_decay > 0.0f) {
+                    MPSGraphTensor* weightDecayTensor = [rmspropGraph constantWithScalar:weight_decay
+                                                                                dataType:MPSDataTypeFloat32];
+                    MPSGraphTensor* weightDecayTerm = [rmspropGraph multiplicationWithPrimaryTensor:weightsTensor
+                                                                                   secondaryTensor:weightDecayTensor
+                                                                                              name:nil];
+                    update = [rmspropGraph additionWithPrimaryTensor:update
+                                                    secondaryTensor:weightDecayTerm
+                                                               name:nil];
+                }
+                
+                // Scale by learning rate
+                MPSGraphTensor* scaledUpdate = [rmspropGraph multiplicationWithPrimaryTensor:update
+                                                                             secondaryTensor:lrTensor
+                                                                                        name:nil];
+                
+                // w_t = w_{t-1} - α * update
+                MPSGraphTensor* newWeights = [rmspropGraph subtractionWithPrimaryTensor:weightsTensor
+                                                                        secondaryTensor:scaledUpdate
+                                                                                   name:nil];
+                
+                // Create tensor data for buffers
+                MPSGraphTensorData* weightsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightsBuffer
+                                                                                           shape:shape
+                                                                                        dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* gradientsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:gradientsBuffer
+                                                                                             shape:shape
+                                                                                          dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* squaredGradAvgData = [[MPSGraphTensorData alloc] initWithMTLBuffer:squaredGradAvgBuffer
+                                                                                                  shape:shape
+                                                                                               dataType:MPSDataTypeFloat32];
+                
+                // Prepare feeds and target tensors
+                NSMutableDictionary* feeds = [@{
+                    weightsTensor: weightsData,
+                    gradientsTensor: gradientsData,
+                    squaredGradAvgTensor: squaredGradAvgData
+                } mutableCopy];
+                
+                NSMutableArray* targetTensors = [@[newWeights, newSquaredGradAvg] mutableCopy];
+                
+                // Execute the graph
+                NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
+                    [rmspropGraph runWithMTLCommandQueue:commandQueue
+                                                   feeds:feeds
+                                          targetTensors:targetTensors
+                                       targetOperations:nil];
+                
+                // Copy results back to original buffers
+                MPSGraphTensorData* newWeightsData = results[newWeights];
+                MPSGraphTensorData* newSquaredGradAvgData = results[newSquaredGradAvg];
+                
+                if (newWeightsData && newSquaredGradAvgData) {
+                    // Copy updated weights back to original weight buffer
+                    float* weightPtr = (float*)[weightsBuffer contents];
+                    [[newWeightsData mpsndarray] readBytes:weightPtr strideBytes:nil];
+                    [weightsBuffer didModifyRange:NSMakeRange(0, size_bytes)];
+                    
+                    // Copy updated squared gradient average back to buffer
+                    float* squaredGradAvgPtr = (float*)[squaredGradAvgBuffer contents];
+                    [[newSquaredGradAvgData mpsndarray] readBytes:squaredGradAvgPtr strideBytes:nil];
+                    [squaredGradAvgBuffer didModifyRange:NSMakeRange(0, size_bytes)];
+                } else {
+                    NSLog(@"Failed to get RMSProp results for weight %d", i);
+                    return -7;
+                }
+            }
+            
+            return 0;
+            
+        } @catch (NSException* exception) {
+            NSLog(@"❌ RMSProp optimizer exception: %@", exception.reason);
+            return -8;
         }
     }
 }

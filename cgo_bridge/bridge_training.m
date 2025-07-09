@@ -786,6 +786,57 @@ int execute_training_step_dynamic_with_gradients_pooled(
                 }
             }
             
+            // Feed squared gradient average placeholders for RMSProp optimizer
+            if (engine->config.optimizer_type == 2 && engine->squaredGradPlaceholders && engine->squaredGradBuffers) {
+                for (int i = 0; i < engine->squaredGradPlaceholders.count && i < engine->squaredGradBuffers.count; i++) {
+                    MPSGraphTensor* squaredGradPlaceholder = engine->squaredGradPlaceholders[i];
+                    id<MTLBuffer> squaredGradBuf = engine->squaredGradBuffers[i];
+                    
+                    if (squaredGradBuf && squaredGradPlaceholder) {
+                        NSArray<NSNumber*>* squaredGradShape = squaredGradPlaceholder.shape;
+                        MPSGraphTensorData* squaredGradData = [[MPSGraphTensorData alloc] 
+                                                              initWithMTLBuffer:squaredGradBuf
+                                                              shape:squaredGradShape
+                                                              dataType:MPSDataTypeFloat32];
+                        feeds[squaredGradPlaceholder] = squaredGradData;
+                    }
+                }
+                
+                // Feed momentum placeholders for RMSProp with momentum
+                if (engine->config.momentum > 0.0f && engine->momentumPlaceholders && engine->momentumBuffers) {
+                    for (int i = 0; i < engine->momentumPlaceholders.count && i < engine->momentumBuffers.count; i++) {
+                        MPSGraphTensor* momentumPlaceholder = engine->momentumPlaceholders[i];
+                        id<MTLBuffer> momentumBuf = engine->momentumBuffers[i];
+                        
+                        if (momentumBuf && momentumPlaceholder) {
+                            NSArray<NSNumber*>* momentumShape = momentumPlaceholder.shape;
+                            MPSGraphTensorData* momentumData = [[MPSGraphTensorData alloc] 
+                                                              initWithMTLBuffer:momentumBuf
+                                                              shape:momentumShape
+                                                              dataType:MPSDataTypeFloat32];
+                            feeds[momentumPlaceholder] = momentumData;
+                        }
+                    }
+                }
+                
+                // Feed gradient average placeholders for centered RMSProp
+                if (engine->config.centered && engine->gradAvgPlaceholders && engine->gradAvgBuffers) {
+                    for (int i = 0; i < engine->gradAvgPlaceholders.count && i < engine->gradAvgBuffers.count; i++) {
+                        MPSGraphTensor* gradAvgPlaceholder = engine->gradAvgPlaceholders[i];
+                        id<MTLBuffer> gradAvgBuf = engine->gradAvgBuffers[i];
+                        
+                        if (gradAvgBuf && gradAvgPlaceholder) {
+                            NSArray<NSNumber*>* gradAvgShape = gradAvgPlaceholder.shape;
+                            MPSGraphTensorData* gradAvgData = [[MPSGraphTensorData alloc] 
+                                                              initWithMTLBuffer:gradAvgBuf
+                                                              shape:gradAvgShape
+                                                              dataType:MPSDataTypeFloat32];
+                            feeds[gradAvgPlaceholder] = gradAvgData;
+                        }
+                    }
+                }
+            }
+            
             // Get actual loss tensor from the graph
             MPSGraphTensor* actualLoss = engine->lossOutput;
             
@@ -820,6 +871,14 @@ int execute_training_step_dynamic_with_gradients_pooled(
                 updatesMomentumToUse = engine->adamPrecompiledUpdatedMomentum;
                 hasPrecompiledOps = YES;
             }
+            // Try RMSProp-specific arrays (for RMSProp optimizer)
+            else if (engine->config.optimizer_type == 2 && engine->rmspropPrecompiledGradients && engine->rmspropPrecompiledUpdatedParams) {
+                // NSLog(@"🚀 Using RMSPROP-SPECIFIC pre-compiled operations!");
+                gradientsToUse = engine->rmspropPrecompiledGradients;
+                updatesParamsToUse = engine->rmspropPrecompiledUpdatedParams;
+                updatesMomentumToUse = engine->rmspropPrecompiledUpdatedMomentum;
+                hasPrecompiledOps = YES;
+            }
             // Try legacy arrays (fallback for backward compatibility)
             else if (engine->precompiledGradientTensors && engine->precompiledUpdatedParams) {
                 NSLog(@"🚀 Using LEGACY pre-compiled operations!");
@@ -851,6 +910,16 @@ int execute_training_step_dynamic_with_gradients_pooled(
                 // Add variance tensors for Adam
                 if (engine->precompiledUpdatedVariance && engine->config.optimizer_type == 1) {
                     [targetTensors addObjectsFromArray:engine->precompiledUpdatedVariance];
+                }
+                
+                // Add squared gradient average tensors for RMSProp
+                if (engine->rmspropPrecompiledUpdatedSquaredGrad && engine->config.optimizer_type == 2) {
+                    [targetTensors addObjectsFromArray:engine->rmspropPrecompiledUpdatedSquaredGrad];
+                }
+                
+                // Add gradient average tensors for centered RMSProp
+                if (engine->rmspropPrecompiledUpdatedGradAvg && engine->config.optimizer_type == 2 && engine->config.centered) {
+                    [targetTensors addObjectsFromArray:engine->rmspropPrecompiledUpdatedGradAvg];
                 }
                 
             } else {
@@ -949,11 +1018,12 @@ int execute_training_step_dynamic_with_gradients_pooled(
                             NSLog(@"⚠️ WARNING: Only %d of %d parameters were updated!", updatedCount, num_weights);
                         }
                         
-                        // Copy updated momentum and variance back (for both SGD and Adam)
+                        // Copy updated momentum and variance back (for SGD, Adam, and RMSProp)
                         if (updatesMomentumToUse && updatesMomentumToUse.count > 0) {
-                            // Update momentum buffers for both SGD (if momentum enabled) and Adam
+                            // Update momentum buffers for SGD (if momentum enabled), Adam, and RMSProp (if momentum enabled)
                             if ((engine->config.optimizer_type == 0 && engine->config.beta1 > 0.0f) || // SGD with momentum
-                                (engine->config.optimizer_type == 1)) { // Adam
+                                (engine->config.optimizer_type == 1) || // Adam
+                                (engine->config.optimizer_type == 2 && engine->config.momentum > 0.0f)) { // RMSProp with momentum
                                 for (int i = 0; i < updatesMomentumToUse.count && i < engine->momentumBuffers.count; i++) {
                                     id updatedMomentumTensorObj = updatesMomentumToUse[i];
                                     
@@ -987,6 +1057,57 @@ int execute_training_step_dynamic_with_gradients_pooled(
                                             float* variancePtr = (float*)[varianceBuf contents];
                                             [[updatedVarianceData mpsndarray] readBytes:variancePtr strideBytes:nil];
                                             [varianceBuf didModifyRange:NSMakeRange(0, [varianceBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Copy updated squared gradient averages back (for RMSProp)
+                            if (engine->config.optimizer_type == 2 && engine->rmspropPrecompiledUpdatedSquaredGrad) {
+                                for (int i = 0; i < engine->rmspropPrecompiledUpdatedSquaredGrad.count && i < engine->squaredGradBuffers.count; i++) {
+                                    MPSGraphTensor* updatedSquaredGradTensor = engine->rmspropPrecompiledUpdatedSquaredGrad[i];
+                                    MPSGraphTensorData* updatedSquaredGradData = results[updatedSquaredGradTensor];
+                                    
+                                    if (updatedSquaredGradData) {
+                                        id<MTLBuffer> squaredGradBuf = engine->squaredGradBuffers[i];
+                                        if (squaredGradBuf) {
+                                            float* squaredGradPtr = (float*)[squaredGradBuf contents];
+                                            [[updatedSquaredGradData mpsndarray] readBytes:squaredGradPtr strideBytes:nil];
+                                            [squaredGradBuf didModifyRange:NSMakeRange(0, [squaredGradBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Copy updated gradient averages back (for centered RMSProp)
+                            if (engine->config.optimizer_type == 2 && engine->config.centered && engine->rmspropPrecompiledUpdatedGradAvg) {
+                                for (int i = 0; i < engine->rmspropPrecompiledUpdatedGradAvg.count && i < engine->gradAvgBuffers.count; i++) {
+                                    MPSGraphTensor* updatedGradAvgTensor = engine->rmspropPrecompiledUpdatedGradAvg[i];
+                                    MPSGraphTensorData* updatedGradAvgData = results[updatedGradAvgTensor];
+                                    
+                                    if (updatedGradAvgData) {
+                                        id<MTLBuffer> gradAvgBuf = engine->gradAvgBuffers[i];
+                                        if (gradAvgBuf) {
+                                            float* gradAvgPtr = (float*)[gradAvgBuf contents];
+                                            [[updatedGradAvgData mpsndarray] readBytes:gradAvgPtr strideBytes:nil];
+                                            [gradAvgBuf didModifyRange:NSMakeRange(0, [gradAvgBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Copy updated momentum buffers back (for RMSProp with momentum)
+                            if (engine->config.optimizer_type == 2 && engine->config.momentum > 0.0 && engine->rmspropPrecompiledUpdatedMomentum) {
+                                for (int i = 0; i < engine->rmspropPrecompiledUpdatedMomentum.count && i < engine->momentumBuffers.count; i++) {
+                                    MPSGraphTensor* updatedMomentumTensor = engine->rmspropPrecompiledUpdatedMomentum[i];
+                                    MPSGraphTensorData* updatedMomentumData = results[updatedMomentumTensor];
+                                    
+                                    if (updatedMomentumData) {
+                                        id<MTLBuffer> momentumBuf = engine->momentumBuffers[i];
+                                        if (momentumBuf) {
+                                            float* momentumPtr = (float*)[momentumBuf contents];
+                                            [[updatedMomentumData mpsndarray] readBytes:momentumPtr strideBytes:nil];
+                                            [momentumBuf didModifyRange:NSMakeRange(0, [momentumBuf length])];
                                         }
                                     }
                                 }

@@ -237,6 +237,29 @@ ExecuteAdamStepMPSGraphPooled performs Adam optimization with pooled command
 buffers RESOURCE LEAK FIX: Uses command buffer pooling to prevent Metal resource
 accumulation
 
+#### func  ExecuteRMSPropStepMPSGraph
+
+```go
+func ExecuteRMSPropStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	gradientAvgBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	alpha float32,
+	epsilon float32,
+	weightDecay float32,
+	momentum float32,
+	centered bool,
+	stepCount int,
+) error
+```
+ExecuteRMSPropStepMPSGraph executes a single RMSProp optimization step using
+MPSGraph for optimal GPU performance
+
 #### func  ExecuteTrainingStep
 
 ```go

@@ -130,3 +130,131 @@ type AdamStats struct {
 ```
 
 AdamStats provides statistics about the Adam optimizer
+
+#### type RMSPropConfig
+
+```go
+type RMSPropConfig struct {
+	LearningRate float32
+	Alpha        float32
+	Epsilon      float32
+	WeightDecay  float32
+	Momentum     float32
+	Centered     bool
+}
+```
+
+RMSPropConfig holds configuration for RMSProp optimizer
+
+#### func  DefaultRMSPropConfig
+
+```go
+func DefaultRMSPropConfig() RMSPropConfig
+```
+DefaultRMSPropConfig returns default RMSProp optimizer configuration
+
+#### type RMSPropOptimizerState
+
+```go
+type RMSPropOptimizerState struct {
+	// Hyperparameters
+	LearningRate float32
+	Alpha        float32 // Smoothing constant (typically 0.99)
+	Epsilon      float32 // Small constant to prevent division by zero (typically 1e-8)
+	WeightDecay  float32 // L2 regularization coefficient
+	Momentum     float32 // Momentum coefficient (typically 0.9, 0.0 for no momentum)
+	Centered     bool    // Whether to use centered RMSProp (subtract mean of gradients)
+
+	// GPU-resident state buffers
+	SquaredGradAvgBuffers []unsafe.Pointer // Running average of squared gradients for each weight tensor
+	MomentumBuffers       []unsafe.Pointer // Momentum buffers for each weight tensor (if momentum > 0)
+	GradientAvgBuffers    []unsafe.Pointer // Running average of gradients for each weight tensor (if centered)
+	WeightBuffers         []unsafe.Pointer // Current weight tensors
+
+	// Step tracking
+	StepCount uint64
+}
+```
+
+RMSPropOptimizerState represents GPU-resident RMSProp optimizer state
+
+#### func  NewRMSPropOptimizer
+
+```go
+func NewRMSPropOptimizer(
+	config RMSPropConfig,
+	weightShapes [][]int,
+	memoryManager *memory.MemoryManager,
+	device unsafe.Pointer,
+) (*RMSPropOptimizerState, error)
+```
+NewRMSPropOptimizer creates a new GPU-resident RMSProp optimizer
+
+#### func (*RMSPropOptimizerState) Cleanup
+
+```go
+func (rmsprop *RMSPropOptimizerState) Cleanup()
+```
+Cleanup releases all GPU buffers
+
+#### func (*RMSPropOptimizerState) GetStats
+
+```go
+func (rmsprop *RMSPropOptimizerState) GetStats() RMSPropStats
+```
+GetStats returns optimizer statistics
+
+#### func (*RMSPropOptimizerState) GetStep
+
+```go
+func (rmsprop *RMSPropOptimizerState) GetStep() uint64
+```
+GetStep returns the current step count
+
+#### func (*RMSPropOptimizerState) SetCommandPool
+
+```go
+func (rmsprop *RMSPropOptimizerState) SetCommandPool(commandPool unsafe.Pointer)
+```
+SetCommandPool enables command buffer pooling for Metal operations
+
+#### func (*RMSPropOptimizerState) SetWeightBuffers
+
+```go
+func (rmsprop *RMSPropOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error
+```
+SetWeightBuffers sets the current weight buffer pointers This should be called
+before each optimization step
+
+#### func (*RMSPropOptimizerState) Step
+
+```go
+func (rmsprop *RMSPropOptimizerState) Step(gradientBuffers []unsafe.Pointer) error
+```
+Step performs a single RMSProp optimization step
+
+#### func (*RMSPropOptimizerState) UpdateLearningRate
+
+```go
+func (rmsprop *RMSPropOptimizerState) UpdateLearningRate(newLR float32)
+```
+UpdateLearningRate updates the learning rate (useful for learning rate
+scheduling)
+
+#### type RMSPropStats
+
+```go
+type RMSPropStats struct {
+	StepCount       uint64
+	LearningRate    float32
+	Alpha           float32
+	Epsilon         float32
+	WeightDecay     float32
+	Momentum        float32
+	Centered        bool
+	NumParameters   int
+	TotalBufferSize int
+}
+```
+
+RMSPropStats provides statistics about the RMSProp optimizer

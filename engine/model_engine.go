@@ -37,8 +37,8 @@ func NewModelTrainingEngineDynamic(
 	modelSpec *layers.ModelSpec,
 	config cgo_bridge.TrainingConfig,
 ) (*ModelTrainingEngine, error) {
-	// Validate model compatibility
-	if err := modelSpec.ValidateModelForTrainingEngine(); err != nil {
+	// Validate model compatibility for Dynamic Engine (supports 2D, 4D, any architecture)
+	if err := modelSpec.ValidateModelForDynamicEngine(); err != nil {
 		return nil, fmt.Errorf("model validation failed: %v", err)
 	}
 	
@@ -196,8 +196,8 @@ func NewModelTrainingEngine(
 	modelSpec *layers.ModelSpec,
 	config cgo_bridge.TrainingConfig,
 ) (*ModelTrainingEngine, error) {
-	// Validate model compatibility with TrainingEngine
-	if err := modelSpec.ValidateModelForTrainingEngine(); err != nil {
+	// Validate model compatibility with Hybrid TrainingEngine
+	if err := modelSpec.ValidateModelForHybridEngine(); err != nil {
 		return nil, fmt.Errorf("model validation failed: %v", err)
 	}
 	
@@ -261,8 +261,8 @@ func NewModelTrainingEngineWithAdam(
 	config cgo_bridge.TrainingConfig,
 	adamConfig map[string]interface{},
 ) (*ModelTrainingEngine, error) {
-	// Validate model first
-	if err := modelSpec.ValidateModelForTrainingEngine(); err != nil {
+	// Validate model compatibility with Hybrid TrainingEngine
+	if err := modelSpec.ValidateModelForHybridEngine(); err != nil {
 		return nil, fmt.Errorf("model validation failed: %v", err)
 	}
 	

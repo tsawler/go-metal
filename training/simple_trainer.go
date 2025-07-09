@@ -6,8 +6,98 @@ import (
 
 	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/engine"
+	"github.com/tsawler/go-metal/layers"
 	"github.com/tsawler/go-metal/memory"
 )
+
+// EngineType represents the training engine selection strategy
+// Maintains GPU-resident architecture compliance across all engine types
+type EngineType int
+
+const (
+	// Auto automatically selects the optimal engine based on model architecture
+	// - 4D input + Conv layers → Hybrid Engine (20k+ batches/sec performance)
+	// - 2D input + Dense-only → Dynamic Engine (flexibility for MLPs)
+	// - Complex architectures → Dynamic Engine (any architecture support)
+	Auto EngineType = iota
+	
+	// Hybrid uses MPS for convolutions + MPSGraph for other operations
+	// - Optimized for CNN architectures (3 conv + 2 FC pattern)
+	// - Hardcoded optimizations for maximum performance
+	// - Requires 4D input and Conv+Dense layer combination
+	Hybrid
+	
+	// Dynamic builds MPSGraph dynamically for any architecture
+	// - Supports any input dimensionality (2D, 4D, etc.)
+	// - Supports any layer combination
+	// - More flexible but slightly slower than Hybrid
+	Dynamic
+)
+
+func (et EngineType) String() string {
+	switch et {
+	case Auto:
+		return "Auto"
+	case Hybrid:
+		return "Hybrid"
+	case Dynamic:
+		return "Dynamic"
+	default:
+		return "Unknown"
+	}
+}
+
+// ProblemType represents the type of machine learning problem
+type ProblemType int
+
+const (
+	// Classification for discrete class prediction
+	Classification ProblemType = iota
+	// Regression for continuous value prediction
+	Regression
+)
+
+func (pt ProblemType) String() string {
+	switch pt {
+	case Classification:
+		return "Classification"
+	case Regression:
+		return "Regression"
+	default:
+		return fmt.Sprintf("Unknown(%d)", pt)
+	}
+}
+
+// LossFunction represents the loss function for training
+type LossFunction int
+
+const (
+	// Classification losses
+	CrossEntropy       LossFunction = iota // Softmax cross-entropy for multi-class
+	SparseCrossEntropy                     // Sparse categorical cross-entropy
+	
+	// Regression losses
+	MeanSquaredError  // MSE for regression
+	MeanAbsoluteError // MAE for regression
+	Huber             // Huber loss for robust regression
+)
+
+func (lf LossFunction) String() string {
+	switch lf {
+	case CrossEntropy:
+		return "CrossEntropy"
+	case SparseCrossEntropy:
+		return "SparseCrossEntropy"
+	case MeanSquaredError:
+		return "MeanSquaredError"
+	case MeanAbsoluteError:
+		return "MeanAbsoluteError"
+	case Huber:
+		return "Huber"
+	default:
+		return fmt.Sprintf("Unknown(%d)", lf)
+	}
+}
 
 // SimpleTrainer provides a basic training interface for testing Phase 1
 type SimpleTrainer struct {
@@ -221,6 +311,18 @@ func TestPhase1() error {
 // PRODUCTION TRAINER FACTORY SYSTEM
 // ================================================================
 
+// ModelArchitectureInfo provides architecture analysis for engine selection
+type ModelArchitectureInfo struct {
+	InputDimensions int          // Number of input dimensions (2D, 4D, etc.)
+	HasConvLayers   bool         // Whether model contains Conv2D layers
+	HasDenseLayers  bool         // Whether model contains Dense layers
+	IsMLPOnly       bool         // Whether model is MLP-only (Dense + activations)
+	IsCNNPattern    bool         // Whether model follows CNN pattern (Conv + Dense)
+	LayerCount      int          // Total number of layers
+	ParameterCount  int64        // Total trainable parameters
+	Complexity      string       // "Simple", "Standard", "Complex"
+}
+
 // TrainerConfig provides comprehensive configuration for training
 type TrainerConfig struct {
 	// Training parameters
@@ -230,16 +332,74 @@ type TrainerConfig struct {
 	// Optimizer configuration
 	OptimizerType cgo_bridge.OptimizerType `json:"optimizer_type"`
 	
-	// Adam-specific parameters (ignored for SGD)
-	Beta1       float32 `json:"beta1"`        // Adam momentum decay (default: 0.9)
-	Beta2       float32 `json:"beta2"`        // Adam RMSprop decay (default: 0.999)
-	Epsilon     float32 `json:"epsilon"`      // Adam numerical stability (default: 1e-8)
+	// Optimizer-specific parameters
+	Beta1       float32 `json:"beta1"`        // Adam momentum decay (default: 0.9) / RMSProp momentum (default: 0.0)
+	Beta2       float32 `json:"beta2"`        // Adam variance decay (default: 0.999) - unused for RMSProp
+	Epsilon     float32 `json:"epsilon"`      // Numerical stability (default: 1e-8)
 	WeightDecay float32 `json:"weight_decay"` // L2 regularization (default: 0.0)
 	
-	// Training behavior
-	UseHybridEngine  bool `json:"use_hybrid_engine"`  // Use hybrid MPS/MPSGraph (recommended: true)
-	UseDynamicEngine bool `json:"use_dynamic_engine"` // Use dynamic graph creation for any architecture (recommended: true)
-	InferenceOnly    bool `json:"inference_only"`     // Skip training setup, optimize for inference (forward-pass only)
+	// RMSProp-specific parameters
+	Alpha       float32 `json:"alpha"`        // RMSProp smoothing constant (default: 0.99)
+	Momentum    float32 `json:"momentum"`     // RMSProp momentum (default: 0.0)
+	Centered    bool    `json:"centered"`     // RMSProp centered variant (default: false)
+	
+	// Engine selection (GPU-resident architecture compliance)
+	EngineType       EngineType `json:"engine_type"`       // Engine selection: Auto, Hybrid, Dynamic (default: Auto)
+	
+	// Problem type and loss function configuration
+	ProblemType  ProblemType  `json:"problem_type"`  // Classification or Regression (default: Classification)
+	LossFunction LossFunction `json:"loss_function"` // Loss function for the problem type (default: CrossEntropy)
+	UseHybridEngine  bool       `json:"use_hybrid_engine"`  // DEPRECATED: Use EngineType instead
+	UseDynamicEngine bool       `json:"use_dynamic_engine"` // DEPRECATED: Use EngineType instead
+	InferenceOnly    bool       `json:"inference_only"`     // Skip training setup, optimize for inference (forward-pass only)
+}
+
+// Validate ensures the problem type and loss function are compatible
+func (tc *TrainerConfig) Validate() error {
+	// Validate problem type and loss function compatibility
+	switch tc.ProblemType {
+	case Classification:
+		if tc.LossFunction != CrossEntropy && tc.LossFunction != SparseCrossEntropy {
+			return fmt.Errorf("classification requires CrossEntropy or SparseCrossEntropy loss, got %v", tc.LossFunction)
+		}
+	case Regression:
+		if tc.LossFunction != MeanSquaredError && tc.LossFunction != MeanAbsoluteError && tc.LossFunction != Huber {
+			return fmt.Errorf("regression requires MSE, MAE, or Huber loss, got %v", tc.LossFunction)
+		}
+	default:
+		return fmt.Errorf("unsupported problem type: %v", tc.ProblemType)
+	}
+	
+	// Validate other parameters
+	if tc.BatchSize <= 0 {
+		return fmt.Errorf("batch size must be positive, got %d", tc.BatchSize)
+	}
+	
+	if tc.LearningRate <= 0 {
+		return fmt.Errorf("learning rate must be positive, got %f", tc.LearningRate)
+	}
+	
+	// Validate optimizer-specific parameters
+	if tc.OptimizerType == cgo_bridge.Adam {
+		if tc.Beta1 < 0 || tc.Beta1 >= 1 {
+			return fmt.Errorf("Adam beta1 must be in [0, 1), got %f", tc.Beta1)
+		}
+		if tc.Beta2 < 0 || tc.Beta2 >= 1 {
+			return fmt.Errorf("Adam beta2 must be in [0, 1), got %f", tc.Beta2)
+		}
+	}
+	
+	if tc.OptimizerType == cgo_bridge.RMSProp {
+		if tc.Alpha < 0 || tc.Alpha >= 1 {
+			return fmt.Errorf("RMSProp alpha must be in [0, 1), got %f", tc.Alpha)
+		}
+	}
+	
+	if tc.Epsilon <= 0 {
+		return fmt.Errorf("epsilon must be positive, got %f", tc.Epsilon)
+	}
+	
+	return nil
 }
 
 // OptimizerConfig provides optimizer-specific configurations
@@ -267,27 +427,36 @@ func (tf *TrainerFactory) CreateTrainer(config TrainerConfig) (*SimpleTrainer, e
 		return nil, fmt.Errorf("invalid configuration: %v", err)
 	}
 	
-	// Convert to CGO bridge config
+	// Convert to CGO bridge config (GPU-resident parameter passing)
 	bridgeConfig := cgo_bridge.TrainingConfig{
 		LearningRate:  config.LearningRate,
 		Beta1:         config.Beta1,
 		Beta2:         config.Beta2,
 		WeightDecay:   config.WeightDecay,
 		Epsilon:       config.Epsilon,
+		Alpha:         config.Alpha,
+		Momentum:      config.Momentum,
+		Centered:      config.Centered,
 		OptimizerType: config.OptimizerType,
 	}
 	
-	// Create batch trainer
+	// Create batch trainer using legacy approach (DEPRECATED)
+	// This function maintains backward compatibility but is limited
 	var batchTrainer *engine.BatchTrainer
 	var err error
 	
+	// Handle deprecated configuration options
 	if config.UseHybridEngine {
 		batchTrainer, err = engine.NewBatchTrainerHybrid(bridgeConfig, config.BatchSize)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create hybrid batch trainer: %v", err)
 		}
+	} else if config.UseDynamicEngine {
+		// NOTE: This path doesn't exist in legacy BatchTrainer
+		// Users should use NewModelTrainer for smart routing
+		return nil, fmt.Errorf("dynamic engine not supported in legacy SimpleTrainer (use NewModelTrainer instead)")
 	} else {
-		return nil, fmt.Errorf("non-hybrid engine not supported (use UseHybridEngine: true)")
+		return nil, fmt.Errorf("no engine specified (use UseHybridEngine: true or switch to NewModelTrainer for smart routing)")
 	}
 	
 	return &SimpleTrainer{
@@ -304,11 +473,16 @@ func (tf *TrainerFactory) CreateSGDTrainer(batchSize int, learningRate float32, 
 		LearningRate:    learningRate,
 		OptimizerType:   cgo_bridge.SGD,
 		WeightDecay:     weightDecay,
-		UseHybridEngine: true,
-		// Adam parameters are ignored for SGD
-		Beta1:   0.9,
-		Beta2:   0.999,
-		Epsilon: 1e-8,
+		// Smart routing: Auto-select optimal engine
+		EngineType:      Auto,
+		UseHybridEngine: true, // Deprecated: kept for compatibility
+		// Optimizer parameters (Adam/RMSProp params ignored for SGD)
+		Beta1:    0.9,
+		Beta2:    0.999,
+		Epsilon:  1e-8,
+		Alpha:    0.99,
+		Momentum: 0.0,
+		Centered: false,
 	}
 	
 	return tf.CreateTrainer(config)
@@ -324,7 +498,13 @@ func (tf *TrainerFactory) CreateAdamTrainer(batchSize int, learningRate float32,
 		Beta2:           beta2,
 		Epsilon:         epsilon,
 		WeightDecay:     weightDecay,
-		UseHybridEngine: true,
+		// Smart routing: Auto-select optimal engine
+		EngineType:      Auto,
+		UseHybridEngine: true, // Deprecated: kept for compatibility
+		// RMSProp parameters (ignored for Adam)
+		Alpha:    0.99,
+		Momentum: 0.0,
+		Centered: false,
 	}
 	
 	return tf.CreateTrainer(config)
@@ -333,6 +513,33 @@ func (tf *TrainerFactory) CreateAdamTrainer(batchSize int, learningRate float32,
 // CreateAdamTrainerWithDefaults creates an Adam trainer with sensible defaults
 func (tf *TrainerFactory) CreateAdamTrainerWithDefaults(batchSize int, learningRate float32) (*SimpleTrainer, error) {
 	return tf.CreateAdamTrainer(batchSize, learningRate, 0.9, 0.999, 1e-8, 0.0)
+}
+
+// CreateRMSPropTrainer creates an RMSProp trainer with specified parameters
+func (tf *TrainerFactory) CreateRMSPropTrainer(batchSize int, learningRate, alpha, epsilon, weightDecay, momentum float32, centered bool) (*SimpleTrainer, error) {
+	config := TrainerConfig{
+		BatchSize:       batchSize,
+		LearningRate:    learningRate,
+		OptimizerType:   cgo_bridge.RMSProp,
+		Alpha:           alpha,
+		Epsilon:         epsilon,
+		WeightDecay:     weightDecay,
+		Momentum:        momentum,
+		Centered:        centered,
+		// Smart routing: Auto-select optimal engine
+		EngineType:      Auto,
+		UseHybridEngine: true, // Deprecated: kept for compatibility
+		// Adam parameters are ignored for RMSProp
+		Beta1:   0.9,
+		Beta2:   0.999,
+	}
+	
+	return tf.CreateTrainer(config)
+}
+
+// CreateRMSPropTrainerWithDefaults creates an RMSProp trainer with sensible defaults
+func (tf *TrainerFactory) CreateRMSPropTrainerWithDefaults(batchSize int, learningRate float32) (*SimpleTrainer, error) {
+	return tf.CreateRMSPropTrainer(batchSize, learningRate, 0.99, 1e-8, 0.0, 0.0, false)
 }
 
 // CreateProductionTrainer creates a trainer optimized for production use
@@ -345,7 +552,13 @@ func (tf *TrainerFactory) CreateProductionTrainer(batchSize int, optimizerConfig
 		Beta2:           optimizerConfig.Beta2,
 		Epsilon:         optimizerConfig.Epsilon,
 		WeightDecay:     optimizerConfig.WeightDecay,
-		UseHybridEngine: true, // Always use hybrid for production
+		// Smart routing: Auto-select optimal engine for production
+		EngineType:      Auto,
+		UseHybridEngine: true, // Deprecated: kept for compatibility
+		// RMSProp parameters (set to defaults, override in specific configs)
+		Alpha:    0.99,
+		Momentum: 0.0,
+		Centered: false,
 	}
 	
 	return tf.CreateTrainer(config)
@@ -357,7 +570,7 @@ func (tf *TrainerFactory) GetDefaultSGDConfig(learningRate float32) OptimizerCon
 		Type:         cgo_bridge.SGD,
 		LearningRate: learningRate,
 		WeightDecay:  0.0,
-		// Adam parameters are ignored for SGD but set for completeness
+		// Optimizer parameters are ignored for SGD but set for completeness
 		Beta1:   0.9,
 		Beta2:   0.999,
 		Epsilon: 1e-8,
@@ -374,6 +587,102 @@ func (tf *TrainerFactory) GetDefaultAdamConfig(learningRate float32) OptimizerCo
 		Epsilon:      1e-8,
 		WeightDecay:  0.0,
 	}
+}
+
+// GetDefaultRMSPropConfig returns default RMSProp configuration
+func (tf *TrainerFactory) GetDefaultRMSPropConfig(learningRate float32) OptimizerConfig {
+	return OptimizerConfig{
+		Type:         cgo_bridge.RMSProp,
+		LearningRate: learningRate,
+		WeightDecay:  0.0,
+		// Adam parameters are ignored for RMSProp but set for completeness
+		Beta1:   0.9,
+		Beta2:   0.999,
+		Epsilon: 1e-8,
+	}
+}
+
+// AnalyzeModelArchitecture analyzes model architecture for optimal engine selection
+// Maintains GPU-resident principles by analyzing layer specifications only
+func AnalyzeModelArchitecture(modelSpec *layers.ModelSpec) *ModelArchitectureInfo {
+	if modelSpec == nil || !modelSpec.Compiled {
+		return &ModelArchitectureInfo{
+			Complexity: "Invalid",
+		}
+	}
+	
+	info := &ModelArchitectureInfo{
+		InputDimensions: len(modelSpec.InputShape),
+		LayerCount:      len(modelSpec.Layers),
+		ParameterCount:  modelSpec.TotalParameters,
+	}
+	
+	// Analyze layer composition (CPU-only analysis, no GPU operations)
+	for _, layer := range modelSpec.Layers {
+		switch layer.Type {
+		case layers.Conv2D:
+			info.HasConvLayers = true
+		case layers.Dense:
+			info.HasDenseLayers = true
+		}
+	}
+	
+	// Determine architecture patterns
+	info.IsMLPOnly = info.HasDenseLayers && !info.HasConvLayers
+	info.IsCNNPattern = info.HasConvLayers && info.HasDenseLayers && info.InputDimensions == 4
+	
+	// Classify complexity for engine selection
+	if info.LayerCount <= 3 {
+		info.Complexity = "Simple"
+	} else if info.LayerCount <= 10 {
+		info.Complexity = "Standard"
+	} else {
+		info.Complexity = "Complex"
+	}
+	
+	return info
+}
+
+// SelectOptimalEngine selects the best engine based on architecture analysis
+// Maintains GPU-resident architecture compliance for all engine types
+func SelectOptimalEngine(modelSpec *layers.ModelSpec, config TrainerConfig) EngineType {
+	// Handle explicit engine selection (skip auto-detection)
+	if config.EngineType != Auto {
+		return config.EngineType
+	}
+	
+	// Handle deprecated config options for backward compatibility
+	if config.UseHybridEngine && !config.UseDynamicEngine {
+		return Hybrid
+	}
+	if config.UseDynamicEngine && !config.UseHybridEngine {
+		return Dynamic
+	}
+	
+	// Smart routing based on architecture analysis
+	archInfo := AnalyzeModelArchitecture(modelSpec)
+	
+	// CNN Pattern: Use Hybrid Engine for maximum performance
+	// - 4D input [batch, channels, height, width]
+	// - Conv2D + Dense layer combination
+	// - Optimized for 20k+ batches/second performance
+	if archInfo.IsCNNPattern {
+		return Hybrid
+	}
+	
+	// MLP Pattern: Use Dynamic Engine for flexibility
+	// - 2D input [batch, features]
+	// - Dense-only or Dense + activation layers
+	// - Better flexibility for regression, classification
+	if archInfo.IsMLPOnly && archInfo.InputDimensions == 2 {
+		return Dynamic
+	}
+	
+	// Complex/Custom Architectures: Use Dynamic Engine
+	// - Non-standard input dimensions
+	// - Complex layer combinations
+	// - Custom architectures requiring flexibility
+	return Dynamic
 }
 
 // validateConfig validates trainer configuration
@@ -398,6 +707,18 @@ func (tf *TrainerFactory) validateConfig(config TrainerConfig) error {
 		}
 	}
 	
+	if config.OptimizerType == cgo_bridge.RMSProp {
+		if config.Alpha <= 0 || config.Alpha >= 1 {
+			return fmt.Errorf("RMSProp alpha must be in (0, 1), got %f", config.Alpha)
+		}
+		if config.Epsilon <= 0 {
+			return fmt.Errorf("RMSProp epsilon must be positive, got %f", config.Epsilon)
+		}
+		if config.Momentum < 0 || config.Momentum >= 1 {
+			return fmt.Errorf("RMSProp momentum must be in [0, 1), got %f", config.Momentum)
+		}
+	}
+	
 	if config.WeightDecay < 0 {
 		return fmt.Errorf("weight decay must be non-negative, got %f", config.WeightDecay)
 	}
@@ -419,6 +740,12 @@ func NewSGDTrainer(batchSize int, learningRate float32) (*SimpleTrainer, error) 
 func NewAdamTrainer(batchSize int, learningRate float32) (*SimpleTrainer, error) {
 	factory := NewFactory()
 	return factory.CreateAdamTrainerWithDefaults(batchSize, learningRate)
+}
+
+// NewRMSPropTrainer creates an RMSProp trainer with defaults (convenience function)
+func NewRMSPropTrainer(batchSize int, learningRate float32) (*SimpleTrainer, error) {
+	factory := NewFactory()
+	return factory.CreateRMSPropTrainerWithDefaults(batchSize, learningRate)
 }
 
 // NewTrainerWithConfig creates a trainer with full configuration (convenience function)

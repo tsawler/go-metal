@@ -152,22 +152,163 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                      name:@"labels"];
         engine->labelTensor = labelTensor;
         
-        // CRITICAL FIX: Compute actual cross-entropy loss in the graph for proper gradient flow
-        // Store predictions tensor separately for inference
-        MPSGraphTensor* predictionsTensor = [engine->graph softMaxWithTensor:currentTensor
-                                                                        axis:-1
-                                                                        name:@"predictions"];
+        // Handle predictions based on problem type
+        MPSGraphTensor* predictionsTensor;
+        
+        if (engine->config.problem_type == 0) { // Classification
+            // Apply softmax to get predictions (multi-class classification)
+            predictionsTensor = [engine->graph softMaxWithTensor:currentTensor
+                                                            axis:-1
+                                                            name:@"predictions"];
+        } else { // Regression
+            // For regression, predictions are raw outputs (no activation)
+            predictionsTensor = currentTensor;
+        }
         
         // Store predictions tensor for inference use
         engine->predictionsTensor = predictionsTensor;
         
-        // FIXED: Use MPSGraph's built-in softmax cross-entropy for numerical stability and proper gradients
-        // This computes: -mean(sum(labels * log_softmax(logits))) in a numerically stable way
-        MPSGraphTensor* actualLoss = [engine->graph softMaxCrossEntropyWithSourceTensor:currentTensor
+        // Calculate loss based on problem type and loss function
+        MPSGraphTensor* actualLoss;
+        
+        switch (engine->config.problem_type) {
+            case 0: // Classification
+                switch (engine->config.loss_function) {
+                    case 0: // CrossEntropy
+                        actualLoss = [engine->graph softMaxCrossEntropyWithSourceTensor:currentTensor
                                                                            labelsTensor:labelTensor
                                                                                    axis:-1
                                                                          reductionType:MPSGraphLossReductionTypeMean
                                                                                   name:@"cross_entropy_loss"];
+                        break;
+                    case 1: // SparseCrossEntropy
+                        // For sparse cross-entropy, labels are class indices, not one-hot
+                        // This would require different label handling - implement if needed
+                        NSLog(@"❌ SparseCrossEntropy not yet implemented");
+                        return NO;
+                    default:
+                        NSLog(@"❌ Unsupported classification loss function: %d", engine->config.loss_function);
+                        return NO;
+                }
+                break;
+                
+            case 1: // Regression
+                switch (engine->config.loss_function) {
+                    case 2: // MSE (Mean Squared Error)
+                        {
+                            // For regression, currentTensor contains raw predictions (no softmax)
+                            // Calculate (predictions - labels)^2
+                            MPSGraphTensor* diff = [engine->graph subtractionWithPrimaryTensor:currentTensor
+                                                                               secondaryTensor:labelTensor
+                                                                                          name:@"mse_diff"];
+                            MPSGraphTensor* squared = [engine->graph squareWithTensor:diff name:@"mse_squared"];
+                            
+                            // Mean over all elements
+                            MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:squared
+                                                                                       axes:nil
+                                                                                       name:@"mse_sum"];
+                            NSArray<NSNumber*>* shape = squared.shape;
+                            int totalElements = 1;
+                            for (NSNumber* dim in shape) {
+                                totalElements *= [dim intValue];
+                            }
+                            MPSGraphTensor* countTensor = [engine->graph constantWithScalar:(float)totalElements
+                                                                                   dataType:MPSDataTypeFloat32];
+                            actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
+                                                                  secondaryTensor:countTensor
+                                                                             name:@"mse_loss"];
+                        }
+                        break;
+                        
+                    case 3: // MAE (Mean Absolute Error)
+                        {
+                            MPSGraphTensor* diff = [engine->graph subtractionWithPrimaryTensor:currentTensor
+                                                                               secondaryTensor:labelTensor
+                                                                                          name:@"mae_diff"];
+                            MPSGraphTensor* abs = [engine->graph absoluteWithTensor:diff name:@"mae_abs"];
+                            
+                            MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:abs
+                                                                                       axes:nil
+                                                                                       name:@"mae_sum"];
+                            NSArray<NSNumber*>* shape = abs.shape;
+                            int totalElements = 1;
+                            for (NSNumber* dim in shape) {
+                                totalElements *= [dim intValue];
+                            }
+                            MPSGraphTensor* countTensor = [engine->graph constantWithScalar:(float)totalElements
+                                                                                   dataType:MPSDataTypeFloat32];
+                            actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
+                                                                  secondaryTensor:countTensor
+                                                                             name:@"mae_loss"];
+                        }
+                        break;
+                        
+                    case 4: // Huber
+                        {
+                            // Huber loss with delta = 1.0 (can be made configurable)
+                            float delta = 1.0f;
+                            MPSGraphTensor* deltaTensor = [engine->graph constantWithScalar:delta dataType:MPSDataTypeFloat32];
+                            
+                            MPSGraphTensor* diff = [engine->graph subtractionWithPrimaryTensor:currentTensor
+                                                                               secondaryTensor:labelTensor
+                                                                                          name:@"huber_diff"];
+                            MPSGraphTensor* absDiff = [engine->graph absoluteWithTensor:diff name:@"huber_abs_diff"];
+                            
+                            // Create condition: |diff| <= delta
+                            MPSGraphTensor* condition = [engine->graph lessThanOrEqualToWithPrimaryTensor:absDiff
+                                                                                         secondaryTensor:deltaTensor
+                                                                                                    name:@"huber_condition"];
+                            
+                            // Quadratic part: 0.5 * diff^2
+                            MPSGraphTensor* squared = [engine->graph squareWithTensor:diff name:@"huber_squared"];
+                            MPSGraphTensor* halfTensor = [engine->graph constantWithScalar:0.5f dataType:MPSDataTypeFloat32];
+                            MPSGraphTensor* quadratic = [engine->graph multiplicationWithPrimaryTensor:halfTensor
+                                                                                      secondaryTensor:squared
+                                                                                                 name:@"huber_quadratic"];
+                            
+                            // Linear part: delta * (|diff| - 0.5 * delta)
+                            MPSGraphTensor* halfDelta = [engine->graph multiplicationWithPrimaryTensor:halfTensor
+                                                                                      secondaryTensor:deltaTensor
+                                                                                                 name:@"half_delta"];
+                            MPSGraphTensor* linearDiff = [engine->graph subtractionWithPrimaryTensor:absDiff
+                                                                                     secondaryTensor:halfDelta
+                                                                                                name:@"linear_diff"];
+                            MPSGraphTensor* linear = [engine->graph multiplicationWithPrimaryTensor:deltaTensor
+                                                                                   secondaryTensor:linearDiff
+                                                                                              name:@"huber_linear"];
+                            
+                            // Select based on condition
+                            MPSGraphTensor* huberPerElement = [engine->graph selectWithPredicateTensor:condition
+                                                                                  truePredicateTensor:quadratic
+                                                                                 falsePredicateTensor:linear
+                                                                                                 name:@"huber_per_element"];
+                            
+                            MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:huberPerElement
+                                                                                       axes:nil
+                                                                                       name:@"huber_sum"];
+                            NSArray<NSNumber*>* shape = huberPerElement.shape;
+                            int totalElements = 1;
+                            for (NSNumber* dim in shape) {
+                                totalElements *= [dim intValue];
+                            }
+                            MPSGraphTensor* countTensor = [engine->graph constantWithScalar:(float)totalElements
+                                                                                   dataType:MPSDataTypeFloat32];
+                            actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
+                                                                  secondaryTensor:countTensor
+                                                                             name:@"huber_loss"];
+                        }
+                        break;
+                        
+                    default:
+                        NSLog(@"❌ Unsupported regression loss function: %d", engine->config.loss_function);
+                        return NO;
+                }
+                break;
+                
+            default:
+                NSLog(@"❌ Unsupported problem type: %d", engine->config.problem_type);
+                return NO;
+        }
         
         // Store ACTUAL LOSS for gradient computation (not predictions)
         engine->lossOutput = actualLoss;
@@ -295,6 +436,90 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             NSLog(@"✅ SGD state initialized for %lu parameters (momentum: %s)", 
                   [engine->allWeightPlaceholders count], 
                   engine->config.beta1 > 0.0f ? "enabled" : "disabled");
+        }
+        
+        // RMSProp OPTIMIZER: Initialize RMSProp state arrays
+        if (engine->config.optimizer_type == 2) { // RMSProp optimizer
+            
+            // Cache RMSProp scalar tensors during graph building phase
+            cacheRMSPropScalarTensors(engine);
+            
+            // Initialize RMSProp state arrays for squared gradient averages
+            engine->squaredGradPlaceholders = [[NSMutableArray alloc] init];
+            engine->squaredGradVariables = [[NSMutableArray alloc] init];
+            engine->squaredGradBuffers = [[NSMutableArray alloc] init];
+            
+            // Initialize optional momentum state (if momentum > 0)
+            if (engine->config.momentum > 0.0f) {
+                if (!engine->momentumPlaceholders) {
+                    engine->momentumPlaceholders = [[NSMutableArray alloc] init];
+                    engine->momentumBuffers = [[NSMutableArray alloc] init];
+                }
+            }
+            
+            // Initialize optional gradient averages for centered RMSProp (if centered == 1)
+            if (engine->config.centered) {
+                engine->gradAvgPlaceholders = [[NSMutableArray alloc] init];
+                engine->gradAvgVariables = [[NSMutableArray alloc] init];
+                engine->gradAvgBuffers = [[NSMutableArray alloc] init];
+            }
+            
+            // Initialize state buffers for each parameter
+            for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
+                MPSGraphTensor* paramTensor = [engine->allWeightPlaceholders objectAtIndex:i];
+                NSArray<NSNumber*>* paramShape = [paramTensor shape];
+                
+                // Calculate total elements and buffer size
+                NSUInteger elementCount = 1;
+                for (NSNumber* dim in paramShape) {
+                    elementCount *= [dim unsignedIntegerValue];
+                }
+                NSUInteger bufferSize = elementCount * sizeof(float);
+                
+                // Create Metal buffer for squared gradient averages (initialized to zero)
+                id<MTLBuffer> squaredGradBuffer = [engine->device newBufferWithLength:bufferSize 
+                                                                               options:MTLResourceStorageModeShared];
+                memset([squaredGradBuffer contents], 0, bufferSize);
+                [engine->squaredGradBuffers addObject:squaredGradBuffer];
+                
+                // Create placeholder for squared gradient average state
+                MPSGraphTensor* squaredGradPlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                     dataType:MPSDataTypeFloat32
+                                                                                         name:[NSString stringWithFormat:@"squared_grad_%d", i]];
+                [engine->squaredGradPlaceholders addObject:squaredGradPlaceholder];
+                
+                // Initialize momentum state if momentum > 0
+                if (engine->config.momentum > 0.0f && !engine->momentumBuffers) {
+                    id<MTLBuffer> momentumBuffer = [engine->device newBufferWithLength:bufferSize 
+                                                                               options:MTLResourceStorageModeShared];
+                    memset([momentumBuffer contents], 0, bufferSize);
+                    [engine->momentumBuffers addObject:momentumBuffer];
+                    
+                    MPSGraphTensor* momentumPlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                     dataType:MPSDataTypeFloat32
+                                                                                         name:[NSString stringWithFormat:@"rmsprop_momentum_%d", i]];
+                    [engine->momentumPlaceholders addObject:momentumPlaceholder];
+                }
+                
+                // Initialize gradient averages for centered RMSProp
+                if (engine->config.centered) {
+                    id<MTLBuffer> gradAvgBuffer = [engine->device newBufferWithLength:bufferSize 
+                                                                               options:MTLResourceStorageModeShared];
+                    memset([gradAvgBuffer contents], 0, bufferSize);
+                    [engine->gradAvgBuffers addObject:gradAvgBuffer];
+                    
+                    MPSGraphTensor* gradAvgPlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                     dataType:MPSDataTypeFloat32
+                                                                                         name:[NSString stringWithFormat:@"grad_avg_%d", i]];
+                    [engine->gradAvgPlaceholders addObject:gradAvgPlaceholder];
+                }
+            }
+            
+            engine->rmspropStateInitialized = YES;
+            NSLog(@"✅ RMSProp state initialized for %lu parameters (momentum=%s, centered=%s)", 
+                  [engine->allWeightPlaceholders count], 
+                  engine->config.momentum > 0.0f ? "enabled" : "disabled",
+                  engine->config.centered ? "enabled" : "disabled");
         }
         
         // OPTIMIZER-SPECIFIC PRE-COMPILATION: Build optimizer-specific graphs to avoid conflicts
@@ -577,6 +802,184 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             engine->adamGraphCompiled = YES;
             NSLog(@"✅ PRE-COMPILATION: Successfully built Adam operations for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
+        // RMSPROP-SPECIFIC GRAPH COMPILATION: Build RMSProp graph without Adam/SGD dependencies
+        else if (engine->config.optimizer_type == 2 && engine->allWeightPlaceholders.count > 0 && engine->rmspropStateInitialized && !engine->rmspropGraphCompiled) { // RMSProp optimizer
+            
+            NSLog(@"🚀 PRE-COMPILATION: Building gradient and RMSProp operations in graph...");
+            
+            // Pre-compile gradient computation using automatic differentiation ONCE during graph building
+            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
+                [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                                            withTensors:engine->allWeightPlaceholders
+                                                   name:@"precompiled_gradients"];
+            
+            // Store gradient tensors for execution (these are pre-compiled, not runtime-created)
+            NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
+            for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+                MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
+                if (gradTensor) {
+                    [precompiledGradientTensors addObject:gradTensor];
+                } else {
+                    NSLog(@"❌ Failed to pre-compile gradient for parameter");
+                    return NO;
+                }
+            }
+            
+            // Store pre-compiled gradients in RMSProp-specific arrays
+            engine->rmspropPrecompiledGradients = precompiledGradientTensors;
+            
+            // Also store in legacy array for backward compatibility
+            engine->precompiledGradientTensors = precompiledGradientTensors;
+            
+            NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            NSLog(@"🚀 PRE-COMPILATION: Building RMSProp parameter update operations...");
+            
+            // Pre-compile RMSProp parameter updates
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedSquaredGrads = [[NSMutableArray alloc] init];
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedMomentum = [[NSMutableArray alloc] init]; // For momentum variant
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedGradientAvg = [[NSMutableArray alloc] init]; // For centered variant
+            
+            for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
+                MPSGraphTensor* paramTensor = [engine->allWeightPlaceholders objectAtIndex:i];
+                MPSGraphTensor* gradTensor = [precompiledGradientTensors objectAtIndex:i];
+                MPSGraphTensor* squaredGradTensor = [engine->squaredGradPlaceholders objectAtIndex:i];
+                
+                if (gradTensor && squaredGradTensor) {
+                    // RMSProp update equations:
+                    // squared_grad_avg = alpha * squared_grad_avg + (1 - alpha) * grad^2
+                    
+                    MPSGraphTensor* gradientSquared = [engine->graph squareWithTensor:gradTensor name:nil];
+                    
+                    MPSGraphTensor* scaledSquaredGradAvg = [engine->graph multiplicationWithPrimaryTensor:engine->cachedAlphaTensor
+                                                                                         secondaryTensor:squaredGradTensor
+                                                                                                    name:nil];
+                    
+                    MPSGraphTensor* scaledGradientSquared = [engine->graph multiplicationWithPrimaryTensor:engine->cachedOneMinusAlphaTensor
+                                                                                           secondaryTensor:gradientSquared
+                                                                                                      name:nil];
+                    
+                    MPSGraphTensor* updatedSquaredGradAvg = [engine->graph additionWithPrimaryTensor:scaledSquaredGradAvg
+                                                                                   secondaryTensor:scaledGradientSquared
+                                                                                              name:nil];
+                    
+                    // Calculate denominator based on whether centered or not
+                    MPSGraphTensor* denominator;
+                    if (engine->config.centered) {
+                        // For centered RMSProp: denominator = sqrt(squared_grad_avg - grad_avg^2 + ε)
+                        // Need to update gradient average: grad_avg = alpha * grad_avg + (1 - alpha) * grad
+                        if (i < [engine->gradAvgPlaceholders count]) {
+                            MPSGraphTensor* gradientAvgTensor = [engine->gradAvgPlaceholders objectAtIndex:i];
+                            
+                            MPSGraphTensor* scaledGradAvg = [engine->graph multiplicationWithPrimaryTensor:engine->cachedAlphaTensor
+                                                                                           secondaryTensor:gradientAvgTensor
+                                                                                                      name:nil];
+                            
+                            MPSGraphTensor* scaledGradient = [engine->graph multiplicationWithPrimaryTensor:engine->cachedOneMinusAlphaTensor
+                                                                                           secondaryTensor:gradTensor
+                                                                                                      name:nil];
+                            
+                            MPSGraphTensor* updatedGradientAvg = [engine->graph additionWithPrimaryTensor:scaledGradAvg
+                                                                                         secondaryTensor:scaledGradient
+                                                                                                    name:nil];
+                            
+                            // Calculate variance: squared_grad_avg - grad_avg^2
+                            MPSGraphTensor* gradientAvgSquared = [engine->graph squareWithTensor:updatedGradientAvg name:nil];
+                            MPSGraphTensor* variance = [engine->graph subtractionWithPrimaryTensor:updatedSquaredGradAvg
+                                                                                  secondaryTensor:gradientAvgSquared
+                                                                                             name:nil];
+                            
+                            // Ensure variance is always positive (avoid numerical issues)
+                            MPSGraphTensor* zeroTensor = [engine->graph constantWithScalar:0.0f dataType:MPSDataTypeFloat32];
+                            MPSGraphTensor* positiveVariance = [engine->graph maximumWithPrimaryTensor:variance
+                                                                                      secondaryTensor:zeroTensor
+                                                                                                 name:nil];
+                            
+                            MPSGraphTensor* varianceWithEpsilon = [engine->graph additionWithPrimaryTensor:positiveVariance
+                                                                                          secondaryTensor:engine->cachedEpsilonTensor
+                                                                                                     name:nil];
+                            denominator = [engine->graph squareRootWithTensor:varianceWithEpsilon name:nil];
+                            
+                            // Store the updated gradient average for centered variant
+                            [precompiledUpdatedGradientAvg addObject:updatedGradientAvg];
+                        } else {
+                            NSLog(@"❌ Missing gradient average placeholder for centered RMSProp parameter %d", i);
+                            return NO;
+                        }
+                    } else {
+                        // For standard RMSProp: denominator = sqrt(squared_grad_avg + ε)
+                        MPSGraphTensor* squaredGradAvgWithEpsilon = [engine->graph additionWithPrimaryTensor:updatedSquaredGradAvg
+                                                                                            secondaryTensor:engine->cachedEpsilonTensor
+                                                                                                       name:nil];
+                        denominator = [engine->graph squareRootWithTensor:squaredGradAvgWithEpsilon name:nil];
+                        
+                        // Non-centered variant: no gradient average needed
+                    }
+                    
+                    // Basic update: grad / denominator
+                    MPSGraphTensor* updateDirection = [engine->graph divisionWithPrimaryTensor:gradTensor
+                                                                               secondaryTensor:denominator
+                                                                                          name:nil];
+                    
+                    // Apply momentum if specified (momentum > 0)
+                    if (engine->config.momentum > 0.0f && engine->momentumPlaceholders && i < [engine->momentumPlaceholders count]) {
+                        MPSGraphTensor* momentumTensor = [engine->momentumPlaceholders objectAtIndex:i];
+                        if (momentumTensor) {
+                            // momentum = momentum * old_momentum + update
+                            MPSGraphTensor* scaledMomentum = [engine->graph multiplicationWithPrimaryTensor:engine->cachedMomentumTensor
+                                                                                           secondaryTensor:momentumTensor
+                                                                                                      name:nil];
+                            
+                            MPSGraphTensor* updatedMomentum = [engine->graph additionWithPrimaryTensor:scaledMomentum
+                                                                                      secondaryTensor:updateDirection
+                                                                                                 name:nil];
+                            
+                            updateDirection = updatedMomentum;
+                            [precompiledUpdatedMomentum addObject:updatedMomentum];
+                        }
+                    }
+                    
+                    // Apply weight decay if specified
+                    if (engine->config.weight_decay > 0.0f) {
+                        MPSGraphTensor* weightDecayTerm = [engine->graph multiplicationWithPrimaryTensor:paramTensor
+                                                                                        secondaryTensor:engine->cachedWeightDecayTensor
+                                                                                                   name:nil];
+                        updateDirection = [engine->graph additionWithPrimaryTensor:updateDirection
+                                                                  secondaryTensor:weightDecayTerm
+                                                                             name:nil];
+                    }
+                    
+                    // Scale by learning rate
+                    MPSGraphTensor* scaledUpdate = [engine->graph multiplicationWithPrimaryTensor:engine->cachedLrTensor
+                                                                                  secondaryTensor:updateDirection
+                                                                                             name:nil];
+                    
+                    // Final parameter update: param = param - lr * update
+                    MPSGraphTensor* updatedParam = [engine->graph subtractionWithPrimaryTensor:paramTensor
+                                                                               secondaryTensor:scaledUpdate
+                                                                                          name:nil];
+                    
+                    [precompiledUpdatedParams addObject:updatedParam];
+                    [precompiledUpdatedSquaredGrads addObject:updatedSquaredGradAvg];
+                } else {
+                    NSLog(@"❌ Failed to pre-compile RMSProp update for parameter %d", i);
+                    return NO;
+                }
+            }
+            
+            // Store pre-compiled RMSProp operations in RMSProp-specific arrays
+            engine->rmspropPrecompiledUpdatedParams = precompiledUpdatedParams;
+            engine->rmspropPrecompiledUpdatedSquaredGrad = precompiledUpdatedSquaredGrads;
+            engine->rmspropPrecompiledUpdatedMomentum = precompiledUpdatedMomentum;
+            engine->rmspropPrecompiledUpdatedGradAvg = precompiledUpdatedGradientAvg;
+            
+            // Also store in legacy arrays for backward compatibility
+            engine->precompiledUpdatedParams = precompiledUpdatedParams;
+            
+            engine->rmspropGraphCompiled = YES;
+            NSLog(@"✅ PRE-COMPILATION: Successfully built RMSProp operations for %lu parameters", [engine->allWeightPlaceholders count]);
         } else {
             NSLog(@"⚠️ PRE-COMPILATION: Skipping pre-compilation (optimizer: %d, params: %lu, adam_state: %d, sgd_state: %d)", 
                   engine->config.optimizer_type, [engine->allWeightPlaceholders count], 
