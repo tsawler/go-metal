@@ -54,6 +54,12 @@ type ModelTrainer struct {
 	lrScheduler      LRScheduler // Optional learning rate scheduler
 	baseLearningRate float32     // Original learning rate from config
 	currentEpoch     int         // Current epoch for scheduler
+	
+	// Evaluation Metrics - GPU-resident architecture compliance
+	confusionMatrix     *ConfusionMatrix // Confusion matrix for classification metrics
+	metricsEnabled      bool             // Whether to calculate comprehensive metrics
+	lastRegressionMetrics *RegressionMetrics // Last calculated regression metrics
+	metricHistory       map[MetricType][]float64 // History of metrics for plotting
 }
 
 // NewModelTrainer creates a new model-based trainer using the existing TrainingEngine architecture
@@ -180,7 +186,53 @@ func NewModelTrainer(
 		baseLearningRate: config.LearningRate,
 		currentEpoch:     0,
 		lrScheduler:      nil, // No scheduler by default (constant LR)
+		
+		// Evaluation metrics initialization - GPU-resident architecture compliance
+		confusionMatrix:       NewConfusionMatrix(getNumClassesForMetrics(modelSpec, config)),
+		metricsEnabled:        false, // Disabled by default for performance
+		lastRegressionMetrics: &RegressionMetrics{},
+		metricHistory:         make(map[MetricType][]float64),
 	}, nil
+}
+
+// getModelOutputSize extracts the output size from model specification
+// Used for initializing confusion matrix with correct dimensions
+func getModelOutputSize(modelSpec *layers.ModelSpec) int {
+	if modelSpec == nil || len(modelSpec.Layers) == 0 {
+		return 2 // Default to binary classification
+	}
+	
+	// Find the last Dense layer to get output size
+	for i := len(modelSpec.Layers) - 1; i >= 0; i-- {
+		layer := modelSpec.Layers[i]
+		if layer.Type == layers.Dense {
+			if outputSize, ok := layer.Parameters["output_size"].(int); ok {
+				return outputSize
+			}
+		}
+	}
+	
+	// Default to 2 classes if not found
+	return 2
+}
+
+// getNumClassesForMetrics determines the number of classes for confusion matrix
+// For binary classification with single output (BCEWithLogits), we need 2 classes
+func getNumClassesForMetrics(modelSpec *layers.ModelSpec, config TrainerConfig) int {
+	outputSize := getModelOutputSize(modelSpec)
+	
+	// For classification problems
+	if config.ProblemType == Classification {
+		// Single output usually means binary classification with 2 classes
+		if outputSize == 1 {
+			return 2
+		}
+		// Multiple outputs mean multi-class classification
+		return outputSize
+	}
+	
+	// For regression, we don't use confusion matrix, but return 2 as safe default
+	return 2
 }
 
 // TrainBatch executes a single training step on a batch of data
@@ -1325,4 +1377,238 @@ func (mt *ModelTrainer) Predict(
 	// Use the existing InferBatch method for compatibility
 	// This maintains the proven single-CGO-call architecture
 	return mt.InferBatch(inputData, inputShape)
+}
+
+// ================================================================
+// EVALUATION METRICS SYSTEM - GPU-RESIDENT ARCHITECTURE COMPLIANT
+// ================================================================
+
+// EnableEvaluationMetrics enables comprehensive evaluation metrics collection
+// Metrics are calculated from GPU-resident tensors with CPU-only scalar results
+func (mt *ModelTrainer) EnableEvaluationMetrics() {
+	mt.metricsEnabled = true
+	mt.confusionMatrix.Reset()
+	mt.metricHistory = make(map[MetricType][]float64)
+}
+
+// DisableEvaluationMetrics disables evaluation metrics for performance
+func (mt *ModelTrainer) DisableEvaluationMetrics() {
+	mt.metricsEnabled = false
+}
+
+// IsEvaluationMetricsEnabled returns whether comprehensive metrics are enabled
+func (mt *ModelTrainer) IsEvaluationMetricsEnabled() bool {
+	return mt.metricsEnabled
+}
+
+// UpdateMetricsFromInference updates evaluation metrics from inference results
+// GPU-resident architecture: operates on GPU tensor data, stores CPU scalars only
+func (mt *ModelTrainer) UpdateMetricsFromInference(
+	predictions []float32,
+	trueLabels interface{}, // []int32 for classification, []float32 for regression
+	batchSize int,
+) error {
+	if !mt.metricsEnabled {
+		return nil // Metrics disabled, skip computation
+	}
+	
+	outputSize := mt.getOutputSize()
+	
+	if mt.trainerConfig.ProblemType == Classification {
+		// Handle classification metrics
+		var int32Labels []int32
+		switch labels := trueLabels.(type) {
+		case []int32:
+			int32Labels = labels
+		case []float32:
+			// Convert float32 labels to int32
+			int32Labels = make([]int32, len(labels))
+			for i, v := range labels {
+				int32Labels[i] = int32(v)
+			}
+		default:
+			return fmt.Errorf("invalid label type for classification: %T", trueLabels)
+		}
+		
+		// Update confusion matrix (use number of classes, not output size)
+		numClasses := mt.confusionMatrix.NumClasses
+		err := mt.confusionMatrix.UpdateFromPredictions(predictions, int32Labels, batchSize, numClasses)
+		if err != nil {
+			return fmt.Errorf("failed to update confusion matrix: %v", err)
+		}
+		
+		// For binary classification, also calculate AUC-ROC if we have raw scores
+		if outputSize == 2 || outputSize == 1 {
+			var scores []float32
+			if outputSize == 1 {
+				// Single output (BCEWithLogits or sigmoid output)
+				scores = predictions[:batchSize]
+			} else {
+				// Two outputs, use positive class probability
+				scores = make([]float32, batchSize)
+				for i := 0; i < batchSize; i++ {
+					scores[i] = predictions[i*2+1] // Positive class score
+				}
+			}
+			
+			auc := CalculateAUCROC(scores, int32Labels, batchSize)
+			mt.addToHistory(AUCROC, auc)
+		}
+		
+	} else {
+		// Handle regression metrics
+		var float32Labels []float32
+		switch labels := trueLabels.(type) {
+		case []float32:
+			float32Labels = labels
+		case []int32:
+			// Convert int32 to float32 (unusual but handle it)
+			float32Labels = make([]float32, len(labels))
+			for i, v := range labels {
+				float32Labels[i] = float32(v)
+			}
+		default:
+			return fmt.Errorf("invalid label type for regression: %T", trueLabels)
+		}
+		
+		// Calculate comprehensive regression metrics
+		mt.lastRegressionMetrics = CalculateRegressionMetrics(predictions, float32Labels, batchSize)
+		
+		// Add to history for plotting
+		mt.addToHistory(MAE, mt.lastRegressionMetrics.MAE)
+		mt.addToHistory(MSE, mt.lastRegressionMetrics.MSE)
+		mt.addToHistory(RMSE, mt.lastRegressionMetrics.RMSE)
+		mt.addToHistory(R2, mt.lastRegressionMetrics.R2)
+		mt.addToHistory(NMAE, mt.lastRegressionMetrics.NMAE)
+	}
+	
+	return nil
+}
+
+// GetMetric returns the current value of a specific metric
+// CPU-only scalar result (GPU-resident architecture compliant)
+func (mt *ModelTrainer) GetMetric(metric MetricType) float64 {
+	if !mt.metricsEnabled {
+		return 0.0
+	}
+	
+	if mt.trainerConfig.ProblemType == Classification {
+		return mt.confusionMatrix.GetMetric(metric)
+	} else {
+		// Regression metrics
+		switch metric {
+		case MAE:
+			return mt.lastRegressionMetrics.MAE
+		case MSE:
+			return mt.lastRegressionMetrics.MSE
+		case RMSE:
+			return mt.lastRegressionMetrics.RMSE
+		case R2:
+			return mt.lastRegressionMetrics.R2
+		case NMAE:
+			return mt.lastRegressionMetrics.NMAE
+		default:
+			return 0.0
+		}
+	}
+}
+
+// GetClassificationMetrics returns all classification metrics for the current confusion matrix
+func (mt *ModelTrainer) GetClassificationMetrics() map[string]float64 {
+	if !mt.metricsEnabled || mt.trainerConfig.ProblemType != Classification {
+		return make(map[string]float64)
+	}
+	
+	metrics := make(map[string]float64)
+	metrics["accuracy"] = mt.confusionMatrix.GetAccuracy()
+	
+	if mt.confusionMatrix.NumClasses == 2 {
+		// Binary classification metrics
+		metrics["precision"] = mt.confusionMatrix.GetMetric(Precision)
+		metrics["recall"] = mt.confusionMatrix.GetMetric(Recall)
+		metrics["f1_score"] = mt.confusionMatrix.GetMetric(F1Score)
+		metrics["specificity"] = mt.confusionMatrix.GetMetric(Specificity)
+		metrics["npv"] = mt.confusionMatrix.GetMetric(NPV)
+		
+		// Add AUC if available
+		if history, exists := mt.metricHistory[AUCROC]; exists && len(history) > 0 {
+			metrics["auc_roc"] = history[len(history)-1]
+		}
+	} else {
+		// Multi-class metrics
+		metrics["macro_precision"] = mt.confusionMatrix.GetMetric(MacroPrecision)
+		metrics["macro_recall"] = mt.confusionMatrix.GetMetric(MacroRecall)
+		metrics["macro_f1"] = mt.confusionMatrix.GetMetric(MacroF1)
+		metrics["micro_precision"] = mt.confusionMatrix.GetMetric(MicroPrecision)
+		metrics["micro_recall"] = mt.confusionMatrix.GetMetric(MicroRecall)
+		metrics["micro_f1"] = mt.confusionMatrix.GetMetric(MicroF1)
+	}
+	
+	return metrics
+}
+
+// GetRegressionMetrics returns all regression metrics
+func (mt *ModelTrainer) GetRegressionMetrics() map[string]float64 {
+	if !mt.metricsEnabled || mt.trainerConfig.ProblemType != Regression {
+		return make(map[string]float64)
+	}
+	
+	metrics := make(map[string]float64)
+	metrics["mae"] = mt.lastRegressionMetrics.MAE
+	metrics["mse"] = mt.lastRegressionMetrics.MSE
+	metrics["rmse"] = mt.lastRegressionMetrics.RMSE
+	metrics["r2"] = mt.lastRegressionMetrics.R2
+	metrics["nmae"] = mt.lastRegressionMetrics.NMAE
+	
+	return metrics
+}
+
+// GetConfusionMatrix returns a copy of the current confusion matrix
+func (mt *ModelTrainer) GetConfusionMatrix() [][]int {
+	if !mt.metricsEnabled || mt.trainerConfig.ProblemType != Classification {
+		return nil
+	}
+	
+	// Return a copy to prevent external modification
+	matrix := make([][]int, mt.confusionMatrix.NumClasses)
+	for i := range matrix {
+		matrix[i] = make([]int, mt.confusionMatrix.NumClasses)
+		copy(matrix[i], mt.confusionMatrix.Matrix[i])
+	}
+	
+	return matrix
+}
+
+// GetMetricHistory returns the history of a specific metric for plotting
+func (mt *ModelTrainer) GetMetricHistory(metric MetricType) []float64 {
+	if !mt.metricsEnabled {
+		return nil
+	}
+	
+	if history, exists := mt.metricHistory[metric]; exists {
+		// Return a copy to prevent external modification
+		result := make([]float64, len(history))
+		copy(result, history)
+		return result
+	}
+	
+	return nil
+}
+
+// ResetMetrics clears all accumulated metrics and history
+func (mt *ModelTrainer) ResetMetrics() {
+	if mt.confusionMatrix != nil {
+		mt.confusionMatrix.Reset()
+	}
+	mt.lastRegressionMetrics = &RegressionMetrics{}
+	mt.metricHistory = make(map[MetricType][]float64)
+}
+
+// addToHistory adds a metric value to the history for plotting
+func (mt *ModelTrainer) addToHistory(metric MetricType, value float64) {
+	if mt.metricHistory == nil {
+		mt.metricHistory = make(map[MetricType][]float64)
+	}
+	
+	mt.metricHistory[metric] = append(mt.metricHistory[metric], value)
 }
