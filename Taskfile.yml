@@ -30,6 +30,7 @@ tasks:
     cmds:
       - task: docs-async
       - task: docs-cgo_bridge
+      - task: docs-checkpoints
       - task: docs-engine
       - task: docs-memory
       - task: docs-optimizer
@@ -38,6 +39,11 @@ tasks:
       - task: docs-vision-dataloader
       - task: docs-vision-dataset
       - task: docs-vision-preprocessing
+
+  docs-checkpoints:
+      dir: ./checkpoints
+      cmds:
+        - godocdown -output docs.md
 
   docs-vision-dataloader:
     dir: ./vision/dataloader

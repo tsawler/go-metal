@@ -331,7 +331,7 @@ func (ps *PlottingService) BatchSendPlots(plotDataList []PlotData) (*BatchPlotti
 	}
 	
 	// Debug: Print raw response
-	fmt.Printf("🔍 Debug: Raw batch response: %s\n", string(respBody))
+	// fmt.Printf("🔍 Debug: Raw batch response: %s\n", string(respBody))
 	
 	// Parse response as batch response
 	var batchResponse BatchPlottingResponse

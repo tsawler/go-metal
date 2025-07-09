@@ -1577,6 +1577,7 @@ const (
 	// Regression plots
 	RegressionScatter PlotType = "regression_scatter"
 	ResidualPlot      PlotType = "residual_plot"
+	QQPlot            PlotType = "qq_plot"
 )
 ```
 
@@ -2371,6 +2372,14 @@ GenerateLearningRateSchedulePlot generates learning rate schedule plot data
 func (vc *VisualizationCollector) GeneratePrecisionRecallPlot() PlotData
 ```
 GeneratePrecisionRecallPlot generates Precision-Recall curve plot data
+
+#### func (*VisualizationCollector) GenerateQQPlot
+
+```go
+func (vc *VisualizationCollector) GenerateQQPlot() PlotData
+```
+GenerateQQPlot generates Q-Q plot data for validating normal distribution of
+residuals
 
 #### func (*VisualizationCollector) GenerateROCCurvePlot
 
