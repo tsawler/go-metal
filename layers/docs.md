@@ -316,6 +316,24 @@ func (ms *ModelSpec) Summary() string
 ```
 Summary returns a human-readable model summary
 
+#### func (*ModelSpec) ValidateModelForDynamicEngine
+
+```go
+func (ms *ModelSpec) ValidateModelForDynamicEngine() error
+```
+ValidateModelForDynamicEngine checks if model is compatible with Dynamic
+TrainingEngine Supports any architecture with flexible input dimensions (2D, 4D,
+etc.)
+
+#### func (*ModelSpec) ValidateModelForHybridEngine
+
+```go
+func (ms *ModelSpec) ValidateModelForHybridEngine() error
+```
+ValidateModelForHybridEngine checks if model is compatible with Hybrid
+TrainingEngine Optimized for CNN architectures with 4D input and Conv+Dense
+layer combinations
+
 #### func (*ModelSpec) ValidateModelForInference
 
 ```go
@@ -330,7 +348,8 @@ More lenient than training validation - supports Dense-only models
 func (ms *ModelSpec) ValidateModelForTrainingEngine() error
 ```
 ValidateModelForTrainingEngine checks if model is compatible with existing
-TrainingEngine
+TrainingEngine DEPRECATED: Use ValidateModelForHybridEngine or
+ValidateModelForDynamicEngine instead
 
 #### type ModelSpecC
 

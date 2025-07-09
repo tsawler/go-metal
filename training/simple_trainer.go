@@ -75,11 +75,14 @@ const (
 	// Classification losses
 	CrossEntropy       LossFunction = iota // Softmax cross-entropy for multi-class
 	SparseCrossEntropy                     // Sparse categorical cross-entropy
+	BinaryCrossEntropy                     // Binary cross-entropy for binary classification
+	BCEWithLogits                          // Binary cross-entropy with logits (more numerically stable)
+	CategoricalCrossEntropy                // Categorical cross-entropy without softmax
 	
 	// Regression losses
-	MeanSquaredError  // MSE for regression
-	MeanAbsoluteError // MAE for regression
-	Huber             // Huber loss for robust regression
+	MeanSquaredError  // 5 - MSE for regression
+	MeanAbsoluteError // 6 - MAE for regression
+	Huber             // 7 - Huber loss for robust regression
 )
 
 func (lf LossFunction) String() string {
@@ -88,6 +91,12 @@ func (lf LossFunction) String() string {
 		return "CrossEntropy"
 	case SparseCrossEntropy:
 		return "SparseCrossEntropy"
+	case BinaryCrossEntropy:
+		return "BinaryCrossEntropy"
+	case BCEWithLogits:
+		return "BCEWithLogits"
+	case CategoricalCrossEntropy:
+		return "CategoricalCrossEntropy"
 	case MeanSquaredError:
 		return "MeanSquaredError"
 	case MeanAbsoluteError:

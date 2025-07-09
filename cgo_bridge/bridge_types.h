@@ -74,7 +74,7 @@ typedef struct {
     int centered;            // RMSProp centered variant flag (0=false, 1=true)
     int optimizer_type;      // 0 = SGD, 1 = Adam, 2 = RMSProp
     int problem_type;        // 0 = Classification, 1 = Regression
-    int loss_function;       // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = MSE, 3 = MAE, 4 = Huber
+    int loss_function;       // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = BinaryCrossEntropy, 3 = BCEWithLogits, 4 = CategoricalCrossEntropy, 5 = MSE, 6 = MAE, 7 = Huber
 } training_config_t;
 
 // Training engine structure - Hybrid MPS/MPSGraph approach

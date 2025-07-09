@@ -227,6 +227,189 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                              name:@"sparse_cross_entropy_loss"];
                         }
                         break;
+                    case 2: // BinaryCrossEntropy
+                        {
+                            // Binary cross-entropy for binary classification
+                            // Assumes labels are probabilities [0.0, 1.0] and predictions are probabilities (sigmoid output)
+                            
+                            // Ensure predictions are in valid range [epsilon, 1-epsilon] for numerical stability
+                            float epsilon = 1e-7f;
+                            MPSGraphTensor* epsilonTensor = [engine->graph constantWithScalar:epsilon
+                                                                                    dataType:MPSDataTypeFloat32];
+                            MPSGraphTensor* oneMinusEpsilon = [engine->graph constantWithScalar:(1.0f - epsilon)
+                                                                                        dataType:MPSDataTypeFloat32];
+                            
+                            // Clamp predictions to [epsilon, 1-epsilon]
+                            MPSGraphTensor* clampedPreds = [engine->graph clampWithTensor:currentTensor
+                                                                            minValueTensor:epsilonTensor
+                                                                            maxValueTensor:oneMinusEpsilon
+                                                                                      name:@"clamped_predictions"];
+                            
+                            // Binary cross-entropy: -[y*log(p) + (1-y)*log(1-p)]
+                            MPSGraphTensor* logPreds = [engine->graph logarithmWithTensor:clampedPreds
+                                                                                     name:@"log_predictions"];
+                            
+                            MPSGraphTensor* oneMinusPreds = [engine->graph subtractionWithPrimaryTensor:oneMinusEpsilon
+                                                                                        secondaryTensor:clampedPreds
+                                                                                                   name:@"one_minus_predictions"];
+                            MPSGraphTensor* logOneMinusPreds = [engine->graph logarithmWithTensor:oneMinusPreds
+                                                                                             name:@"log_one_minus_predictions"];
+                            
+                            MPSGraphTensor* oneMinusLabels = [engine->graph subtractionWithPrimaryTensor:oneMinusEpsilon
+                                                                                         secondaryTensor:labelTensor
+                                                                                                    name:@"one_minus_labels"];
+                            
+                            // y * log(p)
+                            MPSGraphTensor* firstTerm = [engine->graph multiplicationWithPrimaryTensor:labelTensor
+                                                                                       secondaryTensor:logPreds
+                                                                                                  name:@"first_term"];
+                            
+                            // (1-y) * log(1-p)
+                            MPSGraphTensor* secondTerm = [engine->graph multiplicationWithPrimaryTensor:oneMinusLabels
+                                                                                        secondaryTensor:logOneMinusPreds
+                                                                                                   name:@"second_term"];
+                            
+                            // BCE = -[y*log(p) + (1-y)*log(1-p)]
+                            MPSGraphTensor* bceSum = [engine->graph additionWithPrimaryTensor:firstTerm
+                                                                             secondaryTensor:secondTerm
+                                                                                        name:@"bce_sum"];
+                            MPSGraphTensor* bceNegative = [engine->graph negativeWithTensor:bceSum
+                                                                                       name:@"bce_negative"];
+                            
+                            // Mean over batch
+                            MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:bceNegative
+                                                                                       axes:nil
+                                                                                       name:@"bce_total_sum"];
+                            
+                            NSArray<NSNumber*>* labelShape = labelTensor.shape;
+                            int batchSize = [labelShape[0] intValue];
+                            MPSGraphTensor* batchSizeTensor = [engine->graph constantWithScalar:(float)batchSize
+                                                                                      dataType:MPSDataTypeFloat32];
+                            
+                            actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
+                                                                  secondaryTensor:batchSizeTensor
+                                                                             name:@"binary_cross_entropy_loss"];
+                        }
+                        break;
+                    case 3: // BCEWithLogits
+                        {
+                            // Binary cross-entropy with logits (more numerically stable)
+                            // Assumes labels are probabilities [0.0, 1.0] and predictions are raw logits
+                            
+                            // Use log-sum-exp trick for numerical stability
+                            // BCE with logits: max(x, 0) - x * z + log(1 + exp(-abs(x)))
+                            // where x = logits, z = labels
+                            
+                            MPSGraphTensor* zeroTensor = [engine->graph constantWithScalar:0.0f
+                                                                                 dataType:MPSDataTypeFloat32];
+                            
+                            // max(x, 0)
+                            MPSGraphTensor* maxTerm = [engine->graph maximumWithPrimaryTensor:currentTensor
+                                                                               secondaryTensor:zeroTensor
+                                                                                          name:@"max_logits_zero"];
+                            
+                            // x * z
+                            MPSGraphTensor* logitsLabels = [engine->graph multiplicationWithPrimaryTensor:currentTensor
+                                                                                          secondaryTensor:labelTensor
+                                                                                                     name:@"logits_times_labels"];
+                            
+                            // abs(x)
+                            MPSGraphTensor* absLogits = [engine->graph absoluteWithTensor:currentTensor
+                                                                                    name:@"abs_logits"];
+                            
+                            // -abs(x)
+                            MPSGraphTensor* negAbsLogits = [engine->graph negativeWithTensor:absLogits
+                                                                                       name:@"neg_abs_logits"];
+                            
+                            // exp(-abs(x))
+                            MPSGraphTensor* expNegAbs = [engine->graph exponentWithTensor:negAbsLogits
+                                                                                     name:@"exp_neg_abs"];
+                            
+                            // 1 + exp(-abs(x))
+                            MPSGraphTensor* oneTensor = [engine->graph constantWithScalar:1.0f
+                                                                                dataType:MPSDataTypeFloat32];
+                            MPSGraphTensor* onePlusExp = [engine->graph additionWithPrimaryTensor:oneTensor
+                                                                                  secondaryTensor:expNegAbs
+                                                                                             name:@"one_plus_exp"];
+                            
+                            // log(1 + exp(-abs(x)))
+                            MPSGraphTensor* logOnePlusExp = [engine->graph logarithmWithTensor:onePlusExp
+                                                                                         name:@"log_one_plus_exp"];
+                            
+                            // BCE = max(x, 0) - x * z + log(1 + exp(-abs(x)))
+                            MPSGraphTensor* firstPart = [engine->graph subtractionWithPrimaryTensor:maxTerm
+                                                                                   secondaryTensor:logitsLabels
+                                                                                              name:@"first_part"];
+                            MPSGraphTensor* bceLogits = [engine->graph additionWithPrimaryTensor:firstPart
+                                                                                secondaryTensor:logOnePlusExp
+                                                                                           name:@"bce_logits"];
+                            
+                            // Mean over batch
+                            MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:bceLogits
+                                                                                       axes:nil
+                                                                                       name:@"bce_logits_sum"];
+                            
+                            NSArray<NSNumber*>* labelShape = labelTensor.shape;
+                            int batchSize = [labelShape[0] intValue];
+                            MPSGraphTensor* batchSizeTensor = [engine->graph constantWithScalar:(float)batchSize
+                                                                                      dataType:MPSDataTypeFloat32];
+                            
+                            actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
+                                                                  secondaryTensor:batchSizeTensor
+                                                                             name:@"bce_with_logits_loss"];
+                        }
+                        break;
+                    case 4: // CategoricalCrossEntropy
+                        {
+                            // Categorical cross-entropy without softmax
+                            // Assumes labels are probabilities (one-hot or soft labels) and predictions are probabilities
+                            
+                            // Ensure predictions are in valid range [epsilon, 1-epsilon] for numerical stability
+                            float epsilon = 1e-7f;
+                            MPSGraphTensor* epsilonTensor = [engine->graph constantWithScalar:epsilon
+                                                                                    dataType:MPSDataTypeFloat32];
+                            MPSGraphTensor* oneMinusEpsilon = [engine->graph constantWithScalar:(1.0f - epsilon)
+                                                                                        dataType:MPSDataTypeFloat32];
+                            
+                            // Clamp predictions to [epsilon, 1-epsilon]
+                            MPSGraphTensor* clampedPreds = [engine->graph clampWithTensor:currentTensor
+                                                                            minValueTensor:epsilonTensor
+                                                                            maxValueTensor:oneMinusEpsilon
+                                                                                      name:@"clamped_predictions"];
+                            
+                            // Categorical cross-entropy: -sum(y_i * log(p_i))
+                            MPSGraphTensor* logPreds = [engine->graph logarithmWithTensor:clampedPreds
+                                                                                     name:@"log_predictions"];
+                            
+                            // y_i * log(p_i)
+                            MPSGraphTensor* labelLogPreds = [engine->graph multiplicationWithPrimaryTensor:labelTensor
+                                                                                           secondaryTensor:logPreds
+                                                                                                      name:@"label_log_predictions"];
+                            
+                            // Sum over classes (axis=1)
+                            MPSGraphTensor* sumOverClasses = [engine->graph reductionSumWithTensor:labelLogPreds
+                                                                                             axes:@[@1]
+                                                                                             name:@"sum_over_classes"];
+                            
+                            // Negative sum
+                            MPSGraphTensor* negativeSum = [engine->graph negativeWithTensor:sumOverClasses
+                                                                                       name:@"negative_sum"];
+                            
+                            // Mean over batch
+                            MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:negativeSum
+                                                                                       axes:nil
+                                                                                       name:@"categorical_ce_sum"];
+                            
+                            NSArray<NSNumber*>* labelShape = labelTensor.shape;
+                            int batchSize = [labelShape[0] intValue];
+                            MPSGraphTensor* batchSizeTensor = [engine->graph constantWithScalar:(float)batchSize
+                                                                                      dataType:MPSDataTypeFloat32];
+                            
+                            actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
+                                                                  secondaryTensor:batchSizeTensor
+                                                                             name:@"categorical_cross_entropy_loss"];
+                        }
+                        break;
                     default:
                         NSLog(@"❌ Unsupported classification loss function: %d", engine->config.loss_function);
                         return NO;
@@ -235,7 +418,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                 
             case 1: // Regression
                 switch (engine->config.loss_function) {
-                    case 2: // MSE (Mean Squared Error)
+                    case 5: // MSE (Mean Squared Error)
                         {
                             // For regression, currentTensor contains raw predictions (no softmax)
                             // Calculate (predictions - labels)^2
@@ -261,7 +444,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                         }
                         break;
                         
-                    case 3: // MAE (Mean Absolute Error)
+                    case 6: // MAE (Mean Absolute Error)
                         {
                             MPSGraphTensor* diff = [engine->graph subtractionWithPrimaryTensor:currentTensor
                                                                                secondaryTensor:labelTensor
@@ -284,7 +467,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                         }
                         break;
                         
-                    case 4: // Huber
+                    case 7: // Huber
                         {
                             // Huber loss with delta = 1.0 (can be made configurable)
                             float delta = 1.0f;

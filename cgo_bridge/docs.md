@@ -640,6 +640,7 @@ OptimizerType represents the type of optimizer
 const (
 	SGD OptimizerType = iota
 	Adam
+	RMSProp
 )
 ```
 
@@ -648,11 +649,16 @@ const (
 ```go
 type TrainingConfig struct {
 	LearningRate  float32
-	Beta1         float32
-	Beta2         float32
+	Beta1         float32 // Adam momentum decay (or RMSProp momentum if > 0)
+	Beta2         float32 // Adam variance decay (unused for RMSProp)
 	WeightDecay   float32
 	Epsilon       float32
+	Alpha         float32 // RMSProp smoothing constant (typically 0.99)
+	Momentum      float32 // RMSProp momentum (typically 0.0 or 0.9)
+	Centered      bool    // RMSProp centered variant
 	OptimizerType OptimizerType
+	ProblemType   int // 0 = Classification, 1 = Regression
+	LossFunction  int // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = MSE, 3 = MAE, 4 = Huber
 }
 ```
 

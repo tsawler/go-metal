@@ -33,6 +33,37 @@ func TrainingExample() error
 ```
 TrainingExample demonstrates the PyTorch-style progress bar in action
 
+#### type BatchedLabels
+
+```go
+type BatchedLabels struct {
+}
+```
+
+BatchedLabels represents a collection of label batches Useful for multi-GPU
+training or pipeline parallelism
+
+#### func  NewBatchedLabels
+
+```go
+func NewBatchedLabels(batches []LabelData) (*BatchedLabels, error)
+```
+NewBatchedLabels creates a collection of label batches
+
+#### func (*BatchedLabels) GetBatch
+
+```go
+func (bl *BatchedLabels) GetBatch(index int) (LabelData, error)
+```
+GetBatch returns the label batch at the specified index
+
+#### func (*BatchedLabels) NumBatches
+
+```go
+func (bl *BatchedLabels) NumBatches() int
+```
+NumBatches returns the number of label batches
+
 #### type CheckpointCapable
 
 ```go
@@ -145,6 +176,51 @@ func (s *CosineAnnealingLRScheduler) GetLR(epoch int, step int, baseLR float64) 
 func (s *CosineAnnealingLRScheduler) GetName() string
 ```
 
+#### type EngineType
+
+```go
+type EngineType int
+```
+
+EngineType represents the training engine selection strategy Maintains
+GPU-resident architecture compliance across all engine types
+
+```go
+const (
+	// Auto automatically selects the optimal engine based on model architecture
+	// - 4D input + Conv layers → Hybrid Engine (20k+ batches/sec performance)
+	// - 2D input + Dense-only → Dynamic Engine (flexibility for MLPs)
+	// - Complex architectures → Dynamic Engine (any architecture support)
+	Auto EngineType = iota
+
+	// Hybrid uses MPS for convolutions + MPSGraph for other operations
+	// - Optimized for CNN architectures (3 conv + 2 FC pattern)
+	// - Hardcoded optimizations for maximum performance
+	// - Requires 4D input and Conv+Dense layer combination
+	Hybrid
+
+	// Dynamic builds MPSGraph dynamically for any architecture
+	// - Supports any input dimensionality (2D, 4D, etc.)
+	// - Supports any layer combination
+	// - More flexible but slightly slower than Hybrid
+	Dynamic
+)
+```
+
+#### func  SelectOptimalEngine
+
+```go
+func SelectOptimalEngine(modelSpec *layers.ModelSpec, config TrainerConfig) EngineType
+```
+SelectOptimalEngine selects the best engine based on architecture analysis
+Maintains GPU-resident architecture compliance for all engine types
+
+#### func (EngineType) String
+
+```go
+func (et EngineType) String() string
+```
+
 #### type ExponentialLRScheduler
 
 ```go
@@ -174,6 +250,60 @@ func (s *ExponentialLRScheduler) GetLR(epoch int, step int, baseLR float64) floa
 func (s *ExponentialLRScheduler) GetName() string
 ```
 
+#### type Float32Labels
+
+```go
+type Float32Labels struct {
+}
+```
+
+Float32Labels wraps []float32 for regression tasks Implements LabelData
+interface with zero overhead
+
+#### func  NewFloat32Labels
+
+```go
+func NewFloat32Labels(data []float32, shape []int) (*Float32Labels, error)
+```
+NewFloat32Labels creates regression labels with shape validation
+
+#### func (*Float32Labels) DataType
+
+```go
+func (l *Float32Labels) DataType() LabelDataType
+```
+DataType returns LabelTypeFloat32 for regression
+
+#### func (*Float32Labels) Shape
+
+```go
+func (l *Float32Labels) Shape() []int
+```
+Shape returns a copy of the label tensor shape
+
+#### func (*Float32Labels) Size
+
+```go
+func (l *Float32Labels) Size() int
+```
+Size returns the total number of labels
+
+#### func (*Float32Labels) ToFloat32Slice
+
+```go
+func (l *Float32Labels) ToFloat32Slice() []float32
+```
+ToFloat32Slice returns the underlying float32 slice directly ZERO-COST: No
+allocation, no copying
+
+#### func (*Float32Labels) UnsafePointer
+
+```go
+func (l *Float32Labels) UnsafePointer() unsafe.Pointer
+```
+UnsafePointer returns pointer to the underlying float32 data This enables
+zero-copy transfer to GPU for regression
+
 #### type InferencerConfig
 
 ```go
@@ -198,6 +328,60 @@ func DefaultInferencerConfig() InferencerConfig
 ```
 DefaultInferencerConfig returns a sensible default configuration for inference
 
+#### type Int32Labels
+
+```go
+type Int32Labels struct {
+}
+```
+
+Int32Labels wraps []int32 for classification tasks Implements LabelData
+interface with minimal overhead
+
+#### func  NewInt32Labels
+
+```go
+func NewInt32Labels(data []int32, shape []int) (*Int32Labels, error)
+```
+NewInt32Labels creates classification labels with shape validation
+
+#### func (*Int32Labels) DataType
+
+```go
+func (l *Int32Labels) DataType() LabelDataType
+```
+DataType returns LabelTypeInt32 for classification
+
+#### func (*Int32Labels) Shape
+
+```go
+func (l *Int32Labels) Shape() []int
+```
+Shape returns a copy of the label tensor shape
+
+#### func (*Int32Labels) Size
+
+```go
+func (l *Int32Labels) Size() int
+```
+Size returns the total number of labels
+
+#### func (*Int32Labels) ToFloat32Slice
+
+```go
+func (l *Int32Labels) ToFloat32Slice() []float32
+```
+ToFloat32Slice converts int32 labels to float32 Uses cached conversion to
+minimize allocations
+
+#### func (*Int32Labels) UnsafePointer
+
+```go
+func (l *Int32Labels) UnsafePointer() unsafe.Pointer
+```
+UnsafePointer returns pointer to the underlying int32 data This enables
+zero-copy transfer to GPU for classification
+
 #### type LRScheduler
 
 ```go
@@ -214,6 +398,113 @@ type LRScheduler interface {
 LRScheduler defines the interface for learning rate scheduling strategies All
 schedulers must be stateless and pure functions to maintain GPU-resident
 principles
+
+#### type LabelData
+
+```go
+type LabelData interface {
+	// ToFloat32Slice returns the underlying data as []float32 for GPU consumption
+	// For Float32Labels: returns slice directly (zero-cost)
+	// For Int32Labels: converts to float32 (one-time cost)
+	// PERFORMANCE: This method is designed to minimize allocations
+	ToFloat32Slice() []float32
+
+	// DataType returns the semantic type of labels for loss function selection
+	DataType() LabelDataType
+
+	// Size returns the number of label elements
+	Size() int
+
+	// Shape returns the tensor shape of labels [batch_size, num_classes/dims]
+	Shape() []int
+
+	// UnsafePointer returns a pointer to the underlying data for CGO
+	// This enables zero-copy transfer to GPU
+	UnsafePointer() unsafe.Pointer
+}
+```
+
+LabelData provides a flexible interface for different label types This enables
+zero-cost abstractions for both classification and regression while maintaining
+GPU-residency and minimizing CGO calls
+
+#### type LabelDataType
+
+```go
+type LabelDataType int
+```
+
+LabelDataType represents the semantic type of labels
+
+```go
+const (
+	LabelTypeInt32   LabelDataType = iota // Classification labels
+	LabelTypeFloat32                      // Regression targets
+)
+```
+
+#### func (LabelDataType) String
+
+```go
+func (ldt LabelDataType) String() string
+```
+String returns human-readable label type name
+
+#### type LossFunction
+
+```go
+type LossFunction int
+```
+
+LossFunction represents the loss function for training
+
+```go
+const (
+	// Classification losses
+	CrossEntropy            LossFunction = iota // Softmax cross-entropy for multi-class
+	SparseCrossEntropy                          // Sparse categorical cross-entropy
+	BinaryCrossEntropy                          // Binary cross-entropy for binary classification
+	BCEWithLogits                               // Binary cross-entropy with logits (more numerically stable)
+	CategoricalCrossEntropy                     // Categorical cross-entropy without softmax
+
+	// Regression losses
+	MeanSquaredError  // 5 - MSE for regression
+	MeanAbsoluteError // 6 - MAE for regression
+	Huber             // 7 - Huber loss for robust regression
+)
+```
+
+#### func (LossFunction) String
+
+```go
+func (lf LossFunction) String() string
+```
+
+#### type ModelArchitectureInfo
+
+```go
+type ModelArchitectureInfo struct {
+	InputDimensions int    // Number of input dimensions (2D, 4D, etc.)
+	HasConvLayers   bool   // Whether model contains Conv2D layers
+	HasDenseLayers  bool   // Whether model contains Dense layers
+	IsMLPOnly       bool   // Whether model is MLP-only (Dense + activations)
+	IsCNNPattern    bool   // Whether model follows CNN pattern (Conv + Dense)
+	LayerCount      int    // Total number of layers
+	ParameterCount  int64  // Total trainable parameters
+	Complexity      string // "Simple", "Standard", "Complex"
+}
+```
+
+ModelArchitectureInfo provides architecture analysis for engine selection
+
+#### func  AnalyzeModelArchitecture
+
+```go
+func AnalyzeModelArchitecture(modelSpec *layers.ModelSpec) *ModelArchitectureInfo
+```
+AnalyzeModelArchitecture analyzes model architecture for optimal engine
+selection Maintains GPU-resident principles by analyzing layer specifications
+only
 
 #### type ModelArchitecturePrinter
 
@@ -349,6 +640,33 @@ func (mt *ModelTrainer) CalculateAccuracy(
 ```
 CalculateAccuracy computes accuracy from inference results and true labels Uses
 CPU-based argmax for final scalar metric (design compliant)
+
+#### func (*ModelTrainer) CalculateAccuracyUnified
+
+```go
+func (mt *ModelTrainer) CalculateAccuracyUnified(
+	predictions []float32,
+	trueLabels []float32,
+	batchSize int,
+	outputSize int,
+	labelType LabelDataType,
+) float64
+```
+CalculateAccuracyUnified calculates accuracy for both classification and
+regression For classification: returns percentage of correct predictions For
+regression: returns 1 - normalized mean absolute error
+
+#### func (*ModelTrainer) CalculateRegressionMetric
+
+```go
+func (mt *ModelTrainer) CalculateRegressionMetric(
+	predictions []float32,
+	trueLabels []float32,
+	batchSize int,
+) float64
+```
+CalculateRegressionMetric calculates a metric for regression Returns 1 -
+normalized mean absolute error (closer to 1 is better)
 
 #### func (*ModelTrainer) Cleanup
 
@@ -564,7 +882,20 @@ func (mt *ModelTrainer) TrainBatchPersistentWithCommandPool(
 ```
 TrainBatchPersistentWithCommandPool executes a training step using both
 persistent tensors and pooled command buffers for maximum performance and
-resource efficiency
+resource efficiency DEPRECATED: Use TrainBatchUnified for new code
+
+#### func (*ModelTrainer) TrainBatchUnified
+
+```go
+func (mt *ModelTrainer) TrainBatchUnified(
+	inputData []float32,
+	inputShape []int,
+	labelData LabelData,
+) (*TrainingResultOptimized, error)
+```
+TrainBatchUnified executes a training step with flexible label types This is the
+recommended API for new code as it supports both classification and regression
+while maintaining GPU-residency and minimizing CGO calls
 
 #### func (*ModelTrainer) TrainBatchWithCommandPool
 
@@ -696,6 +1027,29 @@ type OptimizerStateData struct {
 
 OptimizerStateData represents internal optimizer state
 
+#### type ProblemType
+
+```go
+type ProblemType int
+```
+
+ProblemType represents the type of machine learning problem
+
+```go
+const (
+	// Classification for discrete class prediction
+	Classification ProblemType = iota
+	// Regression for continuous value prediction
+	Regression
+)
+```
+
+#### func (ProblemType) String
+
+```go
+func (pt ProblemType) String() string
+```
+
 #### type ProgressBar
 
 ```go
@@ -790,6 +1144,14 @@ func NewAdamTrainer(batchSize int, learningRate float32) (*SimpleTrainer, error)
 ```
 NewAdamTrainer creates an Adam trainer with defaults (convenience function)
 
+#### func  NewRMSPropTrainer
+
+```go
+func NewRMSPropTrainer(batchSize int, learningRate float32) (*SimpleTrainer, error)
+```
+NewRMSPropTrainer creates an RMSProp trainer with defaults (convenience
+function)
+
 #### func  NewSGDTrainer
 
 ```go
@@ -882,20 +1244,37 @@ type TrainerConfig struct {
 	// Optimizer configuration
 	OptimizerType cgo_bridge.OptimizerType `json:"optimizer_type"`
 
-	// Adam-specific parameters (ignored for SGD)
-	Beta1       float32 `json:"beta1"`        // Adam momentum decay (default: 0.9)
-	Beta2       float32 `json:"beta2"`        // Adam RMSprop decay (default: 0.999)
-	Epsilon     float32 `json:"epsilon"`      // Adam numerical stability (default: 1e-8)
+	// Optimizer-specific parameters
+	Beta1       float32 `json:"beta1"`        // Adam momentum decay (default: 0.9) / RMSProp momentum (default: 0.0)
+	Beta2       float32 `json:"beta2"`        // Adam variance decay (default: 0.999) - unused for RMSProp
+	Epsilon     float32 `json:"epsilon"`      // Numerical stability (default: 1e-8)
 	WeightDecay float32 `json:"weight_decay"` // L2 regularization (default: 0.0)
 
-	// Training behavior
-	UseHybridEngine  bool `json:"use_hybrid_engine"`  // Use hybrid MPS/MPSGraph (recommended: true)
-	UseDynamicEngine bool `json:"use_dynamic_engine"` // Use dynamic graph creation for any architecture (recommended: true)
-	InferenceOnly    bool `json:"inference_only"`     // Skip training setup, optimize for inference (forward-pass only)
+	// RMSProp-specific parameters
+	Alpha    float32 `json:"alpha"`    // RMSProp smoothing constant (default: 0.99)
+	Momentum float32 `json:"momentum"` // RMSProp momentum (default: 0.0)
+	Centered bool    `json:"centered"` // RMSProp centered variant (default: false)
+
+	// Engine selection (GPU-resident architecture compliance)
+	EngineType EngineType `json:"engine_type"` // Engine selection: Auto, Hybrid, Dynamic (default: Auto)
+
+	// Problem type and loss function configuration
+	ProblemType      ProblemType  `json:"problem_type"`       // Classification or Regression (default: Classification)
+	LossFunction     LossFunction `json:"loss_function"`      // Loss function for the problem type (default: CrossEntropy)
+	UseHybridEngine  bool         `json:"use_hybrid_engine"`  // DEPRECATED: Use EngineType instead
+	UseDynamicEngine bool         `json:"use_dynamic_engine"` // DEPRECATED: Use EngineType instead
+	InferenceOnly    bool         `json:"inference_only"`     // Skip training setup, optimize for inference (forward-pass only)
 }
 ```
 
 TrainerConfig provides comprehensive configuration for training
+
+#### func (*TrainerConfig) Validate
+
+```go
+func (tc *TrainerConfig) Validate() error
+```
+Validate ensures the problem type and loss function are compatible
 
 #### type TrainerFactory
 
@@ -933,6 +1312,21 @@ func (tf *TrainerFactory) CreateProductionTrainer(batchSize int, optimizerConfig
 ```
 CreateProductionTrainer creates a trainer optimized for production use
 
+#### func (*TrainerFactory) CreateRMSPropTrainer
+
+```go
+func (tf *TrainerFactory) CreateRMSPropTrainer(batchSize int, learningRate, alpha, epsilon, weightDecay, momentum float32, centered bool) (*SimpleTrainer, error)
+```
+CreateRMSPropTrainer creates an RMSProp trainer with specified parameters
+
+#### func (*TrainerFactory) CreateRMSPropTrainerWithDefaults
+
+```go
+func (tf *TrainerFactory) CreateRMSPropTrainerWithDefaults(batchSize int, learningRate float32) (*SimpleTrainer, error)
+```
+CreateRMSPropTrainerWithDefaults creates an RMSProp trainer with sensible
+defaults
+
 #### func (*TrainerFactory) CreateSGDTrainer
 
 ```go
@@ -953,6 +1347,13 @@ CreateTrainer creates a trainer with full configuration control
 func (tf *TrainerFactory) GetDefaultAdamConfig(learningRate float32) OptimizerConfig
 ```
 GetDefaultAdamConfig returns default Adam configuration
+
+#### func (*TrainerFactory) GetDefaultRMSPropConfig
+
+```go
+func (tf *TrainerFactory) GetDefaultRMSPropConfig(learningRate float32) OptimizerConfig
+```
+GetDefaultRMSPropConfig returns default RMSProp configuration
 
 #### func (*TrainerFactory) GetDefaultSGDConfig
 
