@@ -5,6 +5,18 @@
 
 ## Usage
 
+#### func  CalculateAUCROC
+
+```go
+func CalculateAUCROC(
+	predictions []float32,
+	trueLabels []int32,
+	batchSize int,
+) float64
+```
+CalculateAUCROC calculates Area Under ROC Curve for binary classification
+GPU-resident architecture: operates on GPU tensor data, returns CPU scalar
+
 #### func  CreateDummyWeights
 
 ```go
@@ -145,6 +157,62 @@ SaveCheckpoint saves the current model state
 func (cm *CheckpointManager) SavePeriodicCheckpoint(epoch int, step int, loss float32, accuracy float32) (bool, error)
 ```
 SavePeriodicCheckpoint saves a checkpoint if it's time based on frequency
+
+#### type ConfusionMatrix
+
+```go
+type ConfusionMatrix struct {
+	NumClasses   int
+	Matrix       [][]int // [true_class][predicted_class]
+	TotalSamples int
+}
+```
+
+ConfusionMatrix represents a confusion matrix for classification tasks Adheres
+to GPU-resident architecture: all tensors on GPU, only scalar results on CPU
+
+#### func  NewConfusionMatrix
+
+```go
+func NewConfusionMatrix(numClasses int) *ConfusionMatrix
+```
+NewConfusionMatrix creates a new confusion matrix
+
+#### func (*ConfusionMatrix) GetAccuracy
+
+```go
+func (cm *ConfusionMatrix) GetAccuracy() float64
+```
+GetAccuracy returns overall classification accuracy
+
+#### func (*ConfusionMatrix) GetMetric
+
+```go
+func (cm *ConfusionMatrix) GetMetric(metric MetricType) float64
+```
+GetMetric calculates and caches evaluation metrics Only CPU access for final
+scalar metrics (GPU-resident architecture compliance)
+
+#### func (*ConfusionMatrix) Reset
+
+```go
+func (cm *ConfusionMatrix) Reset()
+```
+Reset clears the confusion matrix
+
+#### func (*ConfusionMatrix) UpdateFromPredictions
+
+```go
+func (cm *ConfusionMatrix) UpdateFromPredictions(
+	predictions []float32,
+	trueLabels []int32,
+	batchSize int,
+	numClasses int,
+) error
+```
+UpdateFromPredictions updates confusion matrix from GPU-resident predictions
+Maintains design compliance: predictions/labels come from GPU, only scalar
+updates on CPU
 
 #### type CosineAnnealingLRScheduler
 
@@ -480,6 +548,50 @@ const (
 func (lf LossFunction) String() string
 ```
 
+#### type MetricType
+
+```go
+type MetricType int
+```
+
+MetricType represents different evaluation metrics
+
+```go
+const (
+	// Binary Classification Metrics
+	Precision MetricType = iota
+	Recall
+	F1Score
+	Specificity
+	NPV // Negative Predictive Value
+
+	// Multi-class Metrics
+	MacroPrecision
+	MacroRecall
+	MacroF1
+	MicroPrecision
+	MicroRecall
+	MicroF1
+
+	// Ranking Metrics
+	AUCROC
+	AUCPR // Area Under Precision-Recall Curve
+
+	// Regression Metrics
+	MAE  // Mean Absolute Error
+	MSE  // Mean Squared Error
+	RMSE // Root Mean Squared Error
+	R2   // R-squared
+	NMAE // Normalized Mean Absolute Error
+)
+```
+
+#### func (MetricType) String
+
+```go
+func (mt MetricType) String() string
+```
+
 #### type ModelArchitectureInfo
 
 ```go
@@ -687,6 +799,21 @@ func (mt *ModelTrainer) CreateTrainingSession(
 ```
 CreateTrainingSession creates a training session with progress visualization
 
+#### func (*ModelTrainer) DisableEvaluationMetrics
+
+```go
+func (mt *ModelTrainer) DisableEvaluationMetrics()
+```
+DisableEvaluationMetrics disables evaluation metrics for performance
+
+#### func (*ModelTrainer) EnableEvaluationMetrics
+
+```go
+func (mt *ModelTrainer) EnableEvaluationMetrics()
+```
+EnableEvaluationMetrics enables comprehensive evaluation metrics collection
+Metrics are calculated from GPU-resident tensors with CPU-only scalar results
+
 #### func (*ModelTrainer) EnablePersistentBuffers
 
 ```go
@@ -694,6 +821,21 @@ func (mt *ModelTrainer) EnablePersistentBuffers(inputShape []int) error
 ```
 EnablePersistentBuffers pre-allocates GPU tensors for reuse across training
 steps This reduces allocation overhead and improves performance
+
+#### func (*ModelTrainer) GetClassificationMetrics
+
+```go
+func (mt *ModelTrainer) GetClassificationMetrics() map[string]float64
+```
+GetClassificationMetrics returns all classification metrics for the current
+confusion matrix
+
+#### func (*ModelTrainer) GetConfusionMatrix
+
+```go
+func (mt *ModelTrainer) GetConfusionMatrix() [][]int
+```
+GetConfusionMatrix returns a copy of the current confusion matrix
 
 #### func (*ModelTrainer) GetCurrentLearningRate
 
@@ -709,6 +851,21 @@ is a pure computation - no GPU operations
 func (mt *ModelTrainer) GetLRScheduler() interface{}
 ```
 GetLRScheduler returns the learning rate scheduler if available
+
+#### func (*ModelTrainer) GetMetric
+
+```go
+func (mt *ModelTrainer) GetMetric(metric MetricType) float64
+```
+GetMetric returns the current value of a specific metric CPU-only scalar result
+(GPU-resident architecture compliant)
+
+#### func (*ModelTrainer) GetMetricHistory
+
+```go
+func (mt *ModelTrainer) GetMetricHistory(metric MetricType) []float64
+```
+GetMetricHistory returns the history of a specific metric for plotting
 
 #### func (*ModelTrainer) GetModelSpec
 
@@ -738,6 +895,13 @@ func (mt *ModelTrainer) GetParameterTensors() []*memory.Tensor
 ```
 GetParameterTensors returns the parameter tensors for weight extraction
 
+#### func (*ModelTrainer) GetRegressionMetrics
+
+```go
+func (mt *ModelTrainer) GetRegressionMetrics() map[string]float64
+```
+GetRegressionMetrics returns all regression metrics
+
 #### func (*ModelTrainer) GetSchedulerInfo
 
 ```go
@@ -763,6 +927,13 @@ func (mt *ModelTrainer) InferBatch(
 InferBatch performs inference on a batch of data Conforms to design
 requirements: single CGO call, GPU-resident, shared resources
 
+#### func (*ModelTrainer) IsEvaluationMetricsEnabled
+
+```go
+func (mt *ModelTrainer) IsEvaluationMetricsEnabled() bool
+```
+IsEvaluationMetricsEnabled returns whether comprehensive metrics are enabled
+
 #### func (*ModelTrainer) Predict
 
 ```go
@@ -780,6 +951,13 @@ optimal inference performance, use ModelInferencer instead
 func (mt *ModelTrainer) PrintModelArchitecture(modelName string)
 ```
 PrintModelArchitecture prints the model architecture in PyTorch style
+
+#### func (*ModelTrainer) ResetMetrics
+
+```go
+func (mt *ModelTrainer) ResetMetrics()
+```
+ResetMetrics clears all accumulated metrics and history
 
 #### func (*ModelTrainer) SetAccuracyCheckInterval
 
@@ -910,6 +1088,18 @@ func (mt *ModelTrainer) TrainBatchWithCommandPool(
 TrainBatchWithCommandPool executes a training step using pooled command buffers
 This method implements the complete command buffer pooling strategy to prevent
 resource leaks
+
+#### func (*ModelTrainer) UpdateMetricsFromInference
+
+```go
+func (mt *ModelTrainer) UpdateMetricsFromInference(
+	predictions []float32,
+	trueLabels interface{},
+	batchSize int,
+) error
+```
+UpdateMetricsFromInference updates evaluation metrics from inference results
+GPU-resident architecture: operates on GPU tensor data, stores CPU scalars only
 
 #### type ModelTrainerFactory
 
@@ -1087,6 +1277,18 @@ func (pb *ProgressBar) UpdateMetrics(metrics map[string]float64)
 ```
 UpdateMetrics updates metrics without advancing progress
 
+#### type ROCPoint
+
+```go
+type ROCPoint struct {
+	Threshold float32
+	TPR       float64 // True Positive Rate (Recall)
+	FPR       float64 // False Positive Rate (1 - Specificity)
+}
+```
+
+ROCPoint represents a point on the ROC curve
+
 #### type ReduceLROnPlateauScheduler
 
 ```go
@@ -1127,6 +1329,32 @@ func (s *ReduceLROnPlateauScheduler) Step(metric float64, currentLR float64) flo
 ```
 Step checks if LR should be reduced based on metric This is called once per
 epoch with the validation metric
+
+#### type RegressionMetrics
+
+```go
+type RegressionMetrics struct {
+	MAE  float64 // Mean Absolute Error
+	MSE  float64 // Mean Squared Error
+	RMSE float64 // Root Mean Squared Error
+	R2   float64 // R-squared
+	NMAE float64 // Normalized Mean Absolute Error
+}
+```
+
+RegressionMetrics holds comprehensive regression evaluation metrics
+
+#### func  CalculateRegressionMetrics
+
+```go
+func CalculateRegressionMetrics(
+	predictions []float32,
+	trueValues []float32,
+	batchSize int,
+) *RegressionMetrics
+```
+CalculateRegressionMetrics computes comprehensive regression metrics
+GPU-resident architecture: operates on GPU tensor data, returns CPU scalars
 
 #### type SimpleTrainer
 
