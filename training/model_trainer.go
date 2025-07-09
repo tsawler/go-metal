@@ -3,6 +3,7 @@ package training
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 	"unsafe"
 
@@ -60,6 +61,18 @@ type ModelTrainer struct {
 	metricsEnabled      bool             // Whether to calculate comprehensive metrics
 	lastRegressionMetrics *RegressionMetrics // Last calculated regression metrics
 	metricHistory       map[MetricType][]float64 // History of metrics for plotting
+	
+	// Visualization & Plotting - follows GPU-resident architecture
+	visualizationCollector *VisualizationCollector // Collects data for plotting
+	plottingService        *PlottingService        // Service for sending plots to sidecar
+	visualizationEnabled   bool                    // Whether visualization is enabled
+	
+	// Probability collection for proper PR/ROC curves - GPU-resident compliant
+	// These are only populated during validation when visualization is enabled
+	validationProbabilities []float32  // Concatenated probabilities from all validation batches
+	validationLabels       []int32    // Corresponding true labels
+	maxProbabilityBatches  int        // Maximum number of batches to collect (to limit memory)
+	probabilityBatchCount  int        // Current number of collected batches
 }
 
 // NewModelTrainer creates a new model-based trainer using the existing TrainingEngine architecture
@@ -192,6 +205,15 @@ func NewModelTrainer(
 		metricsEnabled:        false, // Disabled by default for performance
 		lastRegressionMetrics: &RegressionMetrics{},
 		metricHistory:         make(map[MetricType][]float64),
+		
+		// Visualization initialization - GPU-resident architecture compliance
+		visualizationCollector: NewVisualizationCollector("Model"),
+		plottingService:        NewPlottingService(DefaultPlottingServiceConfig()),
+		visualizationEnabled:   false, // Disabled by default for performance
+		
+		// Probability collection initialization
+		maxProbabilityBatches: 50, // Limit to 50 batches to control memory usage
+		probabilityBatchCount: 0,
 	}, nil
 }
 
@@ -752,6 +774,12 @@ func (mt *ModelTrainer) TrainBatchWithCommandPool(
 	mt.totalLoss += float64(loss)
 	mt.averageLoss = float32(mt.totalLoss / float64(mt.totalSteps))
 	
+	// VISUALIZATION: Record training step data (CPU-only scalar access)
+	// This follows GPU-resident architecture - only CPU access for final metrics
+	if hasAccuracy {
+		mt.recordTrainingStep(mt.currentStep, float64(loss), accuracy)
+	}
+	
 	return &TrainingResultOptimized{
 		Loss:         loss,
 		Accuracy:     accuracy,
@@ -955,6 +983,12 @@ func (mt *ModelTrainer) trainBatchPersistentWithCommandPoolInternal(
 	mt.totalSteps++
 	mt.totalLoss += float64(loss)
 	mt.averageLoss = float32(mt.totalLoss / float64(mt.totalSteps))
+	
+	// VISUALIZATION: Record training step data (CPU-only scalar access)
+	// This follows GPU-resident architecture - only CPU access for final metrics
+	if hasAccuracy {
+		mt.recordTrainingStep(mt.currentStep, float64(loss), accuracy)
+	}
 	
 	return &TrainingResultOptimized{
 		Loss:         loss,
@@ -1437,6 +1471,9 @@ func (mt *ModelTrainer) UpdateMetricsFromInference(
 			return fmt.Errorf("failed to update confusion matrix: %v", err)
 		}
 		
+		// Collect probabilities for PR/ROC curves if visualization is enabled
+		mt.collectValidationProbabilities(predictions, int32Labels, batchSize, numClasses)
+		
 		// For binary classification, also calculate AUC-ROC if we have raw scores
 		if outputSize == 2 || outputSize == 1 {
 			var scores []float32
@@ -1611,4 +1648,455 @@ func (mt *ModelTrainer) addToHistory(metric MetricType, value float64) {
 	}
 	
 	mt.metricHistory[metric] = append(mt.metricHistory[metric], value)
+}
+
+// VISUALIZATION METHODS - GPU-resident architecture compliance
+// All visualization methods follow the four core requirements:
+// 1. Only CPU access for final scalar metrics collection
+// 2. Minimal CGO overhead by batching data collection
+// 3. GPU-resident tensors throughout training
+// 4. Proper memory management with buffer reuse
+
+// EnableVisualization enables visualization data collection
+func (mt *ModelTrainer) EnableVisualization() {
+	mt.visualizationEnabled = true
+	mt.visualizationCollector.Enable()
+	// Reset probability collection when enabling visualization
+	mt.resetProbabilityCollection()
+}
+
+// DisableVisualization disables visualization data collection
+func (mt *ModelTrainer) DisableVisualization() {
+	mt.visualizationEnabled = false
+	mt.visualizationCollector.Disable()
+	// Clear probability buffers to free memory
+	mt.validationProbabilities = nil
+	mt.validationLabels = nil
+	mt.probabilityBatchCount = 0
+}
+
+// IsVisualizationEnabled returns whether visualization is enabled
+func (mt *ModelTrainer) IsVisualizationEnabled() bool {
+	return mt.visualizationEnabled
+}
+
+// EnablePlottingService enables the plotting service for sidecar communication
+func (mt *ModelTrainer) EnablePlottingService() {
+	mt.plottingService.Enable()
+}
+
+// DisablePlottingService disables the plotting service
+func (mt *ModelTrainer) DisablePlottingService() {
+	mt.plottingService.Disable()
+}
+
+// ConfigurePlottingService configures the plotting service with custom settings
+func (mt *ModelTrainer) ConfigurePlottingService(config PlottingServiceConfig) {
+	mt.plottingService = NewPlottingService(config)
+}
+
+// CheckPlottingServiceHealth checks if the plotting service is available
+func (mt *ModelTrainer) CheckPlottingServiceHealth() error {
+	return mt.plottingService.CheckHealth()
+}
+
+// RecordTrainingStep records training metrics for visualization
+// This method is called internally during training and follows GPU-resident principles
+func (mt *ModelTrainer) recordTrainingStep(step int, loss, accuracy float64) {
+	if !mt.visualizationEnabled {
+		return
+	}
+	
+	// Get current learning rate for plotting
+	currentLR := float64(mt.getCurrentLearningRate())
+	
+	// Record step data (CPU-only scalar values)
+	mt.visualizationCollector.RecordTrainingStep(step, loss, accuracy, currentLR)
+}
+
+// RecordValidationStep records validation metrics for visualization
+// This method is called internally during validation and follows GPU-resident principles
+func (mt *ModelTrainer) recordValidationStep(step int, loss, accuracy float64) {
+	if !mt.visualizationEnabled {
+		return
+	}
+	
+	// Record validation data (CPU-only scalar values)
+	mt.visualizationCollector.RecordValidationStep(step, loss, accuracy)
+}
+
+// RecordEpochMetrics records epoch-level metrics for visualization
+func (mt *ModelTrainer) RecordEpochMetrics(epoch int, trainLoss, trainAcc, valLoss, valAcc float64) {
+	if !mt.visualizationEnabled {
+		return
+	}
+	
+	mt.visualizationCollector.RecordEpoch(epoch, trainLoss, trainAcc, valLoss, valAcc)
+}
+
+// StartValidationPhase prepares for validation by resetting probability collection
+func (mt *ModelTrainer) StartValidationPhase() {
+	if mt.visualizationEnabled {
+		mt.resetProbabilityCollection()
+	}
+}
+
+// RecordMetricsForVisualization records comprehensive metrics for visualization
+// This method integrates with the evaluation metrics system
+func (mt *ModelTrainer) RecordMetricsForVisualization() {
+	if !mt.visualizationEnabled || !mt.metricsEnabled {
+		return
+	}
+	
+	// Record classification metrics
+	if mt.trainerConfig.ProblemType == Classification {
+		// Record confusion matrix
+		confMatrix := mt.GetConfusionMatrix()
+		if confMatrix != nil {
+			classNames := mt.getClassNames()
+			mt.visualizationCollector.RecordConfusionMatrix(confMatrix, classNames)
+		}
+		
+		// Record ROC data if available
+		if mt.confusionMatrix.NumClasses == 2 {
+			rocPoints := mt.generateROCPoints()
+			if len(rocPoints) > 0 {
+				mt.visualizationCollector.RecordROCData(rocPoints)
+			}
+			
+			// Record Precision-Recall data
+			prPoints := mt.generatePRPoints()
+			if len(prPoints) > 0 {
+				mt.visualizationCollector.RecordPRData(prPoints)
+			}
+		}
+	}
+	
+	// Record regression metrics
+	if mt.trainerConfig.ProblemType == Regression {
+		// Note: Regression predictions would need to be stored during training
+		// This is a placeholder for when regression visualization is needed
+		// mt.visualizationCollector.RecordRegressionData(predictions, trueValues)
+	}
+}
+
+// GenerateTrainingCurvesPlot generates and returns training curves plot data
+func (mt *ModelTrainer) GenerateTrainingCurvesPlot() PlotData {
+	return mt.visualizationCollector.GenerateTrainingCurvesPlot()
+}
+
+// GenerateLearningRateSchedulePlot generates and returns learning rate schedule plot data
+func (mt *ModelTrainer) GenerateLearningRateSchedulePlot() PlotData {
+	return mt.visualizationCollector.GenerateLearningRateSchedulePlot()
+}
+
+// GenerateROCCurvePlot generates and returns ROC curve plot data
+func (mt *ModelTrainer) GenerateROCCurvePlot() PlotData {
+	return mt.visualizationCollector.GenerateROCCurvePlot()
+}
+
+// GeneratePrecisionRecallPlot generates and returns Precision-Recall curve plot data
+func (mt *ModelTrainer) GeneratePrecisionRecallPlot() PlotData {
+	return mt.visualizationCollector.GeneratePrecisionRecallPlot()
+}
+
+// GenerateConfusionMatrixPlot generates and returns confusion matrix plot data
+func (mt *ModelTrainer) GenerateConfusionMatrixPlot() PlotData {
+	return mt.visualizationCollector.GenerateConfusionMatrixPlot()
+}
+
+// GenerateAllPlots generates all available plots and returns them
+func (mt *ModelTrainer) GenerateAllPlots() map[PlotType]PlotData {
+	plots := make(map[PlotType]PlotData)
+	
+	if !mt.visualizationEnabled {
+		return plots
+	}
+	
+	// Generate all available plots
+	plots[TrainingCurves] = mt.visualizationCollector.GenerateTrainingCurvesPlot()
+	plots[LearningRateSchedule] = mt.visualizationCollector.GenerateLearningRateSchedulePlot()
+	
+	if mt.trainerConfig.ProblemType == Classification {
+		plots[ROCCurve] = mt.visualizationCollector.GenerateROCCurvePlot()
+		plots[PrecisionRecall] = mt.visualizationCollector.GeneratePrecisionRecallPlot()
+		plots[ConfusionMatrixPlot] = mt.visualizationCollector.GenerateConfusionMatrixPlot()
+	}
+	
+	if mt.trainerConfig.ProblemType == Regression {
+		plots[RegressionScatter] = mt.visualizationCollector.GenerateRegressionScatterPlot()
+		plots[ResidualPlot] = mt.visualizationCollector.GenerateResidualPlot()
+	}
+	
+	return plots
+}
+
+// SendPlotToSidecar sends a specific plot to the sidecar plotting service
+func (mt *ModelTrainer) SendPlotToSidecar(plotType PlotType) (*PlottingResponse, error) {
+	if !mt.visualizationEnabled {
+		return &PlottingResponse{
+			Success: false,
+			Message: "Visualization is disabled",
+		}, nil
+	}
+	
+	return mt.plottingService.GenerateAndSendPlot(mt.visualizationCollector, plotType)
+}
+
+// SendAllPlotsToSidecar sends all available plots to the sidecar plotting service
+func (mt *ModelTrainer) SendAllPlotsToSidecar() map[PlotType]*PlottingResponse {
+	if !mt.visualizationEnabled {
+		return make(map[PlotType]*PlottingResponse)
+	}
+	
+	return mt.plottingService.GenerateAndSendAllPlots(mt.visualizationCollector)
+}
+
+// ClearVisualizationData clears all collected visualization data
+func (mt *ModelTrainer) ClearVisualizationData() {
+	if mt.visualizationCollector != nil {
+		mt.visualizationCollector.Clear()
+	}
+}
+
+// GetVisualizationCollector returns the visualization collector for advanced usage
+func (mt *ModelTrainer) GetVisualizationCollector() *VisualizationCollector {
+	return mt.visualizationCollector
+}
+
+// resetProbabilityCollection resets the probability collection buffers
+func (mt *ModelTrainer) resetProbabilityCollection() {
+	mt.validationProbabilities = nil
+	mt.validationLabels = nil
+	mt.probabilityBatchCount = 0
+}
+
+// collectValidationProbabilities collects probabilities and labels for PR/ROC curves
+// This is GPU-resident compliant: only copies final results from GPU once
+func (mt *ModelTrainer) collectValidationProbabilities(predictions []float32, labels []int32, batchSize int, numClasses int) {
+	// Only collect if visualization is enabled and we haven't exceeded max batches
+	if !mt.visualizationEnabled || mt.probabilityBatchCount >= mt.maxProbabilityBatches {
+		return
+	}
+	
+	// For binary classification, we need probabilities for the positive class
+	// For multi-class, we store all probabilities
+	if numClasses == 2 {
+		// Extract positive class probabilities (class 1)
+		positiveProbabilities := make([]float32, batchSize)
+		for i := 0; i < batchSize; i++ {
+			positiveProbabilities[i] = predictions[i*numClasses + 1]
+		}
+		mt.validationProbabilities = append(mt.validationProbabilities, positiveProbabilities...)
+	} else {
+		// Store all probabilities for multi-class
+		mt.validationProbabilities = append(mt.validationProbabilities, predictions[:batchSize*numClasses]...)
+	}
+	
+	// Store corresponding labels
+	mt.validationLabels = append(mt.validationLabels, labels[:batchSize]...)
+	mt.probabilityBatchCount++
+}
+
+// Helper methods for visualization integration
+
+// getClassNames returns class names for visualization
+func (mt *ModelTrainer) getClassNames() []string {
+	// For binary classification, use standard names
+	if mt.confusionMatrix.NumClasses == 2 {
+		return []string{"Class 0", "Class 1"}
+	}
+	
+	// For multi-class, generate class names
+	classNames := make([]string, mt.confusionMatrix.NumClasses)
+	for i := range classNames {
+		classNames[i] = fmt.Sprintf("Class %d", i)
+	}
+	
+	return classNames
+}
+
+// generateROCPoints generates ROC curve points from collected probabilities
+func (mt *ModelTrainer) generateROCPoints() []ROCPointViz {
+	if mt.confusionMatrix.NumClasses != 2 || len(mt.validationProbabilities) == 0 {
+		return nil
+	}
+	
+	// Create a slice of probability-label pairs for sorting
+	type probLabel struct {
+		prob  float32
+		label int32
+	}
+	
+	pairs := make([]probLabel, len(mt.validationLabels))
+	for i := range pairs {
+		pairs[i] = probLabel{
+			prob:  mt.validationProbabilities[i],
+			label: mt.validationLabels[i],
+		}
+	}
+	
+	// Sort by probability in descending order
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].prob > pairs[j].prob
+	})
+	
+	// Count total positives and negatives
+	totalPositives := 0
+	totalNegatives := 0
+	for _, pair := range pairs {
+		if pair.label == 1 {
+			totalPositives++
+		} else {
+			totalNegatives++
+		}
+	}
+	
+	if totalPositives == 0 || totalNegatives == 0 {
+		// All samples are of one class
+		return nil
+	}
+	
+	// Generate ROC curve points
+	var rocPoints []ROCPointViz
+	
+	// Add the starting point (threshold = 1.0+epsilon)
+	rocPoints = append(rocPoints, ROCPointViz{
+		FPR:       0.0,
+		TPR:       0.0,
+		Threshold: 1.0,
+	})
+	
+	truePositives := 0
+	falsePositives := 0
+	
+	// Calculate points at different thresholds
+	for i, pair := range pairs {
+		if pair.label == 1 {
+			truePositives++
+		} else {
+			falsePositives++
+		}
+		
+		// Calculate TPR and FPR at this threshold
+		tpr := float64(truePositives) / float64(totalPositives)
+		fpr := float64(falsePositives) / float64(totalNegatives)
+		
+		// Add point at regular intervals or when there's a significant change
+		if i%10 == 0 || i == len(pairs)-1 || 
+		   (i > 0 && math.Abs(float64(pair.prob - pairs[i-1].prob)) > 0.05) ||
+		   (len(rocPoints) > 0 && (math.Abs(tpr - rocPoints[len(rocPoints)-1].TPR) > 0.01 || 
+		                          math.Abs(fpr - rocPoints[len(rocPoints)-1].FPR) > 0.01)) {
+			rocPoints = append(rocPoints, ROCPointViz{
+				FPR:       fpr,
+				TPR:       tpr,
+				Threshold: float64(pair.prob),
+			})
+		}
+	}
+	
+	// Ensure we have the end point (threshold = 0.0)
+	if rocPoints[len(rocPoints)-1].FPR < 1.0 || rocPoints[len(rocPoints)-1].TPR < 1.0 {
+		rocPoints = append(rocPoints, ROCPointViz{
+			FPR:       1.0,
+			TPR:       1.0,
+			Threshold: 0.0,
+		})
+	}
+	
+	return rocPoints
+}
+
+// generatePRPoints generates Precision-Recall curve points from collected probabilities
+func (mt *ModelTrainer) generatePRPoints() []PRPoint {
+	if mt.confusionMatrix.NumClasses != 2 || len(mt.validationProbabilities) == 0 {
+		return nil
+	}
+	
+	// Create a slice of probability-label pairs for sorting
+	type probLabel struct {
+		prob  float32
+		label int32
+	}
+	
+	pairs := make([]probLabel, len(mt.validationLabels))
+	for i := range pairs {
+		pairs[i] = probLabel{
+			prob:  mt.validationProbabilities[i],
+			label: mt.validationLabels[i],
+		}
+	}
+	
+	// Sort by probability in descending order
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].prob > pairs[j].prob
+	})
+	
+	// Generate PR curve points at different thresholds
+	var prPoints []PRPoint
+	totalPositives := 0
+	for _, pair := range pairs {
+		if pair.label == 1 {
+			totalPositives++
+		}
+	}
+	
+	if totalPositives == 0 || totalPositives == len(pairs) {
+		// All samples are of one class
+		return nil
+	}
+	
+	// Add the starting point (threshold = 1.0)
+	prPoints = append(prPoints, PRPoint{
+		Precision: 1.0,
+		Recall:    0.0,
+		Threshold: 1.0,
+	})
+	
+	// Generate points at regular intervals and significant changes
+	truePositives := 0
+	falsePositives := 0
+	
+	// Calculate points at different thresholds
+	for i, pair := range pairs {
+		if pair.label == 1 {
+			truePositives++
+		} else {
+			falsePositives++
+		}
+		
+		// Calculate precision and recall at this threshold
+		predictedPositives := i + 1
+		precision := float64(truePositives) / float64(predictedPositives)
+		recall := float64(truePositives) / float64(totalPositives)
+		
+		// Add point at regular intervals or when there's a significant change
+		if i%10 == 0 || i == len(pairs)-1 || 
+		   (i > 0 && math.Abs(float64(pair.prob - pairs[i-1].prob)) > 0.05) {
+			prPoints = append(prPoints, PRPoint{
+				Precision: precision,
+				Recall:    recall,
+				Threshold: float64(pair.prob),
+			})
+		}
+	}
+	
+	// Ensure we have the end point
+	if prPoints[len(prPoints)-1].Recall < 1.0 {
+		prPoints = append(prPoints, PRPoint{
+			Precision: float64(totalPositives) / float64(len(pairs)),
+			Recall:    1.0,
+			Threshold: 0.0,
+		})
+	}
+	
+	return prPoints
+}
+
+// getCurrentLearningRate returns the current learning rate considering scheduling
+func (mt *ModelTrainer) getCurrentLearningRate() float32 {
+	if mt.lrScheduler != nil {
+		return float32(mt.lrScheduler.GetLR(mt.currentEpoch, mt.currentStep, float64(mt.baseLearningRate)))
+	}
+	return mt.baseLearningRate
 }
