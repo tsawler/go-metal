@@ -104,6 +104,14 @@ This phase focuses on building out the core utility of the `go-metal` library by
 
     * **Evaluation Metrics:** Provide a comprehensive set of evaluation metrics beyond accuracy, such as F1-score, Precision, Recall, AUC, and Mean Average Precision (mAP).
 
+    * **Training Visualization & Plotting:** Implement data collection and sidecar-based plot generation for common ML visualizations:
+      * **Training Curves:** Loss and accuracy progression over epochs/steps
+      * **Learning Rate Schedules:** Visualization of LR decay patterns  
+      * **Evaluation Plots:** ROC curves, Precision-Recall curves, Confusion matrices
+      * **Model Analysis:** Parameter distributions, gradient histograms, activation patterns
+      * **Architecture:** JSON payload generation + HTTP POST to sidecar plotting service
+      * **Output:** HTML-based interactive plots for development and analysis
+
 ### Phase 3: Advanced Architectures & Scalability (Medium-to-Long Term - Next 6-12+ Months)
 
 This phase aims to enable the `go-metal` framework to handle more complex model architectures and scale to larger datasets and computational demands.
