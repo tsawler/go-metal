@@ -233,6 +233,8 @@ func (ps *PlottingService) GenerateAndSendPlot(collector *VisualizationCollector
 		plotData = collector.GenerateRegressionScatterPlot()
 	case ResidualPlot:
 		plotData = collector.GenerateResidualPlot()
+	case QQPlot:
+		plotData = collector.GenerateQQPlot()
 	default:
 		return nil, fmt.Errorf("unsupported plot type: %s", plotType)
 	}
@@ -265,6 +267,7 @@ func (ps *PlottingService) GenerateAndSendAllPlots(collector *VisualizationColle
 		ConfusionMatrixPlot,
 		RegressionScatter,
 		ResidualPlot,
+		QQPlot,
 	}
 	
 	// Generate and send each plot type
@@ -421,6 +424,7 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 		ConfusionMatrixPlot,
 		RegressionScatter,
 		ResidualPlot,
+		QQPlot,
 	}
 	
 	var plotDataList []PlotData
@@ -445,6 +449,8 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 			plotData = collector.GenerateRegressionScatterPlot()
 		case ResidualPlot:
 			plotData = collector.GenerateResidualPlot()
+		case QQPlot:
+			plotData = collector.GenerateQQPlot()
 		default:
 			results[plotType] = &PlottingResponse{
 				Success: false,

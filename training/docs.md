@@ -45,6 +45,65 @@ func TrainingExample() error
 ```
 TrainingExample demonstrates the PyTorch-style progress bar in action
 
+#### type ActivationStats
+
+```go
+type ActivationStats struct {
+	LayerName      string    `json:"layer_name"`
+	ActivationType string    `json:"activation_type"`
+	Mean           float64   `json:"mean"`
+	Std            float64   `json:"std"`
+	SparsityRatio  float64   `json:"sparsity_ratio"`
+	Histogram      []float64 `json:"histogram"`
+	Bins           []float64 `json:"bins"`
+}
+```
+
+ActivationStats represents activation pattern statistics
+
+#### type BatchPlotResult
+
+```go
+type BatchPlotResult struct {
+	Success   bool   `json:"success"`
+	PlotID    string `json:"plot_id,omitempty"`
+	PlotURL   string `json:"plot_url,omitempty"`
+	ViewURL   string `json:"view_url,omitempty"`
+	PlotType  string `json:"plot_type,omitempty"`
+	Message   string `json:"message,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
+}
+```
+
+BatchPlotResult represents a single plot result within a batch response
+
+#### type BatchPlottingResponse
+
+```go
+type BatchPlottingResponse struct {
+	Success      bool              `json:"success"`
+	Message      string            `json:"message"`
+	BatchID      string            `json:"batch_id,omitempty"`
+	Results      []BatchPlotResult `json:"results,omitempty"`
+	DashboardURL string            `json:"dashboard_url,omitempty"`
+	Summary      BatchSummary      `json:"summary,omitempty"`
+}
+```
+
+BatchPlottingResponse represents the response from the batch plotting endpoint
+
+#### type BatchSummary
+
+```go
+type BatchSummary struct {
+	TotalPlots int `json:"total_plots"`
+	Successful int `json:"successful"`
+	Failed     int `json:"failed"`
+}
+```
+
+BatchSummary represents the summary of a batch operation
+
 #### type BatchedLabels
 
 ```go
@@ -244,6 +303,20 @@ func (s *CosineAnnealingLRScheduler) GetLR(epoch int, step int, baseLR float64) 
 func (s *CosineAnnealingLRScheduler) GetName() string
 ```
 
+#### type DataPoint
+
+```go
+type DataPoint struct {
+	X     interface{} `json:"x"`
+	Y     interface{} `json:"y"`
+	Z     interface{} `json:"z,omitempty"`     // For heatmaps, 3D plots
+	Label string      `json:"label,omitempty"` // For categorical data
+	Color string      `json:"color,omitempty"` // For custom coloring
+}
+```
+
+DataPoint represents a single data point - flexible for different plot types
+
 #### type EngineType
 
 ```go
@@ -371,6 +444,22 @@ func (l *Float32Labels) UnsafePointer() unsafe.Pointer
 ```
 UnsafePointer returns pointer to the underlying float32 data This enables
 zero-copy transfer to GPU for regression
+
+#### type GradientStats
+
+```go
+type GradientStats struct {
+	LayerName    string    `json:"layer_name"`
+	ParamType    string    `json:"param_type"`
+	GradientNorm float64   `json:"gradient_norm"`
+	Mean         float64   `json:"mean"`
+	Std          float64   `json:"std"`
+	Histogram    []float64 `json:"histogram"`
+	Bins         []float64 `json:"bins"`
+}
+```
+
+GradientStats represents gradient statistics
 
 #### type InferencerConfig
 
@@ -780,12 +869,33 @@ func (mt *ModelTrainer) CalculateRegressionMetric(
 CalculateRegressionMetric calculates a metric for regression Returns 1 -
 normalized mean absolute error (closer to 1 is better)
 
+#### func (*ModelTrainer) CheckPlottingServiceHealth
+
+```go
+func (mt *ModelTrainer) CheckPlottingServiceHealth() error
+```
+CheckPlottingServiceHealth checks if the plotting service is available
+
 #### func (*ModelTrainer) Cleanup
 
 ```go
 func (mt *ModelTrainer) Cleanup()
 ```
 Cleanup releases all resources
+
+#### func (*ModelTrainer) ClearVisualizationData
+
+```go
+func (mt *ModelTrainer) ClearVisualizationData()
+```
+ClearVisualizationData clears all collected visualization data
+
+#### func (*ModelTrainer) ConfigurePlottingService
+
+```go
+func (mt *ModelTrainer) ConfigurePlottingService(config PlottingServiceConfig)
+```
+ConfigurePlottingService configures the plotting service with custom settings
 
 #### func (*ModelTrainer) CreateTrainingSession
 
@@ -806,6 +916,20 @@ func (mt *ModelTrainer) DisableEvaluationMetrics()
 ```
 DisableEvaluationMetrics disables evaluation metrics for performance
 
+#### func (*ModelTrainer) DisablePlottingService
+
+```go
+func (mt *ModelTrainer) DisablePlottingService()
+```
+DisablePlottingService disables the plotting service
+
+#### func (*ModelTrainer) DisableVisualization
+
+```go
+func (mt *ModelTrainer) DisableVisualization()
+```
+DisableVisualization disables visualization data collection
+
 #### func (*ModelTrainer) EnableEvaluationMetrics
 
 ```go
@@ -821,6 +945,86 @@ func (mt *ModelTrainer) EnablePersistentBuffers(inputShape []int) error
 ```
 EnablePersistentBuffers pre-allocates GPU tensors for reuse across training
 steps This reduces allocation overhead and improves performance
+
+#### func (*ModelTrainer) EnablePlottingService
+
+```go
+func (mt *ModelTrainer) EnablePlottingService()
+```
+EnablePlottingService enables the plotting service for sidecar communication
+
+#### func (*ModelTrainer) EnableSidecarWithAutoStart
+
+```go
+func (mt *ModelTrainer) EnableSidecarWithAutoStart(config ...SidecarConfig) error
+```
+EnableSidecarWithAutoStart enables plotting service with automatic sidecar
+management
+
+#### func (*ModelTrainer) EnableVisualization
+
+```go
+func (mt *ModelTrainer) EnableVisualization()
+```
+EnableVisualization enables visualization data collection
+
+#### func (*ModelTrainer) GenerateAllPlots
+
+```go
+func (mt *ModelTrainer) GenerateAllPlots() map[PlotType]PlotData
+```
+GenerateAllPlots generates all available plots and returns them
+
+#### func (*ModelTrainer) GenerateAndOpenAllPlots
+
+```go
+func (mt *ModelTrainer) GenerateAndOpenAllPlots() error
+```
+GenerateAndOpenAllPlots generates all plots and opens them in a dashboard
+
+#### func (*ModelTrainer) GenerateAndOpenPlot
+
+```go
+func (mt *ModelTrainer) GenerateAndOpenPlot(plotType PlotType) error
+```
+GenerateAndOpenPlot generates a plot and opens it in the browser
+
+#### func (*ModelTrainer) GenerateConfusionMatrixPlot
+
+```go
+func (mt *ModelTrainer) GenerateConfusionMatrixPlot() PlotData
+```
+GenerateConfusionMatrixPlot generates and returns confusion matrix plot data
+
+#### func (*ModelTrainer) GenerateLearningRateSchedulePlot
+
+```go
+func (mt *ModelTrainer) GenerateLearningRateSchedulePlot() PlotData
+```
+GenerateLearningRateSchedulePlot generates and returns learning rate schedule
+plot data
+
+#### func (*ModelTrainer) GeneratePrecisionRecallPlot
+
+```go
+func (mt *ModelTrainer) GeneratePrecisionRecallPlot() PlotData
+```
+GeneratePrecisionRecallPlot generates and returns Precision-Recall curve plot
+data
+
+#### func (*ModelTrainer) GenerateROCCurvePlot
+
+```go
+func (mt *ModelTrainer) GenerateROCCurvePlot() PlotData
+```
+GenerateROCCurvePlot generates and returns ROC curve plot data
+
+#### func (*ModelTrainer) GenerateTrainingCurvesPlot
+
+```go
+func (mt *ModelTrainer) GenerateTrainingCurvesPlot() PlotData
+```
+GenerateTrainingCurvesPlot generates and returns training curves plot data
 
 #### func (*ModelTrainer) GetClassificationMetrics
 
@@ -916,6 +1120,13 @@ func (mt *ModelTrainer) GetStats() *ModelTrainingStats
 ```
 GetStats returns comprehensive training statistics
 
+#### func (*ModelTrainer) GetVisualizationCollector
+
+```go
+func (mt *ModelTrainer) GetVisualizationCollector() *VisualizationCollector
+```
+GetVisualizationCollector returns the visualization collector for advanced usage
+
 #### func (*ModelTrainer) InferBatch
 
 ```go
@@ -933,6 +1144,13 @@ requirements: single CGO call, GPU-resident, shared resources
 func (mt *ModelTrainer) IsEvaluationMetricsEnabled() bool
 ```
 IsEvaluationMetricsEnabled returns whether comprehensive metrics are enabled
+
+#### func (*ModelTrainer) IsVisualizationEnabled
+
+```go
+func (mt *ModelTrainer) IsVisualizationEnabled() bool
+```
+IsVisualizationEnabled returns whether visualization is enabled
 
 #### func (*ModelTrainer) Predict
 
@@ -952,12 +1170,41 @@ func (mt *ModelTrainer) PrintModelArchitecture(modelName string)
 ```
 PrintModelArchitecture prints the model architecture in PyTorch style
 
+#### func (*ModelTrainer) RecordEpochMetrics
+
+```go
+func (mt *ModelTrainer) RecordEpochMetrics(epoch int, trainLoss, trainAcc, valLoss, valAcc float64)
+```
+RecordEpochMetrics records epoch-level metrics for visualization
+
+#### func (*ModelTrainer) RecordMetricsForVisualization
+
+```go
+func (mt *ModelTrainer) RecordMetricsForVisualization()
+```
+RecordMetricsForVisualization records comprehensive metrics for visualization
+This method integrates with the evaluation metrics system
+
 #### func (*ModelTrainer) ResetMetrics
 
 ```go
 func (mt *ModelTrainer) ResetMetrics()
 ```
 ResetMetrics clears all accumulated metrics and history
+
+#### func (*ModelTrainer) SendAllPlotsToSidecar
+
+```go
+func (mt *ModelTrainer) SendAllPlotsToSidecar() map[PlotType]*PlottingResponse
+```
+SendAllPlotsToSidecar sends all available plots to the sidecar plotting service
+
+#### func (*ModelTrainer) SendPlotToSidecar
+
+```go
+func (mt *ModelTrainer) SendPlotToSidecar(plotType PlotType) (*PlottingResponse, error)
+```
+SendPlotToSidecar sends a specific plot to the sidecar plotting service
 
 #### func (*ModelTrainer) SetAccuracyCheckInterval
 
@@ -999,6 +1246,13 @@ SetLearningRate sets the learning rate
 func (mt *ModelTrainer) SetOptimizerState(state interface{}) error
 ```
 SetOptimizerState restores optimizer state from checkpoint
+
+#### func (*ModelTrainer) StartValidationPhase
+
+```go
+func (mt *ModelTrainer) StartValidationPhase()
+```
+StartValidationPhase prepares for validation by resetting probability collection
 
 #### func (*ModelTrainer) StepSchedulerWithMetric
 
@@ -1217,6 +1471,257 @@ type OptimizerStateData struct {
 
 OptimizerStateData represents internal optimizer state
 
+#### type PRPoint
+
+```go
+type PRPoint struct {
+	Precision float64 `json:"precision"`
+	Recall    float64 `json:"recall"`
+	Threshold float64 `json:"threshold"`
+}
+```
+
+PRPoint represents a point on the Precision-Recall curve
+
+#### type ParameterStats
+
+```go
+type ParameterStats struct {
+	LayerName string    `json:"layer_name"`
+	ParamType string    `json:"param_type"` // "weight", "bias"
+	Mean      float64   `json:"mean"`
+	Std       float64   `json:"std"`
+	Min       float64   `json:"min"`
+	Max       float64   `json:"max"`
+	Histogram []float64 `json:"histogram"`
+	Bins      []float64 `json:"bins"`
+}
+```
+
+ParameterStats represents parameter distribution statistics
+
+#### type PlotConfig
+
+```go
+type PlotConfig struct {
+	XAxisLabel    string                 `json:"x_axis_label"`
+	YAxisLabel    string                 `json:"y_axis_label"`
+	ZAxisLabel    string                 `json:"z_axis_label,omitempty"`
+	XAxisScale    string                 `json:"x_axis_scale"` // "linear", "log"
+	YAxisScale    string                 `json:"y_axis_scale"` // "linear", "log"
+	ShowLegend    bool                   `json:"show_legend"`
+	ShowGrid      bool                   `json:"show_grid"`
+	Width         int                    `json:"width"`
+	Height        int                    `json:"height"`
+	Interactive   bool                   `json:"interactive"`
+	CustomOptions map[string]interface{} `json:"custom_options,omitempty"`
+}
+```
+
+PlotConfig contains plot-specific configuration
+
+#### type PlotData
+
+```go
+type PlotData struct {
+	// Metadata
+	PlotType  PlotType  `json:"plot_type"`
+	Title     string    `json:"title"`
+	Timestamp time.Time `json:"timestamp"`
+	ModelName string    `json:"model_name"`
+
+	// Data series - flexible structure for different plot types
+	Series []SeriesData `json:"series"`
+
+	// Plot configuration
+	Config PlotConfig `json:"config"`
+
+	// Metrics metadata
+	Metrics map[string]interface{} `json:"metrics,omitempty"`
+}
+```
+
+PlotData represents the universal JSON format for the sidecar plotting service
+
+#### func (PlotData) ToJSON
+
+```go
+func (pd PlotData) ToJSON() (string, error)
+```
+ToJSON converts plot data to JSON string
+
+#### type PlotType
+
+```go
+type PlotType string
+```
+
+PlotType represents different types of plots that can be generated
+
+```go
+const (
+	// Training plots
+	TrainingCurves       PlotType = "training_curves"
+	LearningRateSchedule PlotType = "learning_rate_schedule"
+
+	// Evaluation plots
+	ROCCurve            PlotType = "roc_curve"
+	PrecisionRecall     PlotType = "precision_recall"
+	ConfusionMatrixPlot PlotType = "confusion_matrix"
+
+	// Model analysis plots
+	ParameterDistribution PlotType = "parameter_distribution"
+	GradientHistogram     PlotType = "gradient_histogram"
+	ActivationPattern     PlotType = "activation_pattern"
+
+	// Regression plots
+	RegressionScatter PlotType = "regression_scatter"
+	ResidualPlot      PlotType = "residual_plot"
+)
+```
+
+#### type PlottingResponse
+
+```go
+type PlottingResponse struct {
+	Success      bool   `json:"success"`
+	Message      string `json:"message"`
+	PlotURL      string `json:"plot_url,omitempty"`
+	ViewURL      string `json:"view_url,omitempty"`
+	PlotID       string `json:"plot_id,omitempty"`
+	BatchID      string `json:"batch_id,omitempty"`
+	DashboardURL string `json:"dashboard_url,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+}
+```
+
+PlottingResponse represents the response from the plotting service
+
+#### type PlottingService
+
+```go
+type PlottingService struct {
+}
+```
+
+PlottingService handles communication with the sidecar plotting application
+
+#### func  NewPlottingService
+
+```go
+func NewPlottingService(config PlottingServiceConfig) *PlottingService
+```
+NewPlottingService creates a new plotting service client
+
+#### func (*PlottingService) BatchSendPlots
+
+```go
+func (ps *PlottingService) BatchSendPlots(plotDataList []PlotData) (*BatchPlottingResponse, error)
+```
+BatchSendPlots sends multiple plots in a single request
+
+#### func (*PlottingService) CheckHealth
+
+```go
+func (ps *PlottingService) CheckHealth() error
+```
+CheckHealth checks if the plotting service is available
+
+#### func (*PlottingService) Disable
+
+```go
+func (ps *PlottingService) Disable()
+```
+Disable disables the plotting service
+
+#### func (*PlottingService) Enable
+
+```go
+func (ps *PlottingService) Enable()
+```
+Enable enables the plotting service
+
+#### func (*PlottingService) GenerateAndSendAllPlots
+
+```go
+func (ps *PlottingService) GenerateAndSendAllPlots(collector *VisualizationCollector) map[PlotType]*PlottingResponse
+```
+GenerateAndSendAllPlots generates all available plots and sends them to the
+sidecar service
+
+#### func (*PlottingService) GenerateAndSendAllPlotsWithBrowser
+
+```go
+func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *VisualizationCollector) map[PlotType]*PlottingResponse
+```
+GenerateAndSendAllPlotsWithBrowser generates all plots using batch endpoint and
+opens dashboard
+
+#### func (*PlottingService) GenerateAndSendPlot
+
+```go
+func (ps *PlottingService) GenerateAndSendPlot(collector *VisualizationCollector, plotType PlotType) (*PlottingResponse, error)
+```
+GenerateAndSendPlot generates a plot and sends it to the sidecar service
+
+#### func (*PlottingService) IsEnabled
+
+```go
+func (ps *PlottingService) IsEnabled() bool
+```
+IsEnabled returns whether the plotting service is enabled
+
+#### func (*PlottingService) OpenInBrowser
+
+```go
+func (ps *PlottingService) OpenInBrowser(url string) error
+```
+OpenInBrowser opens the given URL in the default web browser It automatically
+detects the operating system and uses the appropriate command
+
+#### func (*PlottingService) SendPlotData
+
+```go
+func (ps *PlottingService) SendPlotData(plotData PlotData) (*PlottingResponse, error)
+```
+SendPlotData sends plot data to the sidecar plotting service
+
+#### func (*PlottingService) SendPlotDataAndOpen
+
+```go
+func (ps *PlottingService) SendPlotDataAndOpen(plotData PlotData) (*PlottingResponse, error)
+```
+SendPlotDataAndOpen sends plot data and automatically opens the result in
+browser
+
+#### func (*PlottingService) SendPlotDataWithRetry
+
+```go
+func (ps *PlottingService) SendPlotDataWithRetry(plotData PlotData, config PlottingServiceConfig) (*PlottingResponse, error)
+```
+SendPlotDataWithRetry sends plot data with retry logic
+
+#### type PlottingServiceConfig
+
+```go
+type PlottingServiceConfig struct {
+	BaseURL       string        `json:"base_url"`
+	Timeout       time.Duration `json:"timeout"`
+	RetryAttempts int           `json:"retry_attempts"`
+	RetryDelay    time.Duration `json:"retry_delay"`
+}
+```
+
+PlottingServiceConfig contains configuration for the plotting service
+
+#### func  DefaultPlottingServiceConfig
+
+```go
+func DefaultPlottingServiceConfig() PlottingServiceConfig
+```
+DefaultPlottingServiceConfig returns default configuration for the plotting
+service
+
 #### type ProblemType
 
 ```go
@@ -1289,6 +1794,18 @@ type ROCPoint struct {
 
 ROCPoint represents a point on the ROC curve
 
+#### type ROCPointViz
+
+```go
+type ROCPointViz struct {
+	FPR       float64 `json:"fpr"`
+	TPR       float64 `json:"tpr"`
+	Threshold float64 `json:"threshold"`
+}
+```
+
+ROCPointViz represents a point on the ROC curve for visualization
+
 #### type ReduceLROnPlateauScheduler
 
 ```go
@@ -1355,6 +1872,90 @@ func CalculateRegressionMetrics(
 ```
 CalculateRegressionMetrics computes comprehensive regression metrics
 GPU-resident architecture: operates on GPU tensor data, returns CPU scalars
+
+#### type SeriesData
+
+```go
+type SeriesData struct {
+	Name  string                 `json:"name"`
+	Type  string                 `json:"type"` // "line", "scatter", "histogram", "heatmap", "bar"
+	Data  []DataPoint            `json:"data"`
+	Style map[string]interface{} `json:"style,omitempty"`
+}
+```
+
+SeriesData represents a single data series in a plot
+
+#### type SidecarConfig
+
+```go
+type SidecarConfig struct {
+	Port       int    `json:"port"`
+	AutoStart  bool   `json:"auto_start"`
+	DockerMode bool   `json:"docker_mode"`
+	SidecarDir string `json:"sidecar_dir"`
+}
+```
+
+SidecarConfig contains configuration for the sidecar service
+
+#### func  DefaultSidecarConfig
+
+```go
+func DefaultSidecarConfig() SidecarConfig
+```
+DefaultSidecarConfig returns default configuration for the sidecar
+
+#### type SidecarManager
+
+```go
+type SidecarManager struct {
+}
+```
+
+SidecarManager handles automatic sidecar service management
+
+#### func  NewSidecarManager
+
+```go
+func NewSidecarManager(config SidecarConfig) (*SidecarManager, error)
+```
+NewSidecarManager creates a new sidecar manager
+
+#### func (*SidecarManager) EnsureRunning
+
+```go
+func (sm *SidecarManager) EnsureRunning() error
+```
+EnsureRunning ensures the sidecar service is running
+
+#### func (*SidecarManager) GetBaseURL
+
+```go
+func (sm *SidecarManager) GetBaseURL() string
+```
+GetBaseURL returns the base URL for the sidecar service
+
+#### func (*SidecarManager) IsRunning
+
+```go
+func (sm *SidecarManager) IsRunning() bool
+```
+IsRunning checks if the sidecar service is running
+
+#### func (*SidecarManager) Start
+
+```go
+func (sm *SidecarManager) Start() error
+```
+Start starts the sidecar service
+
+#### func (*SidecarManager) Stop
+
+```go
+func (sm *SidecarManager) Stop() error
+```
+Stop stops the sidecar service
 
 #### type SimpleTrainer
 
@@ -1712,3 +2313,166 @@ type TrainingStats struct {
 ```
 
 TrainingStats provides training statistics
+
+#### type VisualizationCollector
+
+```go
+type VisualizationCollector struct {
+}
+```
+
+VisualizationCollector handles data collection for plotting
+
+#### func  NewVisualizationCollector
+
+```go
+func NewVisualizationCollector(modelName string) *VisualizationCollector
+```
+NewVisualizationCollector creates a new visualization collector
+
+#### func (*VisualizationCollector) Clear
+
+```go
+func (vc *VisualizationCollector) Clear()
+```
+Clear resets all collected data
+
+#### func (*VisualizationCollector) Disable
+
+```go
+func (vc *VisualizationCollector) Disable()
+```
+Disable disables visualization data collection
+
+#### func (*VisualizationCollector) Enable
+
+```go
+func (vc *VisualizationCollector) Enable()
+```
+Enable enables visualization data collection
+
+#### func (*VisualizationCollector) GenerateConfusionMatrixPlot
+
+```go
+func (vc *VisualizationCollector) GenerateConfusionMatrixPlot() PlotData
+```
+GenerateConfusionMatrixPlot generates confusion matrix plot data
+
+#### func (*VisualizationCollector) GenerateLearningRateSchedulePlot
+
+```go
+func (vc *VisualizationCollector) GenerateLearningRateSchedulePlot() PlotData
+```
+GenerateLearningRateSchedulePlot generates learning rate schedule plot data
+
+#### func (*VisualizationCollector) GeneratePrecisionRecallPlot
+
+```go
+func (vc *VisualizationCollector) GeneratePrecisionRecallPlot() PlotData
+```
+GeneratePrecisionRecallPlot generates Precision-Recall curve plot data
+
+#### func (*VisualizationCollector) GenerateROCCurvePlot
+
+```go
+func (vc *VisualizationCollector) GenerateROCCurvePlot() PlotData
+```
+GenerateROCCurvePlot generates ROC curve plot data
+
+#### func (*VisualizationCollector) GenerateRegressionScatterPlot
+
+```go
+func (vc *VisualizationCollector) GenerateRegressionScatterPlot() PlotData
+```
+GenerateRegressionScatterPlot generates regression scatter plot data
+
+#### func (*VisualizationCollector) GenerateResidualPlot
+
+```go
+func (vc *VisualizationCollector) GenerateResidualPlot() PlotData
+```
+GenerateResidualPlot generates residual plot data
+
+#### func (*VisualizationCollector) GenerateTrainingCurvesPlot
+
+```go
+func (vc *VisualizationCollector) GenerateTrainingCurvesPlot() PlotData
+```
+GenerateTrainingCurvesPlot generates training curves plot data
+
+#### func (*VisualizationCollector) IsEnabled
+
+```go
+func (vc *VisualizationCollector) IsEnabled() bool
+```
+IsEnabled returns whether visualization is enabled
+
+#### func (*VisualizationCollector) RecordActivationStats
+
+```go
+func (vc *VisualizationCollector) RecordActivationStats(layerName, activationType string, stats ActivationStats)
+```
+RecordActivationStats records activation pattern statistics
+
+#### func (*VisualizationCollector) RecordConfusionMatrix
+
+```go
+func (vc *VisualizationCollector) RecordConfusionMatrix(matrix [][]int, classNames []string)
+```
+RecordConfusionMatrix records confusion matrix data
+
+#### func (*VisualizationCollector) RecordEpoch
+
+```go
+func (vc *VisualizationCollector) RecordEpoch(epoch int, trainLoss, trainAcc, valLoss, valAcc float64)
+```
+RecordEpoch records epoch-level metrics
+
+#### func (*VisualizationCollector) RecordGradientStats
+
+```go
+func (vc *VisualizationCollector) RecordGradientStats(layerName, paramType string, stats GradientStats)
+```
+RecordGradientStats records gradient statistics
+
+#### func (*VisualizationCollector) RecordPRData
+
+```go
+func (vc *VisualizationCollector) RecordPRData(prPoints []PRPoint)
+```
+RecordPRData records Precision-Recall curve data points
+
+#### func (*VisualizationCollector) RecordParameterStats
+
+```go
+func (vc *VisualizationCollector) RecordParameterStats(layerName, paramType string, stats ParameterStats)
+```
+RecordParameterStats records parameter distribution statistics
+
+#### func (*VisualizationCollector) RecordROCData
+
+```go
+func (vc *VisualizationCollector) RecordROCData(rocPoints []ROCPointViz)
+```
+RecordROCData records ROC curve data points
+
+#### func (*VisualizationCollector) RecordRegressionData
+
+```go
+func (vc *VisualizationCollector) RecordRegressionData(predictions, trueValues []float64)
+```
+RecordRegressionData records regression predictions and true values
+
+#### func (*VisualizationCollector) RecordTrainingStep
+
+```go
+func (vc *VisualizationCollector) RecordTrainingStep(step int, loss, accuracy, learningRate float64)
+```
+RecordTrainingStep records training metrics for a single step
+
+#### func (*VisualizationCollector) RecordValidationStep
+
+```go
+func (vc *VisualizationCollector) RecordValidationStep(step int, loss, accuracy float64)
+```
+RecordValidationStep records validation metrics for a single step

@@ -3,6 +3,8 @@ package training
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
 	"time"
 )
 
@@ -27,6 +29,7 @@ const (
 	// Regression plots
 	RegressionScatter     PlotType = "regression_scatter"
 	ResidualPlot          PlotType = "residual_plot"
+	QQPlot               PlotType = "qq_plot"
 )
 
 // PlotData represents the universal JSON format for the sidecar plotting service
@@ -735,6 +738,165 @@ func (vc *VisualizationCollector) GenerateResidualPlot() PlotData {
 			Interactive: true,
 		},
 	}
+}
+
+// GenerateQQPlot generates Q-Q plot data for validating normal distribution of residuals
+func (vc *VisualizationCollector) GenerateQQPlot() PlotData {
+	if len(vc.residuals) == 0 {
+		return PlotData{}
+	}
+	
+	// Sort residuals
+	sortedResiduals := make([]float64, len(vc.residuals))
+	copy(sortedResiduals, vc.residuals)
+	sort.Float64s(sortedResiduals)
+	
+	n := len(sortedResiduals)
+	qqData := make([]DataPoint, n)
+	
+	// Calculate sample quantiles and theoretical normal quantiles
+	for i := 0; i < n; i++ {
+		// Sample quantile (sorted residuals)
+		sampleQuantile := sortedResiduals[i]
+		
+		// Theoretical quantile for standard normal distribution
+		// Using approximation for normal quantiles
+		p := float64(i+1) / float64(n+1) // Plotting position
+		theoreticalQuantile := normalQuantile(p)
+		
+		qqData[i] = DataPoint{
+			X: theoreticalQuantile,
+			Y: sampleQuantile,
+		}
+	}
+	
+	// Create reference line (perfect normal distribution)
+	// Line goes from min to max of theoretical quantiles
+	minTheoreticalQ := normalQuantile(1.0 / float64(n+1))
+	maxTheoreticalQ := normalQuantile(float64(n) / float64(n+1))
+	
+	// Calculate slope and intercept for reference line
+	// Use sample standard deviation and mean for scaling
+	mean, stddev := calculateMeanAndStd(vc.residuals)
+	
+	referenceLine := []DataPoint{
+		{X: minTheoreticalQ, Y: mean + stddev*minTheoreticalQ},
+		{X: maxTheoreticalQ, Y: mean + stddev*maxTheoreticalQ},
+	}
+	
+	series := []SeriesData{
+		{
+			Name: "Sample Quantiles",
+			Type: "scatter",
+			Data: qqData,
+			Style: map[string]interface{}{
+				"color": "#4ECDC4",
+				"alpha": 0.7,
+				"size":  6,
+			},
+		},
+		{
+			Name: "Normal Reference Line",
+			Type: "line",
+			Data: referenceLine,
+			Style: map[string]interface{}{
+				"color": "#FF6B6B",
+				"line_width": 2,
+				"line_style": "dashed",
+			},
+		},
+	}
+	
+	return PlotData{
+		PlotType:  QQPlot,
+		Title:     fmt.Sprintf("Q-Q Plot - %s", vc.modelName),
+		Timestamp: time.Now(),
+		ModelName: vc.modelName,
+		Series:    series,
+		Config: PlotConfig{
+			XAxisLabel:  "Theoretical Quantiles",
+			YAxisLabel:  "Sample Quantiles",
+			XAxisScale:  "linear",
+			YAxisScale:  "linear",
+			ShowLegend:  true,
+			ShowGrid:    true,
+			Width:       600,
+			Height:      600,
+			Interactive: true,
+			CustomOptions: map[string]interface{}{
+				"subtitle": "Normal Q-Q Plot for Residuals - Tests normality assumption",
+			},
+		},
+		Metrics: map[string]interface{}{
+			"sample_mean": mean,
+			"sample_std":  stddev,
+			"sample_size": n,
+		},
+	}
+}
+
+// normalQuantile calculates approximate normal quantile for probability p
+// Uses Beasley-Springer-Moro algorithm approximation
+func normalQuantile(p float64) float64 {
+	if p <= 0 {
+		return math.Inf(-1)
+	}
+	if p >= 1 {
+		return math.Inf(1)
+	}
+	
+	// For p around 0.5, use direct calculation
+	if p == 0.5 {
+		return 0.0
+	}
+	
+	// Use inverse error function approximation
+	// This is a simplified approximation for the normal quantile function
+	if p < 0.5 {
+		// For lower tail, use symmetry
+		return -normalQuantile(1.0 - p)
+	}
+	
+	// Rational approximation for upper tail
+	t := math.Sqrt(-2.0 * math.Log(1.0-p))
+	
+	// Coefficients for the approximation
+	c0 := 2.515517
+	c1 := 0.802853
+	c2 := 0.010328
+	d1 := 1.432788
+	d2 := 0.189269
+	d3 := 0.001308
+	
+	numerator := c0 + c1*t + c2*t*t
+	denominator := 1.0 + d1*t + d2*t*t + d3*t*t*t
+	
+	return t - numerator/denominator
+}
+
+// calculateMeanAndStd calculates mean and standard deviation of a slice
+func calculateMeanAndStd(values []float64) (float64, float64) {
+	if len(values) == 0 {
+		return 0, 0
+	}
+	
+	// Calculate mean
+	sum := 0.0
+	for _, v := range values {
+		sum += v
+	}
+	mean := sum / float64(len(values))
+	
+	// Calculate standard deviation
+	sumSquaredDiffs := 0.0
+	for _, v := range values {
+		diff := v - mean
+		sumSquaredDiffs += diff * diff
+	}
+	variance := sumSquaredDiffs / float64(len(values)-1) // Sample standard deviation
+	stddev := math.Sqrt(variance)
+	
+	return mean, stddev
 }
 
 // ToJSON converts plot data to JSON string

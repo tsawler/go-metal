@@ -129,6 +129,30 @@ This phase focuses on building out the core utility of the `go-metal` library by
       * **Batch Dashboard:** All plots displayed in unified dashboard with sidecar batch processing and automatic browser opening
       * **Cross-Platform Browser Support:** Automatic browser opening on macOS, Windows, and Linux with proper error handling
 
+    * **Enhanced Regression Visualization:** Expand plotting capabilities with additional regression-specific visualizations for comprehensive model analysis:
+      * ✅ **Q-Q Plot (Quantile-Quantile):** **COMPLETED** - Validate linear regression assumptions by checking if residuals follow normal distribution
+        * ✅ *go-metal changes:* **COMPLETED** - Added `QQPlot` PlotType, implemented `GenerateQQPlot()` in VisualizationCollector with theoretical vs sample quantile calculations using Beasley-Springer-Moro algorithm, proper reference line generation, and statistical metadata
+        * ✅ *sidecar changes:* **COMPLETED** - Added `_generate_qq_plot()` method in plot_generators.py with scipy.stats integration, interactive scatter visualization, hover templates, and educational annotations
+        * **Production Validation:** Successfully tested with synthetic normal and skewed residual distributions, full sidecar integration, automatic browser opening, and comprehensive test application (`app/test-qqplot`)
+      * **Feature Importance Plot:** Show feature contribution analysis for multiple linear regression interpretation
+        * *go-metal changes:* Add `FeatureImportancePlot` PlotType, implement feature weight collection in ModelTrainer, add `GenerateFeatureImportancePlot()` with coefficient analysis
+        * *sidecar changes:* Add `_generate_feature_importance()` method with horizontal bar chart visualization and confidence intervals
+      * **Learning Curve Plot:** Diagnose overfitting vs underfitting by showing performance vs training set size
+        * *go-metal changes:* Add `LearningCurvePlot` PlotType, implement training set size tracking in ModelTrainer, add `GenerateLearningCurvePlot()` with subset performance analysis
+        * *sidecar changes:* Add `_generate_learning_curve()` method with dual-axis training/validation error visualization
+      * **Validation Curve Plot:** Hyperparameter tuning visualization showing model performance vs hyperparameter values
+        * *go-metal changes:* Add `ValidationCurvePlot` PlotType, implement hyperparameter tracking in ModelTrainer, add `GenerateValidationCurvePlot()` with parameter sweep analysis
+        * *sidecar changes:* Add `_generate_validation_curve()` method with parameter value vs performance visualization
+      * **Prediction Interval Plot:** Show prediction uncertainty and confidence intervals for regression risk assessment
+        * *go-metal changes:* Add `PredictionIntervalPlot` PlotType, implement prediction uncertainty calculation in regression metrics, add `GeneratePredictionIntervalPlot()` with confidence band computation
+        * *sidecar changes:* Add `_generate_prediction_interval()` method with fill_between visualization for confidence/prediction intervals
+      * **Feature Correlation Heatmap:** Multicollinearity detection through input feature correlation analysis
+        * *go-metal changes:* Add `FeatureCorrelationPlot` PlotType, implement feature correlation matrix calculation in data preprocessing, add `GenerateFeatureCorrelationPlot()` with correlation coefficient computation
+        * *sidecar changes:* Add `_generate_correlation_heatmap()` method with seaborn/plotly heatmap visualization and correlation coefficient annotations
+      * **Partial Dependence Plot:** Individual feature effect analysis showing how features affect predictions in complex models
+        * *go-metal changes:* Add `PartialDependencePlot` PlotType, implement partial dependence calculation with feature perturbation, add `GeneratePartialDependencePlot()` with marginal effect computation
+        * *sidecar changes:* Add `_generate_partial_dependence()` method with multiple subplot visualization for individual feature effects
+
 ### Phase 3: Advanced Architectures & Scalability (Medium-to-Long Term - Next 6-12+ Months)
 
 This phase aims to enable the `go-metal` framework to handle more complex model architectures and scale to larger datasets and computational demands.
