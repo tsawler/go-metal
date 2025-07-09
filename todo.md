@@ -89,10 +89,10 @@ This phase focuses on building out the core utility of the `go-metal` library by
 
     * ✅ **Common Loss Functions:** ~~Implement a broader range of loss functions, including Mean Squared Error (MSE), Binary Cross-Entropy with Logits (BCEWithLogitsLoss), Categorical Cross-Entropy, and Huber Loss.~~ **COMPLETED** - Full regression and classification loss function support implemented:
       * **Regression:** MSE, MAE, and Huber loss with MPSGraph implementations
-      * **Classification:** CrossEntropy and SparseCrossEntropy with proper softmax handling
+      * **Classification:** CrossEntropy and SparseCrossEntropy both fully implemented and working with proper softmax handling
       * **Generic Label Interface:** Zero-cost abstraction supporting both int32 (classification) and float32 (regression) labels
       * **Unified Training API:** TrainBatchUnified method handles both problem types with automatic loss function selection
-      * **Validated:** Successfully demonstrated with simple-regression (MSE) and cats-dogs (CrossEntropy) applications
+      * **Validated:** Successfully demonstrated with simple-regression (MSE), cats-dogs (CrossEntropy), and SparseCrossEntropy testing
 
     * ✅ **Regression Support:** ~~Add comprehensive regression capabilities with appropriate loss functions and accuracy metrics.~~ **COMPLETED** - Full regression training support with proper accuracy calculation:
       * **Accuracy Metric:** 1 - NMAE (Normalized Mean Absolute Error) for regression tasks

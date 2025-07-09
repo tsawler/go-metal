@@ -182,10 +182,51 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                                   name:@"cross_entropy_loss"];
                         break;
                     case 1: // SparseCrossEntropy
-                        // For sparse cross-entropy, labels are class indices, not one-hot
-                        // This would require different label handling - implement if needed
-                        NSLog(@"❌ SparseCrossEntropy not yet implemented");
-                        return NO;
+                        {
+                            // For sparse cross-entropy, labels are class indices (e.g., [0, 1, 2])
+                            // Use MPSGraph's built-in sparse cross-entropy functionality
+                            
+                            // Apply softmax to get probabilities
+                            MPSGraphTensor* probabilities = [engine->graph softMaxWithTensor:currentTensor
+                                                                                        axis:-1
+                                                                                        name:@"softmax_probs"];
+                            
+                            // Apply log to get log probabilities for numerical stability
+                            MPSGraphTensor* logProbs = [engine->graph logarithmWithTensor:probabilities
+                                                                                     name:@"log_probs"];
+                            
+                            // Convert labels to int32 indices if needed
+                            MPSGraphTensor* labelIndices = [engine->graph castTensor:labelTensor
+                                                                              toType:MPSDataTypeInt32
+                                                                                name:@"label_indices_int32"];
+                            
+                            // Use MPSGraph's gatherAlongAxis to select the correct log probabilities
+                            // This is the correct way to implement sparse cross-entropy in MPSGraph
+                            MPSGraphTensor* selectedLogProbs = [engine->graph gatherAlongAxis:1
+                                                                              withUpdatesTensor:logProbs
+                                                                                 indicesTensor:labelIndices
+                                                                                          name:@"selected_log_probs"];
+                            
+                            // Compute negative log likelihood: -selected_log_probs
+                            MPSGraphTensor* negLogLikelihood = [engine->graph negativeWithTensor:selectedLogProbs
+                                                                                           name:@"neg_log_likelihood"];
+                            
+                            // Mean over batch
+                            MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:negLogLikelihood
+                                                                                       axes:nil
+                                                                                       name:@"sparse_ce_sum"];
+                            
+                            // Get batch size from tensor shape
+                            NSArray<NSNumber*>* labelShape = labelTensor.shape;
+                            int batchSize = [labelShape[0] intValue];
+                            MPSGraphTensor* batchSizeTensor = [engine->graph constantWithScalar:(float)batchSize
+                                                                                      dataType:MPSDataTypeFloat32];
+                            
+                            actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
+                                                                  secondaryTensor:batchSizeTensor
+                                                                             name:@"sparse_cross_entropy_loss"];
+                        }
+                        break;
                     default:
                         NSLog(@"❌ Unsupported classification loss function: %d", engine->config.loss_function);
                         return NO;
