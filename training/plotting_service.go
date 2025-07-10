@@ -239,6 +239,8 @@ func (ps *PlottingService) GenerateAndSendPlot(collector *VisualizationCollector
 		plotData = collector.GenerateFeatureImportancePlot()
 	case LearningCurvePlot:
 		plotData = collector.GenerateLearningCurvePlot()
+	case ValidationCurvePlot:
+		plotData = collector.GenerateValidationCurvePlot()
 	default:
 		return nil, fmt.Errorf("unsupported plot type: %s", plotType)
 	}
@@ -274,6 +276,7 @@ func (ps *PlottingService) GenerateAndSendAllPlots(collector *VisualizationColle
 		QQPlot,
 		FeatureImportancePlot,
 		LearningCurvePlot,
+		ValidationCurvePlot,
 	}
 	
 	// Generate and send each plot type
@@ -433,6 +436,7 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 		QQPlot,
 		FeatureImportancePlot,
 		LearningCurvePlot,
+		ValidationCurvePlot,
 	}
 	
 	var plotDataList []PlotData
@@ -463,6 +467,8 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 			plotData = collector.GenerateFeatureImportancePlot()
 		case LearningCurvePlot:
 			plotData = collector.GenerateLearningCurvePlot()
+		case ValidationCurvePlot:
+			plotData = collector.GenerateValidationCurvePlot()
 		default:
 			results[plotType] = &PlottingResponse{
 				Success: false,

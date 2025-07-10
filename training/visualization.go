@@ -32,6 +32,7 @@ const (
 	QQPlot               PlotType = "qq_plot"
 	FeatureImportancePlot PlotType = "feature_importance"
 	LearningCurvePlot     PlotType = "learning_curve"
+	ValidationCurvePlot   PlotType = "validation_curve"
 )
 
 // PlotData represents the universal JSON format for the sidecar plotting service
@@ -118,6 +119,14 @@ type VisualizationCollector struct {
 	validationScores  []float64
 	trainingStdErrors []float64
 	validationStdErrors []float64
+	
+	// Validation curve data
+	parameterName         string
+	parameterValues       []float64
+	validationCurveTraining   []float64
+	validationCurveValidation []float64
+	validationCurveTrainingStd []float64
+	validationCurveValidationStd []float64
 	
 	// Model analysis data
 	parameterStats   map[string]ParameterStats
@@ -309,6 +318,20 @@ func (vc *VisualizationCollector) RecordLearningCurve(trainingSizes []int, train
 	vc.validationScores = validationScores
 	vc.trainingStdErrors = trainingStdErrors
 	vc.validationStdErrors = validationStdErrors
+}
+
+// RecordValidationCurve records validation curve data showing performance vs hyperparameter values
+func (vc *VisualizationCollector) RecordValidationCurve(parameterName string, parameterValues []float64, trainingScores, validationScores []float64, trainingStdErrors, validationStdErrors []float64) {
+	if !vc.enabled {
+		return
+	}
+	
+	vc.parameterName = parameterName
+	vc.parameterValues = parameterValues
+	vc.validationCurveTraining = trainingScores
+	vc.validationCurveValidation = validationScores
+	vc.validationCurveTrainingStd = trainingStdErrors
+	vc.validationCurveValidationStd = validationStdErrors
 }
 
 // RecordParameterStats records parameter distribution statistics
@@ -1159,6 +1182,186 @@ func (vc *VisualizationCollector) GenerateLearningCurvePlot() PlotData {
 			"training_val_gap":       gap,
 			"num_training_sizes":     n,
 			"diagnosis":             diagnosis,
+		},
+	}
+}
+
+// GenerateValidationCurvePlot generates validation curve plot data showing performance vs hyperparameter values
+func (vc *VisualizationCollector) GenerateValidationCurvePlot() PlotData {
+	// Create descriptive title using model name if available
+	title := "Validation Curve Analysis"
+	if vc.modelName != "" && vc.modelName != "Model" {
+		title = vc.modelName + " - Validation Curve"
+	}
+	
+	if len(vc.parameterValues) == 0 || len(vc.validationCurveTraining) == 0 {
+		return PlotData{
+			PlotType:  ValidationCurvePlot,
+			Title:     title,
+			Timestamp: time.Now(),
+			ModelName: vc.modelName,
+			Series:    []SeriesData{},
+		}
+	}
+	
+	n := len(vc.parameterValues)
+	
+	// Helper function to reverse slice for error band plotting
+	reverse := func(data []DataPoint) []DataPoint {
+		reversed := make([]DataPoint, len(data))
+		for i, point := range data {
+			reversed[len(data)-1-i] = point
+		}
+		return reversed
+	}
+	
+	// Create training score series
+	trainingSeries := SeriesData{
+		Name: "Training Score",
+		Type: "line",
+		Data: make([]DataPoint, n),
+		Style: map[string]interface{}{
+			"color": "#2ECC71",
+			"width": 2,
+		},
+	}
+	
+	for i := 0; i < n; i++ {
+		trainingSeries.Data[i] = DataPoint{
+			X: vc.parameterValues[i],
+			Y: vc.validationCurveTraining[i],
+		}
+	}
+	
+	// Create validation score series
+	validationSeries := SeriesData{
+		Name: "Validation Score",
+		Type: "line",
+		Data: make([]DataPoint, n),
+		Style: map[string]interface{}{
+			"color": "#E74C3C",
+			"width": 2,
+		},
+	}
+	
+	for i := 0; i < n; i++ {
+		validationSeries.Data[i] = DataPoint{
+			X: vc.parameterValues[i],
+			Y: vc.validationCurveValidation[i],
+		}
+	}
+	
+	series := []SeriesData{trainingSeries, validationSeries}
+	
+	// Add error bands if standard errors are available
+	if len(vc.validationCurveTrainingStd) == n && len(vc.validationCurveValidationStd) == n {
+		// Training error band
+		trainingUpperBand := make([]DataPoint, n)
+		trainingLowerBand := make([]DataPoint, n)
+		
+		for i := 0; i < n; i++ {
+			upper := vc.validationCurveTraining[i] + vc.validationCurveTrainingStd[i]
+			lower := vc.validationCurveTraining[i] - vc.validationCurveTrainingStd[i]
+			
+			trainingUpperBand[i] = DataPoint{X: vc.parameterValues[i], Y: upper}
+			trainingLowerBand[i] = DataPoint{X: vc.parameterValues[i], Y: lower}
+		}
+		
+		series = append(series, SeriesData{
+			Name: "Training Error Band",
+			Type: "fill",
+			Data: append(trainingUpperBand, reverse(trainingLowerBand)...),
+			Style: map[string]interface{}{
+				"color": "#2ECC71",
+				"alpha": 0.2,
+				"fill":  "tonexty",
+			},
+		})
+		
+		// Validation error band
+		validationUpperBand := make([]DataPoint, n)
+		validationLowerBand := make([]DataPoint, n)
+		
+		for i := 0; i < n; i++ {
+			upper := vc.validationCurveValidation[i] + vc.validationCurveValidationStd[i]
+			lower := vc.validationCurveValidation[i] - vc.validationCurveValidationStd[i]
+			
+			validationUpperBand[i] = DataPoint{X: vc.parameterValues[i], Y: upper}
+			validationLowerBand[i] = DataPoint{X: vc.parameterValues[i], Y: lower}
+		}
+		
+		series = append(series, SeriesData{
+			Name: "Validation Error Band",
+			Type: "fill",
+			Data: append(validationUpperBand, reverse(validationLowerBand)...),
+			Style: map[string]interface{}{
+				"color": "#E74C3C",
+				"alpha": 0.2,
+				"fill":  "tonexty",
+			},
+		})
+	}
+	
+	// Find optimal parameter value (highest validation score)
+	optimalIndex := 0
+	maxValidationScore := vc.validationCurveValidation[0]
+	for i := 1; i < n; i++ {
+		if vc.validationCurveValidation[i] > maxValidationScore {
+			maxValidationScore = vc.validationCurveValidation[i]
+			optimalIndex = i
+		}
+	}
+	
+	optimalValue := vc.parameterValues[optimalIndex]
+	
+	// Calculate analysis metrics
+	finalTrainingScore := vc.validationCurveTraining[n-1]
+	finalValidationScore := vc.validationCurveValidation[n-1]
+	gap := math.Abs(finalTrainingScore - finalValidationScore)
+	
+	// Determine validation curve characteristics
+	var diagnosis string
+	if maxValidationScore == vc.validationCurveValidation[0] || maxValidationScore == vc.validationCurveValidation[n-1] {
+		diagnosis = "Optimal value at boundary - consider expanding search range"
+	} else if gap > 0.1 {
+		diagnosis = "Large training-validation gap - possible overfitting"
+	} else if maxValidationScore < 0.7 {
+		diagnosis = "Low performance - consider different hyperparameter ranges"
+	} else {
+		diagnosis = "Good hyperparameter range found"
+	}
+	
+	return PlotData{
+		PlotType:  ValidationCurvePlot,
+		Title:     title,
+		Timestamp: time.Now(),
+		ModelName: vc.modelName,
+		Series:    series,
+		Config: PlotConfig{
+			XAxisLabel:  vc.parameterName,
+			YAxisLabel:  "Score",
+			XAxisScale:  "linear",
+			YAxisScale:  "linear",
+			ShowLegend:  true,
+			ShowGrid:    true,
+			Width:       800,
+			Height:      600,
+			Interactive: true,
+			CustomOptions: map[string]interface{}{
+				"subtitle": fmt.Sprintf("Performance vs %s - Hyperparameter tuning", vc.parameterName),
+				"diagnosis": diagnosis,
+				"optimal_value": optimalValue,
+			},
+		},
+		Metrics: map[string]interface{}{
+			"parameter_name":        vc.parameterName,
+			"optimal_value":         optimalValue,
+			"optimal_validation_score": maxValidationScore,
+			"final_training_score":  finalTrainingScore,
+			"final_validation_score": finalValidationScore,
+			"training_val_gap":      gap,
+			"num_parameter_values":  n,
+			"diagnosis":            diagnosis,
 		},
 	}
 }
