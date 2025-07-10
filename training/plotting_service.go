@@ -243,6 +243,10 @@ func (ps *PlottingService) GenerateAndSendPlot(collector *VisualizationCollector
 		plotData = collector.GenerateValidationCurvePlot()
 	case PredictionIntervalPlot:
 		plotData = collector.GeneratePredictionIntervalPlot()
+	case FeatureCorrelationPlot:
+		plotData = collector.GenerateFeatureCorrelationPlot()
+	case PartialDependencePlot:
+		plotData = collector.GeneratePartialDependencePlot()
 	default:
 		return nil, fmt.Errorf("unsupported plot type: %s", plotType)
 	}
@@ -473,6 +477,10 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 			plotData = collector.GenerateValidationCurvePlot()
 		case PredictionIntervalPlot:
 			plotData = collector.GeneratePredictionIntervalPlot()
+		case FeatureCorrelationPlot:
+			plotData = collector.GenerateFeatureCorrelationPlot()
+		case PartialDependencePlot:
+			plotData = collector.GeneratePartialDependencePlot()
 		default:
 			results[plotType] = &PlottingResponse{
 				Success: false,

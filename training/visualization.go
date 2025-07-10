@@ -34,6 +34,8 @@ const (
 	LearningCurvePlot     PlotType = "learning_curve"
 	ValidationCurvePlot   PlotType = "validation_curve"
 	PredictionIntervalPlot PlotType = "prediction_interval"
+	FeatureCorrelationPlot PlotType = "feature_correlation"
+	PartialDependencePlot  PlotType = "partial_dependence"
 )
 
 // PlotData represents the universal JSON format for the sidecar plotting service
@@ -137,6 +139,15 @@ type VisualizationCollector struct {
 	predictionIntervalLower      []float64
 	predictionIntervalUpper      []float64
 	predictionStandardErrors     []float64
+	
+	// Feature correlation data
+	correlationMatrix    [][]float64
+	correlationFeatures  []string
+	
+	// Partial dependence data
+	partialDependenceFeatures []string
+	partialDependenceValues   [][]float64  // [feature_index][value_index]
+	partialDependenceEffects  [][]float64  // [feature_index][value_index]
 	
 	// Model analysis data
 	parameterStats   map[string]ParameterStats
@@ -357,6 +368,27 @@ func (vc *VisualizationCollector) RecordPredictionInterval(x, y []float64, confi
 	vc.predictionIntervalLower = predictionLower
 	vc.predictionIntervalUpper = predictionUpper
 	vc.predictionStandardErrors = standardErrors
+}
+
+// RecordFeatureCorrelation records feature correlation matrix for multicollinearity analysis
+func (vc *VisualizationCollector) RecordFeatureCorrelation(correlationMatrix [][]float64, featureNames []string) {
+	if !vc.enabled {
+		return
+	}
+	
+	vc.correlationMatrix = correlationMatrix
+	vc.correlationFeatures = featureNames
+}
+
+// RecordPartialDependence records partial dependence data for individual feature effect analysis
+func (vc *VisualizationCollector) RecordPartialDependence(featureNames []string, featureValues [][]float64, partialEffects [][]float64) {
+	if !vc.enabled {
+		return
+	}
+	
+	vc.partialDependenceFeatures = featureNames
+	vc.partialDependenceValues = featureValues
+	vc.partialDependenceEffects = partialEffects
 }
 
 // RecordParameterStats records parameter distribution statistics
@@ -1564,6 +1596,297 @@ func (vc *VisualizationCollector) GeneratePredictionIntervalPlot() PlotData {
 			"reliability":            reliability,
 		},
 	}
+}
+
+// GenerateFeatureCorrelationPlot generates feature correlation heatmap for multicollinearity analysis
+func (vc *VisualizationCollector) GenerateFeatureCorrelationPlot() PlotData {
+	// Create descriptive title using model name if available
+	title := "Feature Correlation Heatmap"
+	if vc.modelName != "" && vc.modelName != "Model" {
+		title = vc.modelName + " - Feature Correlation Analysis"
+	}
+	
+	if len(vc.correlationMatrix) == 0 || len(vc.correlationFeatures) == 0 {
+		return PlotData{
+			PlotType:  FeatureCorrelationPlot,
+			Title:     title,
+			Timestamp: time.Now(),
+			ModelName: vc.modelName,
+			Series:    []SeriesData{},
+		}
+	}
+	
+	n := len(vc.correlationFeatures)
+	
+	// Create heatmap data structure
+	// For heatmaps, we need a series with X, Y, and Z values where:
+	// X = feature index (column), Y = feature index (row), Z = correlation value
+	heatmapData := make([]DataPoint, n*n)
+	
+	idx := 0
+	for i := 0; i < n; i++ {
+		for j := 0; j < n; j++ {
+			heatmapData[idx] = DataPoint{
+				X:     float64(j), // Column index
+				Y:     float64(i), // Row index 
+				Z:     vc.correlationMatrix[i][j], // Correlation value
+				Label: fmt.Sprintf("%s vs %s: %.3f", vc.correlationFeatures[i], vc.correlationFeatures[j], vc.correlationMatrix[i][j]),
+			}
+			idx++
+		}
+	}
+	
+	series := []SeriesData{
+		{
+			Name: "Correlation Matrix",
+			Type: "heatmap",
+			Data: heatmapData,
+			Style: map[string]interface{}{
+				"colorscale": "RdBu_r", // Red-Blue reversed (red for positive, blue for negative)
+				"zmin":       -1.0,
+				"zmax":       1.0,
+				"showscale":  true,
+			},
+		},
+	}
+	
+	// Analyze correlation patterns for diagnostics
+	var strongCorrelations []string
+	var maxCorrelation, minCorrelation float64 = -1.0, 1.0
+	var highCorrelationCount int
+	
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ { // Only check upper triangle (avoid diagonal and duplicates)
+			corr := math.Abs(vc.correlationMatrix[i][j])
+			
+			if corr > maxCorrelation {
+				maxCorrelation = corr
+			}
+			if corr < minCorrelation {
+				minCorrelation = corr
+			}
+			
+			// Flag strong correlations (absolute value > 0.7)
+			if corr > 0.7 {
+				highCorrelationCount++
+				strongCorrelations = append(strongCorrelations, 
+					fmt.Sprintf("%s↔%s (%.3f)", vc.correlationFeatures[i], vc.correlationFeatures[j], vc.correlationMatrix[i][j]))
+			}
+		}
+	}
+	
+	// Determine multicollinearity assessment
+	var multicollinearityStatus string
+	if highCorrelationCount == 0 {
+		multicollinearityStatus = "Low multicollinearity risk"
+	} else if highCorrelationCount <= 2 {
+		multicollinearityStatus = "Moderate multicollinearity detected"
+	} else {
+		multicollinearityStatus = "High multicollinearity risk"
+	}
+	
+	// Create feature name arrays for axis labels
+	xLabels := make([]interface{}, n)
+	yLabels := make([]interface{}, n)
+	for i, name := range vc.correlationFeatures {
+		xLabels[i] = name
+		yLabels[i] = name
+	}
+	
+	return PlotData{
+		PlotType:  FeatureCorrelationPlot,
+		Title:     title,
+		Timestamp: time.Now(),
+		ModelName: vc.modelName,
+		Series:    series,
+		Config: PlotConfig{
+			XAxisLabel:  "Features",
+			YAxisLabel:  "Features", 
+			XAxisScale:  "linear",
+			YAxisScale:  "linear",
+			ShowLegend:  false,
+			ShowGrid:    false,
+			Width:       max(600, n*40),  // Scale with feature count
+			Height:      max(600, n*40),  // Square aspect ratio
+			Interactive: true,
+			CustomOptions: map[string]interface{}{
+				"subtitle": "Feature correlation analysis for multicollinearity detection",
+				"multicollinearity_status": multicollinearityStatus,
+				"high_correlation_count": highCorrelationCount,
+				"x_labels": xLabels,
+				"y_labels": yLabels,
+				"strong_correlations": strongCorrelations,
+			},
+		},
+		Metrics: map[string]interface{}{
+			"num_features":           n,
+			"max_correlation":        maxCorrelation,
+			"min_correlation":        minCorrelation,
+			"high_correlation_count": highCorrelationCount,
+			"multicollinearity_status": multicollinearityStatus,
+			"strong_correlations":    strongCorrelations,
+		},
+	}
+}
+
+// GeneratePartialDependencePlot generates partial dependence plots for individual feature effect analysis
+func (vc *VisualizationCollector) GeneratePartialDependencePlot() PlotData {
+	// Create descriptive title using model name if available
+	title := "Partial Dependence Plot"
+	if vc.modelName != "" && vc.modelName != "Model" {
+		title = vc.modelName + " - Feature Effect Analysis"
+	}
+	
+	if len(vc.partialDependenceFeatures) == 0 || len(vc.partialDependenceValues) == 0 || len(vc.partialDependenceEffects) == 0 {
+		return PlotData{
+			PlotType:  PartialDependencePlot,
+			Title:     title,
+			Timestamp: time.Now(),
+			ModelName: vc.modelName,
+			Series:    []SeriesData{},
+		}
+	}
+	
+	// Create a series for each feature
+	series := make([]SeriesData, len(vc.partialDependenceFeatures))
+	
+	var minEffect, maxEffect float64 = math.Inf(1), math.Inf(-1)
+	
+	for i, featureName := range vc.partialDependenceFeatures {
+		if i >= len(vc.partialDependenceValues) || i >= len(vc.partialDependenceEffects) {
+			continue
+		}
+		
+		featureValues := vc.partialDependenceValues[i]
+		partialEffects := vc.partialDependenceEffects[i]
+		
+		// Create data points for this feature
+		dataPoints := make([]DataPoint, len(featureValues))
+		for j, value := range featureValues {
+			if j < len(partialEffects) {
+				effect := partialEffects[j]
+				
+				// Track min/max for diagnostics
+				if effect < minEffect {
+					minEffect = effect
+				}
+				if effect > maxEffect {
+					maxEffect = effect
+				}
+				
+				dataPoints[j] = DataPoint{
+					X:     value,
+					Y:     effect,
+					Label: fmt.Sprintf("%s = %.3f → Effect: %.3f", featureName, value, effect),
+				}
+			}
+		}
+		
+		series[i] = SeriesData{
+			Name: featureName,
+			Type: "line",
+			Data: dataPoints,
+			Style: map[string]interface{}{
+				"mode": "lines+markers",
+				"line": map[string]interface{}{
+					"width": 2,
+				},
+			},
+		}
+	}
+	
+	// Calculate effect range for analysis
+	effectRange := maxEffect - minEffect
+	
+	// Determine feature importance analysis
+	var featureImportance []string
+	var mostInfluentialFeature string
+	var maxInfluence float64 = 0
+	
+	for i, featureName := range vc.partialDependenceFeatures {
+		if i >= len(vc.partialDependenceEffects) {
+			continue
+		}
+		
+		effects := vc.partialDependenceEffects[i]
+		if len(effects) == 0 {
+			continue
+		}
+		
+		// Calculate influence as range of partial effects
+		var minFeatureEffect, maxFeatureEffect float64 = math.Inf(1), math.Inf(-1)
+		for _, effect := range effects {
+			if effect < minFeatureEffect {
+				minFeatureEffect = effect
+			}
+			if effect > maxFeatureEffect {
+				maxFeatureEffect = effect
+			}
+		}
+		
+		influence := maxFeatureEffect - minFeatureEffect
+		if influence > maxInfluence {
+			maxInfluence = influence
+			mostInfluentialFeature = featureName
+		}
+		
+		featureImportance = append(featureImportance, 
+			fmt.Sprintf("%s (range: %.3f)", featureName, influence))
+	}
+	
+	// Determine analysis status
+	var analysisStatus string
+	if effectRange < 0.1 {
+		analysisStatus = "Low feature impact - all features have minimal effect"
+	} else if effectRange < 0.5 {
+		analysisStatus = "Moderate feature impact - some features show meaningful effects"
+	} else {
+		analysisStatus = "High feature impact - significant variation in feature effects"
+	}
+	
+	return PlotData{
+		PlotType:  PartialDependencePlot,
+		Title:     title,
+		Timestamp: time.Now(),
+		ModelName: vc.modelName,
+		Series:    series,
+		Config: PlotConfig{
+			XAxisLabel:  "Feature Value",
+			YAxisLabel:  "Partial Dependence",
+			XAxisScale:  "linear",
+			YAxisScale:  "linear",
+			ShowLegend:  true,
+			ShowGrid:    true,
+			Width:       800,
+			Height:      600,
+			Interactive: true,
+			CustomOptions: map[string]interface{}{
+				"subtitle": "Individual feature effects on model predictions",
+				"analysis_status": analysisStatus,
+				"most_influential_feature": mostInfluentialFeature,
+				"max_influence": maxInfluence,
+				"feature_importance": featureImportance,
+			},
+		},
+		Metrics: map[string]interface{}{
+			"num_features":                len(vc.partialDependenceFeatures),
+			"effect_range":               effectRange,
+			"min_effect":                 minEffect,
+			"max_effect":                 maxEffect,
+			"analysis_status":            analysisStatus,
+			"most_influential_feature":   mostInfluentialFeature,
+			"max_influence":              maxInfluence,
+			"feature_importance":         featureImportance,
+		},
+	}
+}
+
+// max returns the larger of two integers
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // reverse reverses a slice of DataPoint for fill_between functionality
