@@ -338,7 +338,7 @@ func (mte *ModelTrainingEngine) initializeModelParameters() error {
 				return fmt.Errorf("failed to initialize batchnorm layer %d parameters: %v", layerIndex, err)
 			}
 			
-		case layers.ReLU, layers.Softmax, layers.Dropout, layers.LeakyReLU:
+		case layers.ReLU, layers.Softmax, layers.Dropout, layers.LeakyReLU, layers.ELU:
 			// Activation layers and dropout have no parameters
 			continue
 			

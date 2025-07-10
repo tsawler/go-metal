@@ -18,6 +18,7 @@ const (
 	Dropout
 	BatchNorm
 	LeakyReLU
+	ELU
 )
 
 func (lt LayerType) String() string {
@@ -38,6 +39,8 @@ func (lt LayerType) String() string {
 		return "BatchNorm"
 	case LeakyReLU:
 		return "LeakyReLU"
+	case ELU:
+		return "ELU"
 	default:
 		return "Unknown"
 	}
@@ -143,6 +146,17 @@ func (lf *LayerFactory) CreateLeakyReLUSpec(negativeSlope float32, name string) 
 		Name: name,
 		Parameters: map[string]interface{}{
 			"negative_slope": negativeSlope,
+		},
+	}
+}
+
+// CreateELUSpec creates an ELU activation specification
+func (lf *LayerFactory) CreateELUSpec(alpha float32, name string) LayerSpec {
+	return LayerSpec{
+		Type: ELU,
+		Name: name,
+		Parameters: map[string]interface{}{
+			"alpha": alpha,
 		},
 	}
 }
@@ -275,6 +289,19 @@ func (mb *ModelBuilder) AddLeakyReLU(negativeSlope float32, name string) *ModelB
 	return mb.AddLayer(layer)
 }
 
+// AddELU adds an ELU activation to the model
+// alpha: controls saturation level for negative inputs (default: 1.0)
+func (mb *ModelBuilder) AddELU(alpha float32, name string) *ModelBuilder {
+	layer := LayerSpec{
+		Type: ELU,
+		Name: name,
+		Parameters: map[string]interface{}{
+			"alpha": alpha,
+		},
+	}
+	return mb.AddLayer(layer)
+}
+
 // Compile compiles the model and computes shapes and parameter counts
 func (mb *ModelBuilder) Compile() (*ModelSpec, error) {
 	if len(mb.layers) == 0 {
@@ -337,7 +364,7 @@ func (mb *ModelBuilder) computeLayerInfo(layer *LayerSpec, inputShape []int) ([]
 		return mb.computeConv2DInfo(layer, inputShape)
 	case BatchNorm:
 		return mb.computeBatchNormInfo(layer, inputShape)
-	case ReLU, Softmax, Dropout, LeakyReLU:
+	case ReLU, Softmax, Dropout, LeakyReLU, ELU:
 		return mb.computeActivationInfo(layer, inputShape)
 	default:
 		return nil, nil, 0, fmt.Errorf("unsupported layer type: %s", layer.Type.String())
@@ -867,6 +894,16 @@ func (ms *ModelSpec) ConvertToInferenceLayerSpecs() ([]DynamicLayerSpec, error) 
 					spec.ParamFloatCount++
 				}
 				
+			case ELU:
+				if alpha, ok := layer.Parameters["alpha"].(float64); ok {
+					spec.ParamFloat[0] = float32(alpha)
+					spec.ParamFloatCount++
+				} else {
+					// Default alpha
+					spec.ParamFloat[0] = 1.0
+					spec.ParamFloatCount++
+				}
+				
 			case Dropout:
 				if dropRate, ok := layer.Parameters["drop_rate"].(float64); ok {
 					spec.ParamFloat[0] = float32(dropRate)
@@ -988,6 +1025,11 @@ func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
 			// Leaky ReLU parameters: negative_slope
 			negativeSlope := getFloatParam(layer.Parameters, "negative_slope", 0.01)
 			cLayer.ParamFloat = []float32{negativeSlope}
+			
+		case ELU:
+			// ELU parameters: alpha
+			alpha := getFloatParam(layer.Parameters, "alpha", 1.0)
+			cLayer.ParamFloat = []float32{alpha}
 			
 		case Dropout:
 			// Dropout parameters: rate, training
@@ -1151,6 +1193,15 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamFloatCount = 1
 			spec.ParamIntCount = 0
 			// Shape unchanged for LeakyReLU
+
+		case ELU:
+			spec.LayerType = 8 // ELU = 8 in Go enum (next available after LeakyReLU=7)
+			
+			alpha := getFloatParam(layer.Parameters, "alpha", 1.0)
+			spec.ParamFloat[0] = alpha
+			spec.ParamFloatCount = 1
+			spec.ParamIntCount = 0
+			// Shape unchanged for ELU
 
 		case Softmax:
 			spec.LayerType = 3 // Softmax = 3 in C

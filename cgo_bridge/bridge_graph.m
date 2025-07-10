@@ -119,6 +119,52 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     }
                     break;
                     
+                case 8: // ELU
+                    {
+                        // ELU parameters: alpha (float)
+                        float alpha = layer->param_float_count > 0 ? layer->param_float[0] : 1.0f;
+                        
+                        // ELU(x) = x if x > 0, alpha * (exp(x) - 1) if x <= 0
+                        // Implementation using MPSGraph operations since there's no built-in ELU
+                        
+                        MPSGraphTensor* zeroTensor = [engine->graph constantWithScalar:0.0f 
+                                                                              dataType:MPSDataTypeFloat32];
+                        MPSGraphTensor* alphaTensor = [engine->graph constantWithScalar:alpha 
+                                                                               dataType:MPSDataTypeFloat32];
+                        MPSGraphTensor* oneTensor = [engine->graph constantWithScalar:1.0f 
+                                                                             dataType:MPSDataTypeFloat32];
+                        
+                        
+                        // Use differentiable approach: ELU(x) = max(0, x) + alpha * (exp(min(0, x)) - 1)
+                        // This avoids selectWithPredicateTensor which causes gradient computation issues
+                        
+                        // Positive part: max(0, x)
+                        MPSGraphTensor* positivePart = [engine->graph maximumWithPrimaryTensor:currentTensor
+                                                                              secondaryTensor:zeroTensor
+                                                                                         name:[NSString stringWithFormat:@"elu_positive_%d", layerIdx]];
+                        
+                        // Negative part: min(0, x) 
+                        MPSGraphTensor* negativePart = [engine->graph minimumWithPrimaryTensor:currentTensor
+                                                                              secondaryTensor:zeroTensor
+                                                                                         name:[NSString stringWithFormat:@"elu_negative_input_%d", layerIdx]];
+                        
+                        // For negative inputs: alpha * (exp(min(0, x)) - 1)
+                        MPSGraphTensor* expNegative = [engine->graph exponentWithTensor:negativePart
+                                                                                   name:[NSString stringWithFormat:@"elu_exp_negative_%d", layerIdx]];
+                        MPSGraphTensor* expMinusOneNeg = [engine->graph subtractionWithPrimaryTensor:expNegative
+                                                                                     secondaryTensor:oneTensor
+                                                                                                name:[NSString stringWithFormat:@"elu_exp_minus_one_%d", layerIdx]];
+                        MPSGraphTensor* scaledNegative = [engine->graph multiplicationWithPrimaryTensor:alphaTensor
+                                                                                       secondaryTensor:expMinusOneNeg
+                                                                                                  name:[NSString stringWithFormat:@"elu_scaled_negative_%d", layerIdx]];
+                        
+                        // Combine: max(0, x) + alpha * (exp(min(0, x)) - 1)
+                        currentTensor = [engine->graph additionWithPrimaryTensor:positivePart
+                                                                  secondaryTensor:scaledNegative
+                                                                             name:[NSString stringWithFormat:@"elu_%d", layerIdx]];
+                    }
+                    break;
+                    
                 default:
                     NSLog(@"Unsupported layer type: %d", layer->layer_type);
                     return NO;
@@ -555,10 +601,23 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             [engine->allWeightPlaceholders addObject:placeholder];
         }
         
+        // Get loss function name from configuration
+        NSString* lossFunctionName = @"Unknown";
+        switch (engine->config.loss_function) {
+            case 0: lossFunctionName = @"CrossEntropy"; break;
+            case 1: lossFunctionName = @"SparseCrossEntropy"; break;
+            case 2: lossFunctionName = @"BinaryCrossEntropy"; break;
+            case 3: lossFunctionName = @"BCEWithLogits"; break;
+            case 4: lossFunctionName = @"CategoricalCrossEntropy"; break;
+            case 5: lossFunctionName = @"MSE"; break;
+            case 6: lossFunctionName = @"MAE"; break;
+            case 7: lossFunctionName = @"Huber"; break;
+        }
+        
         NSLog(@"✅ Dynamic graph built successfully with %d layers and proper loss computation", numLayers);
         NSLog(@"   - Parameters: %lu placeholders", (unsigned long)allParameterPlaceholders.count);
         NSLog(@"   - Output classes: %d", numClasses);
-        NSLog(@"   - Loss: Cross-entropy with automatic differentiation");
+        NSLog(@"   - Loss: %@ with automatic differentiation", lossFunctionName);
         
         // PRODUCTION OPTIMIZATION: Cache Adam scalar tensors if using Adam optimizer
         if (engine->config.optimizer_type == 1) { // Adam optimizer
