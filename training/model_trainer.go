@@ -73,6 +73,16 @@ type ModelTrainer struct {
 	validationLabels       []int32    // Corresponding true labels
 	maxProbabilityBatches  int        // Maximum number of batches to collect (to limit memory)
 	probabilityBatchCount  int        // Current number of collected batches
+	
+	// Mixed Precision Training State
+	useMixedPrecision     bool                    // Whether mixed precision is enabled
+	lossScale             float32                 // Current loss scale
+	lossScaleGrowthFactor float32                 // Loss scale growth factor
+	lossScaleBackoffFactor float32                // Loss scale reduction factor
+	lossScaleGrowthInterval int                   // Steps between growth attempts
+	stepsSinceLastScale   int                     // Steps since last scale change
+	fp16WeightTensors     []*memory.Tensor        // FP16 versions of weights
+	fp16GradientTensors   []*memory.Tensor        // FP16 gradient tensors
 }
 
 // NewModelTrainer creates a new model-based trainer using the existing TrainingEngine architecture
@@ -178,7 +188,7 @@ func NewModelTrainer(
 		return nil, fmt.Errorf("failed to create command buffer pool: %v", err)
 	}
 	
-	return &ModelTrainer{
+	trainer := &ModelTrainer{
 		modelEngine: modelEngine,
 		modelSpec:   modelSpec,
 		batchSize:   config.BatchSize,
@@ -214,7 +224,112 @@ func NewModelTrainer(
 		// Probability collection initialization
 		maxProbabilityBatches: 50, // Limit to 50 batches to control memory usage
 		probabilityBatchCount: 0,
-	}, nil
+		
+		// Mixed Precision Training initialization
+		useMixedPrecision:     config.UseMixedPrecision,
+		lossScale:             config.InitialLossScale,
+		lossScaleGrowthFactor: config.LossScaleGrowthFactor,
+		lossScaleBackoffFactor: config.LossScaleBackoffFactor,
+		lossScaleGrowthInterval: config.LossScaleGrowthInterval,
+		stepsSinceLastScale:   0,
+	}
+	
+	// Initialize default values for mixed precision if not specified
+	if trainer.useMixedPrecision {
+		if trainer.lossScale == 0 {
+			trainer.lossScale = 65536.0 // Default initial loss scale
+		}
+		if trainer.lossScaleGrowthFactor == 0 {
+			trainer.lossScaleGrowthFactor = 2.0
+		}
+		if trainer.lossScaleBackoffFactor == 0 {
+			trainer.lossScaleBackoffFactor = 0.5
+		}
+		if trainer.lossScaleGrowthInterval == 0 {
+			trainer.lossScaleGrowthInterval = 2000
+		}
+		
+		// Initialize FP16 weight tensors
+		err = trainer.initializeMixedPrecisionTensors()
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize mixed precision tensors: %v", err)
+		}
+	}
+	
+	return trainer, nil
+}
+
+// initializeMixedPrecisionTensors creates FP16 versions of weights and gradient tensors
+func (mt *ModelTrainer) initializeMixedPrecisionTensors() error {
+	// Get the number of parameters from the model
+	numParams := 0
+	for _, layer := range mt.modelSpec.Layers {
+		if layer.Type == layers.Dense || layer.Type == layers.Conv2D || layer.Type == layers.BatchNorm {
+			// Each layer can have weights and biases
+			numParams += 2
+		}
+	}
+	
+	// Pre-allocate FP16 tensors for weights and gradients
+	mt.fp16WeightTensors = make([]*memory.Tensor, 0, numParams)
+	mt.fp16GradientTensors = make([]*memory.Tensor, 0, numParams)
+	
+	// Note: Actual tensor creation will happen during training when we have the weight shapes
+	return nil
+}
+
+// convertWeightsToFP16 converts FP32 weights to FP16 for mixed precision training
+func (mt *ModelTrainer) convertWeightsToFP16(fp32Weights []*memory.Tensor) error {
+	// Ensure we have enough FP16 tensors
+	for i := len(mt.fp16WeightTensors); i < len(fp32Weights); i++ {
+		fp32Weight := fp32Weights[i]
+		fp16Weight, err := fp32Weight.ConvertTo(memory.Float16)
+		if err != nil {
+			return fmt.Errorf("failed to convert weight %d to FP16: %v", i, err)
+		}
+		mt.fp16WeightTensors = append(mt.fp16WeightTensors, fp16Weight)
+		
+		// Also create FP16 gradient tensor with same shape
+		fp16Gradient, err := memory.NewTensor(fp32Weight.Shape(), memory.Float16, memory.GPU)
+		if err != nil {
+			return fmt.Errorf("failed to create FP16 gradient tensor %d: %v", i, err)
+		}
+		mt.fp16GradientTensors = append(mt.fp16GradientTensors, fp16Gradient)
+	}
+	
+	// Update existing FP16 weights with current FP32 values
+	for i := 0; i < len(fp32Weights) && i < len(mt.fp16WeightTensors); i++ {
+		// Release old FP16 weight
+		mt.fp16WeightTensors[i].Release()
+		
+		// Convert current FP32 weight to FP16
+		fp16Weight, err := fp32Weights[i].ConvertTo(memory.Float16)
+		if err != nil {
+			return fmt.Errorf("failed to update FP16 weight %d: %v", i, err)
+		}
+		mt.fp16WeightTensors[i] = fp16Weight
+	}
+	
+	return nil
+}
+
+// updateFP32WeightsFromFP16 updates FP32 master weights from FP16 weights after optimization
+func (mt *ModelTrainer) updateFP32WeightsFromFP16(fp32Weights []*memory.Tensor) error {
+	for i := 0; i < len(fp32Weights) && i < len(mt.fp16WeightTensors); i++ {
+		// Convert FP16 weight back to FP32
+		updatedFP32, err := mt.fp16WeightTensors[i].ConvertTo(memory.Float32)
+		if err != nil {
+			return fmt.Errorf("failed to convert FP16 weight %d back to FP32: %v", i, err)
+		}
+		defer updatedFP32.Release()
+		
+		// Copy the data to the original FP32 weight tensor
+		// This requires a memory copy operation
+		// For now, we'll need to implement a tensor copy function
+		// TODO: Implement tensor copy function in memory package
+	}
+	
+	return nil
 }
 
 // getModelOutputSize extracts the output size from model specification

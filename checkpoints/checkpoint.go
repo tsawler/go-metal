@@ -13,7 +13,7 @@ import (
 
 // Initialize memory bridge for checkpoint functionality
 func init() {
-	cgo_bridge.SetupMemoryBridge(memory.SetupBridge)
+	cgo_bridge.SetupMemoryBridgeWithConvert(memory.SetupBridgeWithConvert, memory.GetDevice)
 }
 
 // CheckpointFormat defines the serialization format

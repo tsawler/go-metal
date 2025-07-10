@@ -175,6 +175,7 @@ int copy_float32_array_to_metal_buffer(uintptr_t buffer, float* data, int num_el
 int copy_int32_array_to_metal_buffer(uintptr_t buffer, int* data, int num_elements);
 int copy_metal_buffer_to_float32_array(uintptr_t buffer, float* data, int num_elements);
 int copy_metal_buffer_to_int32_array(uintptr_t buffer, int* data, int num_elements);
+int convert_tensor_type(uintptr_t src_buffer, uintptr_t dst_buffer, int* shape, int num_dims, int src_type, int dst_type, uintptr_t device);
 
 // Forward+backward pass that returns gradients for Adam optimizer
 int execute_training_step_hybrid_with_gradients(
@@ -340,6 +341,30 @@ func SetupMemoryBridge(setupFunc func(
 		CopyMetalBufferToFloat32Array,
 		CopyFloat32ArrayToMetalBuffer,
 		CopyInt32ArrayToMetalBuffer,
+	)
+}
+
+// SetupMemoryBridgeWithConvert sets up bridge functions including type conversion
+func SetupMemoryBridgeWithConvert(setupFunc func(
+	func(unsafe.Pointer, int) ([]float32, error),
+	func(unsafe.Pointer, []float32) error,
+	func(unsafe.Pointer, []int32) error,
+	func(unsafe.Pointer, unsafe.Pointer, []int, int, int) error,
+), getDeviceFunc func() unsafe.Pointer) {
+	// Create wrapper for ConvertTensorType that matches the expected signature
+	convertWrapper := func(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType int) error {
+		device := getDeviceFunc()
+		if device == nil {
+			return fmt.Errorf("no device available for tensor conversion")
+		}
+		return ConvertTensorType(srcBuffer, dstBuffer, shape, srcType, dstType, device)
+	}
+	
+	setupFunc(
+		CopyMetalBufferToFloat32Array,
+		CopyFloat32ArrayToMetalBuffer,
+		CopyInt32ArrayToMetalBuffer,
+		convertWrapper,
 	)
 }
 
@@ -1025,6 +1050,35 @@ func CopyMetalBufferToInt32Array(buffer unsafe.Pointer, numElements int) ([]int3
 	}
 
 	return data, nil
+}
+
+// ConvertTensorType converts a tensor from one data type to another on GPU
+func ConvertTensorType(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType int, device unsafe.Pointer) error {
+	if len(shape) == 0 {
+		return fmt.Errorf("shape cannot be empty")
+	}
+	
+	// Convert shape to C array
+	cShape := make([]C.int, len(shape))
+	for i, dim := range shape {
+		cShape[i] = C.int(dim)
+	}
+	
+	result := C.convert_tensor_type(
+		C.uintptr_t(uintptr(srcBuffer)),
+		C.uintptr_t(uintptr(dstBuffer)),
+		&cShape[0],
+		C.int(len(shape)),
+		C.int(srcType),
+		C.int(dstType),
+		C.uintptr_t(uintptr(device)),
+	)
+	
+	if result != 0 {
+		return fmt.Errorf("failed to convert tensor type with error code: %d", result)
+	}
+	
+	return nil
 }
 
 // CopyDataToMetalBuffer copies raw byte data to a Metal buffer

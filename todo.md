@@ -59,6 +59,8 @@ This phase prioritizes resolving existing limitations and implementing fundament
       * ✅ Implemented complete data flow from ONNX import → ModelSpec → DynamicLayerSpec → CGO bridge → MPSGraph construction
       * **Impact:** Now supports models trained with non-standard data distributions and uses actual trained running statistics for accurate inference
 
+    * **Mixed Precision Training:** Implement FP16 training with automatic loss scaling for improved performance on Apple Silicon GPUs while maintaining FP32 master weights for numerical stability. Features dynamic loss scaling, gradient overflow detection, and seamless integration with existing training infrastructure.
+
     * **Further Performance Optimization:** Continuously profile and optimize existing components to squeeze out additional performance gains.
 
     * ✅ **Debug Output Cleanup:** ~~Clean up verbose debug logging for production use.~~ **COMPLETED** - Removed debug messages from CGO bridge files, console output now shows clean training progress only.

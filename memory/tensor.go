@@ -162,6 +162,29 @@ func calculateSize(shape []int, dtype DataType) int {
 // Global generation counter for debugging
 var globalGeneration uint64
 
+// ConvertTo creates a new tensor with the specified data type, performing type conversion on GPU
+func (t *Tensor) ConvertTo(dtype DataType) (*Tensor, error) {
+	if t.dtype == dtype {
+		// Already the correct type, just retain and return
+		return t.Retain(), nil
+	}
+	
+	// Create new tensor with target dtype
+	newTensor, err := NewTensor(t.shape, dtype, t.device)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create converted tensor: %v", err)
+	}
+	
+	// Perform GPU-side conversion
+	err = convertTensorType(t.metalBuffer, newTensor.metalBuffer, t.shape, t.dtype, dtype)
+	if err != nil {
+		newTensor.Release()
+		return nil, fmt.Errorf("failed to convert tensor type: %v", err)
+	}
+	
+	return newTensor, nil
+}
+
 // CopyFloat32Data copies float32 data to the tensor's Metal buffer
 func (t *Tensor) CopyFloat32Data(data []float32) error {
 	if t.dtype != Float32 {
@@ -224,6 +247,20 @@ func (t *Tensor) copyDataToBuffer(data interface{}) error {
 var ToFloat32SliceFunc func(buffer unsafe.Pointer, numElements int) ([]float32, error)
 var CopyFloat32DataFunc func(buffer unsafe.Pointer, data []float32) error
 var CopyInt32DataFunc func(buffer unsafe.Pointer, data []int32) error
+var ConvertTensorTypeFunc func(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType DataType) error
+
+// convertTensorType performs GPU-side type conversion
+func convertTensorType(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType DataType) error {
+	if ConvertTensorTypeFunc == nil {
+		return fmt.Errorf("ConvertTensorType bridge function not initialized - import cgo_bridge package")
+	}
+	return ConvertTensorTypeFunc(srcBuffer, dstBuffer, shape, srcType, dstType)
+}
+
+// GetDevice returns the device pointer from the global memory manager
+func GetDevice() unsafe.Pointer {
+	return GetGlobalMemoryManager().device
+}
 
 // SetupBridge allows external packages to set up bridge functions
 func SetupBridge(
@@ -234,6 +271,23 @@ func SetupBridge(
 	ToFloat32SliceFunc = toFloat32SliceFunc
 	CopyFloat32DataFunc = copyFloat32DataFunc
 	CopyInt32DataFunc = copyInt32DataFunc
+}
+
+// SetupBridgeWithConvert allows external packages to set up bridge functions including type conversion
+func SetupBridgeWithConvert(
+	toFloat32SliceFunc func(unsafe.Pointer, int) ([]float32, error),
+	copyFloat32DataFunc func(unsafe.Pointer, []float32) error,
+	copyInt32DataFunc func(unsafe.Pointer, []int32) error,
+	convertTensorTypeFunc func(unsafe.Pointer, unsafe.Pointer, []int, int, int) error,
+) {
+	ToFloat32SliceFunc = toFloat32SliceFunc
+	CopyFloat32DataFunc = copyFloat32DataFunc
+	CopyInt32DataFunc = copyInt32DataFunc
+	
+	// Create wrapper that converts int to DataType
+	ConvertTensorTypeFunc = func(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType DataType) error {
+		return convertTensorTypeFunc(srcBuffer, dstBuffer, shape, int(srcType), int(dstType))
+	}
 }
 
 func (t *Tensor) ToFloat32Slice() ([]float32, error) {

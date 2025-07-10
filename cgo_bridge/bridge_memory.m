@@ -318,3 +318,106 @@ int copy_metal_buffer_to_int32_array(uintptr_t buffer_ptr, int* data, int num_el
         }
     }
 }
+
+// Convert tensor type on GPU using Metal compute shader
+int convert_tensor_type(uintptr_t src_buffer_ptr, uintptr_t dst_buffer_ptr, 
+                       int* shape, int num_dims, int src_type, int dst_type,
+                       uintptr_t device_ptr) {
+    @autoreleasepool {
+        if (src_buffer_ptr == 0 || dst_buffer_ptr == 0 || shape == NULL || num_dims <= 0) {
+            NSLog(@"Invalid parameters for convert_tensor_type");
+            return -1;
+        }
+        
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
+        id<MTLBuffer> srcBuffer = (__bridge id<MTLBuffer>)(void*)src_buffer_ptr;
+        id<MTLBuffer> dstBuffer = (__bridge id<MTLBuffer>)(void*)dst_buffer_ptr;
+        
+        if (!device || !srcBuffer || !dstBuffer) {
+            NSLog(@"Invalid device or buffers in convert_tensor_type");
+            return -2;
+        }
+        
+        // Calculate total number of elements
+        int totalElements = 1;
+        for (int i = 0; i < num_dims; i++) {
+            totalElements *= shape[i];
+        }
+        
+        // Create command queue and buffer
+        id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+        id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+        
+        // Currently only support Float32 <-> Float16 conversion
+        // Use Metal compute shader for type conversion
+        if ((src_type == 0 && dst_type == 2) || (src_type == 2 && dst_type == 0)) {
+            // Float32 <-> Float16 conversion using compute shader
+            
+            // Create compute encoder
+            id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+            
+            // Create a simple Metal library with conversion kernels
+            NSString* kernelSource;
+            if (src_type == 0) { // Float32 to Float16
+                kernelSource = @"#include <metal_stdlib>\n"
+                              @"using namespace metal;\n"
+                              @"kernel void convert_fp32_to_fp16(device const float* src [[buffer(0)]],\n"
+                              @"                                 device half* dst [[buffer(1)]],\n"
+                              @"                                 uint index [[thread_position_in_grid]]) {\n"
+                              @"    dst[index] = half(src[index]);\n"
+                              @"}\n";
+            } else { // Float16 to Float32
+                kernelSource = @"#include <metal_stdlib>\n"
+                              @"using namespace metal;\n"
+                              @"kernel void convert_fp16_to_fp32(device const half* src [[buffer(0)]],\n"
+                              @"                                 device float* dst [[buffer(1)]],\n"
+                              @"                                 uint index [[thread_position_in_grid]]) {\n"
+                              @"    dst[index] = float(src[index]);\n"
+                              @"}\n";
+            }
+            
+            NSError* error = nil;
+            id<MTLLibrary> library = [device newLibraryWithSource:kernelSource options:nil error:&error];
+            if (!library) {
+                NSLog(@"Failed to create Metal library: %@", error.localizedDescription);
+                return -4;
+            }
+            
+            NSString* functionName = (src_type == 0) ? @"convert_fp32_to_fp16" : @"convert_fp16_to_fp32";
+            id<MTLFunction> function = [library newFunctionWithName:functionName];
+            if (!function) {
+                NSLog(@"Failed to find kernel function: %@", functionName);
+                return -5;
+            }
+            
+            id<MTLComputePipelineState> pipelineState = [device newComputePipelineStateWithFunction:function error:&error];
+            if (!pipelineState) {
+                NSLog(@"Failed to create compute pipeline: %@", error.localizedDescription);
+                return -6;
+            }
+            
+            // Set up compute command encoder
+            [encoder setComputePipelineState:pipelineState];
+            [encoder setBuffer:srcBuffer offset:0 atIndex:0];
+            [encoder setBuffer:dstBuffer offset:0 atIndex:1];
+            
+            // Calculate thread group sizes
+            NSUInteger threadsPerThreadgroup = MIN(pipelineState.maxTotalThreadsPerThreadgroup, 256);
+            NSUInteger threadgroups = (totalElements + threadsPerThreadgroup - 1) / threadsPerThreadgroup;
+            
+            MTLSize threadgroupSize = MTLSizeMake(threadsPerThreadgroup, 1, 1);
+            MTLSize gridSize = MTLSizeMake(totalElements, 1, 1);
+            
+            [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
+            [encoder endEncoding];
+        } else {
+            NSLog(@"Unsupported type conversion: %d to %d", src_type, dst_type);
+            return -3;
+        }
+        
+        [commandBuffer commit];
+        [commandBuffer waitUntilCompleted];
+        
+        return 0;
+    }
+}

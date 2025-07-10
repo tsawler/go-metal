@@ -361,6 +361,13 @@ type TrainerConfig struct {
 	UseHybridEngine  bool       `json:"use_hybrid_engine"`  // DEPRECATED: Use EngineType instead
 	UseDynamicEngine bool       `json:"use_dynamic_engine"` // DEPRECATED: Use EngineType instead
 	InferenceOnly    bool       `json:"inference_only"`     // Skip training setup, optimize for inference (forward-pass only)
+	
+	// Mixed Precision Training Configuration
+	UseMixedPrecision  bool    `json:"use_mixed_precision"`   // Enable FP16 training with FP32 master weights
+	InitialLossScale   float32 `json:"initial_loss_scale"`    // Initial loss scale for gradient scaling (default: 65536.0)
+	LossScaleGrowthFactor float32 `json:"loss_scale_growth_factor"` // Loss scale growth factor (default: 2.0)
+	LossScaleBackoffFactor float32 `json:"loss_scale_backoff_factor"` // Loss scale reduction factor on overflow (default: 0.5)
+	LossScaleGrowthInterval int `json:"loss_scale_growth_interval"` // Steps between loss scale increases (default: 2000)
 }
 
 // Validate ensures the problem type and loss function are compatible
