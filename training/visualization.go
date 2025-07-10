@@ -33,6 +33,7 @@ const (
 	FeatureImportancePlot PlotType = "feature_importance"
 	LearningCurvePlot     PlotType = "learning_curve"
 	ValidationCurvePlot   PlotType = "validation_curve"
+	PredictionIntervalPlot PlotType = "prediction_interval"
 )
 
 // PlotData represents the universal JSON format for the sidecar plotting service
@@ -127,6 +128,15 @@ type VisualizationCollector struct {
 	validationCurveValidation []float64
 	validationCurveTrainingStd []float64
 	validationCurveValidationStd []float64
+	
+	// Prediction interval data
+	predictionIntervalX          []float64
+	predictionIntervalY          []float64
+	confidenceIntervalLower      []float64
+	confidenceIntervalUpper      []float64
+	predictionIntervalLower      []float64
+	predictionIntervalUpper      []float64
+	predictionStandardErrors     []float64
 	
 	// Model analysis data
 	parameterStats   map[string]ParameterStats
@@ -332,6 +342,21 @@ func (vc *VisualizationCollector) RecordValidationCurve(parameterName string, pa
 	vc.validationCurveValidation = validationScores
 	vc.validationCurveTrainingStd = trainingStdErrors
 	vc.validationCurveValidationStd = validationStdErrors
+}
+
+// RecordPredictionInterval records prediction interval data for regression uncertainty visualization
+func (vc *VisualizationCollector) RecordPredictionInterval(x, y []float64, confidenceLower, confidenceUpper, predictionLower, predictionUpper, standardErrors []float64) {
+	if !vc.enabled {
+		return
+	}
+	
+	vc.predictionIntervalX = x
+	vc.predictionIntervalY = y
+	vc.confidenceIntervalLower = confidenceLower
+	vc.confidenceIntervalUpper = confidenceUpper
+	vc.predictionIntervalLower = predictionLower
+	vc.predictionIntervalUpper = predictionUpper
+	vc.predictionStandardErrors = standardErrors
 }
 
 // RecordParameterStats records parameter distribution statistics
@@ -1362,6 +1387,181 @@ func (vc *VisualizationCollector) GenerateValidationCurvePlot() PlotData {
 			"training_val_gap":      gap,
 			"num_parameter_values":  n,
 			"diagnosis":            diagnosis,
+		},
+	}
+}
+
+// GeneratePredictionIntervalPlot generates prediction interval plot data showing prediction uncertainty
+func (vc *VisualizationCollector) GeneratePredictionIntervalPlot() PlotData {
+	// Create descriptive title using model name if available
+	title := "Prediction Interval Analysis"
+	if vc.modelName != "" && vc.modelName != "Model" {
+		title = vc.modelName + " - Prediction Intervals"
+	}
+	
+	if len(vc.predictionIntervalX) == 0 || len(vc.predictionIntervalY) == 0 {
+		return PlotData{
+			PlotType:  PredictionIntervalPlot,
+			Title:     title,
+			Timestamp: time.Now(),
+			ModelName: vc.modelName,
+			Series:    []SeriesData{},
+		}
+	}
+	
+	n := len(vc.predictionIntervalX)
+	
+	// Create the main prediction line
+	predictionData := make([]DataPoint, n)
+	for i := 0; i < n; i++ {
+		predictionData[i] = DataPoint{
+			X: vc.predictionIntervalX[i],
+			Y: vc.predictionIntervalY[i],
+		}
+	}
+	
+	series := []SeriesData{
+		{
+			Name: "Predictions",
+			Type: "line",
+			Data: predictionData,
+			Style: map[string]interface{}{
+				"color": "#2E86AB",
+				"width": 2,
+			},
+		},
+	}
+	
+	// Add confidence interval if available
+	if len(vc.confidenceIntervalLower) == n && len(vc.confidenceIntervalUpper) == n {
+		// Create confidence interval band
+		confidenceData := make([]DataPoint, 2*n)
+		
+		// Upper band
+		for i := 0; i < n; i++ {
+			confidenceData[i] = DataPoint{
+				X: vc.predictionIntervalX[i],
+				Y: vc.confidenceIntervalUpper[i],
+			}
+		}
+		
+		// Lower band (reversed order for fill)
+		for i := 0; i < n; i++ {
+			confidenceData[n+i] = DataPoint{
+				X: vc.predictionIntervalX[n-1-i],
+				Y: vc.confidenceIntervalLower[n-1-i],
+			}
+		}
+		
+		series = append(series, SeriesData{
+			Name: "Confidence Interval (95%)",
+			Type: "fill",
+			Data: confidenceData,
+			Style: map[string]interface{}{
+				"color": "#2E86AB",
+				"alpha": 0.3,
+				"fill":  "tonexty",
+			},
+		})
+	}
+	
+	// Add prediction interval if available
+	if len(vc.predictionIntervalLower) == n && len(vc.predictionIntervalUpper) == n {
+		// Create prediction interval band
+		predictionBandData := make([]DataPoint, 2*n)
+		
+		// Upper band
+		for i := 0; i < n; i++ {
+			predictionBandData[i] = DataPoint{
+				X: vc.predictionIntervalX[i],
+				Y: vc.predictionIntervalUpper[i],
+			}
+		}
+		
+		// Lower band (reversed order for fill)
+		for i := 0; i < n; i++ {
+			predictionBandData[n+i] = DataPoint{
+				X: vc.predictionIntervalX[n-1-i],
+				Y: vc.predictionIntervalLower[n-1-i],
+			}
+		}
+		
+		series = append(series, SeriesData{
+			Name: "Prediction Interval (95%)",
+			Type: "fill",
+			Data: predictionBandData,
+			Style: map[string]interface{}{
+				"color": "#F24236",
+				"alpha": 0.2,
+				"fill":  "tonexty",
+			},
+		})
+	}
+	
+	// Calculate diagnostic metrics
+	var meanStdError float64
+	if len(vc.predictionStandardErrors) > 0 {
+		sum := 0.0
+		for _, se := range vc.predictionStandardErrors {
+			sum += se
+		}
+		meanStdError = sum / float64(len(vc.predictionStandardErrors))
+	}
+	
+	// Determine prediction reliability
+	var reliability string
+	if meanStdError < 0.05 {
+		reliability = "High confidence predictions"
+	} else if meanStdError < 0.15 {
+		reliability = "Moderate prediction uncertainty"
+	} else {
+		reliability = "High prediction uncertainty"
+	}
+	
+	// Calculate interval widths for analysis
+	var avgConfidenceWidth, avgPredictionWidth float64
+	if len(vc.confidenceIntervalLower) == n && len(vc.confidenceIntervalUpper) == n {
+		for i := 0; i < n; i++ {
+			avgConfidenceWidth += vc.confidenceIntervalUpper[i] - vc.confidenceIntervalLower[i]
+		}
+		avgConfidenceWidth /= float64(n)
+	}
+	
+	if len(vc.predictionIntervalLower) == n && len(vc.predictionIntervalUpper) == n {
+		for i := 0; i < n; i++ {
+			avgPredictionWidth += vc.predictionIntervalUpper[i] - vc.predictionIntervalLower[i]
+		}
+		avgPredictionWidth /= float64(n)
+	}
+	
+	return PlotData{
+		PlotType:  PredictionIntervalPlot,
+		Title:     title,
+		Timestamp: time.Now(),
+		ModelName: vc.modelName,
+		Series:    series,
+		Config: PlotConfig{
+			XAxisLabel:  "Input Values",
+			YAxisLabel:  "Predictions",
+			XAxisScale:  "linear",
+			YAxisScale:  "linear",
+			ShowLegend:  true,
+			ShowGrid:    true,
+			Width:       800,
+			Height:      600,
+			Interactive: true,
+			CustomOptions: map[string]interface{}{
+				"subtitle": "Prediction uncertainty with confidence and prediction intervals",
+				"reliability": reliability,
+				"mean_std_error": meanStdError,
+			},
+		},
+		Metrics: map[string]interface{}{
+			"num_predictions":         n,
+			"mean_standard_error":     meanStdError,
+			"avg_confidence_width":    avgConfidenceWidth,
+			"avg_prediction_width":    avgPredictionWidth,
+			"reliability":            reliability,
 		},
 	}
 }

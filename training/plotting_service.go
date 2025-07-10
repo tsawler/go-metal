@@ -241,6 +241,8 @@ func (ps *PlottingService) GenerateAndSendPlot(collector *VisualizationCollector
 		plotData = collector.GenerateLearningCurvePlot()
 	case ValidationCurvePlot:
 		plotData = collector.GenerateValidationCurvePlot()
+	case PredictionIntervalPlot:
+		plotData = collector.GeneratePredictionIntervalPlot()
 	default:
 		return nil, fmt.Errorf("unsupported plot type: %s", plotType)
 	}
@@ -469,6 +471,8 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 			plotData = collector.GenerateLearningCurvePlot()
 		case ValidationCurvePlot:
 			plotData = collector.GenerateValidationCurvePlot()
+		case PredictionIntervalPlot:
+			plotData = collector.GeneratePredictionIntervalPlot()
 		default:
 			results[plotType] = &PlottingResponse{
 				Success: false,
