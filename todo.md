@@ -134,12 +134,14 @@ This phase focuses on building out the core utility of the `go-metal` library by
         * ✅ *go-metal changes:* **COMPLETED** - Added `QQPlot` PlotType, implemented `GenerateQQPlot()` in VisualizationCollector with theoretical vs sample quantile calculations using Beasley-Springer-Moro algorithm, proper reference line generation, and statistical metadata
         * ✅ *sidecar changes:* **COMPLETED** - Added `_generate_qq_plot()` method in plot_generators.py with scipy.stats integration, interactive scatter visualization, hover templates, and educational annotations
         * **Production Validation:** Successfully tested with synthetic normal and skewed residual distributions, full sidecar integration, automatic browser opening, and comprehensive test application (`app/test-qqplot`)
-      * **Feature Importance Plot:** Show feature contribution analysis for multiple linear regression interpretation
-        * *go-metal changes:* Add `FeatureImportancePlot` PlotType, implement feature weight collection in ModelTrainer, add `GenerateFeatureImportancePlot()` with coefficient analysis
-        * *sidecar changes:* Add `_generate_feature_importance()` method with horizontal bar chart visualization and confidence intervals
-      * **Learning Curve Plot:** Diagnose overfitting vs underfitting by showing performance vs training set size
-        * *go-metal changes:* Add `LearningCurvePlot` PlotType, implement training set size tracking in ModelTrainer, add `GenerateLearningCurvePlot()` with subset performance analysis
-        * *sidecar changes:* Add `_generate_learning_curve()` method with dual-axis training/validation error visualization
+      * ✅ **Feature Importance Plot:** **COMPLETED** - Show feature contribution analysis for multiple linear regression interpretation
+        * ✅ *go-metal changes:* **COMPLETED** - Added `FeatureImportancePlot` PlotType, implemented `GenerateFeatureImportancePlot()` in VisualizationCollector with coefficient sorting by absolute importance, color-coded positive/negative contributions, and confidence interval support
+        * ✅ *sidecar changes:* **COMPLETED** - Added `_generate_feature_importance()` method in plot_generators.py with horizontal bar chart visualization, error bars for confidence intervals, automatic feature ordering, and dynamic plot height based on feature count
+        * **Production Validation:** Successfully tested with synthetic multi-feature regression data (linear and non-linear), feature coefficients with standard errors, JSON export functionality, and comprehensive test application (`app/test-feature-importance`)
+      * ✅ **Learning Curve Plot:** **COMPLETED** - Diagnose overfitting vs underfitting by showing performance vs training set size
+        * ✅ *go-metal changes:* **COMPLETED** - Added `LearningCurvePlot` PlotType, implemented `GenerateLearningCurvePlot()` in VisualizationCollector with automatic diagnosis logic (overfitting/underfitting/good fit), error band support, and performance gap analysis
+        * ✅ *sidecar changes:* **COMPLETED** - Added `_generate_learning_curve()` method in plot_generators.py with dual-line training/validation visualization, error bands, color-coded diagnosis annotations, and educational tooltips
+        * **Production Validation:** Successfully tested with synthetic data patterns (good learning, overfitting, underfitting), automatic diagnosis accuracy, JSON export functionality, and comprehensive test application (`app/test-learning-curve`)
       * **Validation Curve Plot:** Hyperparameter tuning visualization showing model performance vs hyperparameter values
         * *go-metal changes:* Add `ValidationCurvePlot` PlotType, implement hyperparameter tracking in ModelTrainer, add `GenerateValidationCurvePlot()` with parameter sweep analysis
         * *sidecar changes:* Add `_generate_validation_curve()` method with parameter value vs performance visualization

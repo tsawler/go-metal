@@ -30,6 +30,8 @@ const (
 	RegressionScatter     PlotType = "regression_scatter"
 	ResidualPlot          PlotType = "residual_plot"
 	QQPlot               PlotType = "qq_plot"
+	FeatureImportancePlot PlotType = "feature_importance"
+	LearningCurvePlot     PlotType = "learning_curve"
 )
 
 // PlotData represents the universal JSON format for the sidecar plotting service
@@ -106,6 +108,16 @@ type VisualizationCollector struct {
 	predictions      []float64
 	trueValues       []float64
 	residuals        []float64
+	featureNames     []string
+	coefficients     []float64
+	featureStdErrors []float64
+	
+	// Learning curve data
+	trainingSizes     []int
+	trainingScores    []float64
+	validationScores  []float64
+	trainingStdErrors []float64
+	validationStdErrors []float64
 	
 	// Model analysis data
 	parameterStats   map[string]ParameterStats
@@ -273,6 +285,30 @@ func (vc *VisualizationCollector) RecordRegressionData(predictions, trueValues [
 	for i := range predictions {
 		vc.residuals[i] = predictions[i] - trueValues[i]
 	}
+}
+
+// RecordFeatureImportance records feature names and their coefficients for regression models
+func (vc *VisualizationCollector) RecordFeatureImportance(featureNames []string, coefficients []float64, stdErrors []float64) {
+	if !vc.enabled {
+		return
+	}
+	
+	vc.featureNames = featureNames
+	vc.coefficients = coefficients
+	vc.featureStdErrors = stdErrors
+}
+
+// RecordLearningCurve records learning curve data showing performance vs training set size
+func (vc *VisualizationCollector) RecordLearningCurve(trainingSizes []int, trainingScores, validationScores []float64, trainingStdErrors, validationStdErrors []float64) {
+	if !vc.enabled {
+		return
+	}
+	
+	vc.trainingSizes = trainingSizes
+	vc.trainingScores = trainingScores
+	vc.validationScores = validationScores
+	vc.trainingStdErrors = trainingStdErrors
+	vc.validationStdErrors = validationStdErrors
 }
 
 // RecordParameterStats records parameter distribution statistics
@@ -833,6 +869,307 @@ func (vc *VisualizationCollector) GenerateQQPlot() PlotData {
 			"sample_size": n,
 		},
 	}
+}
+
+// GenerateFeatureImportancePlot generates feature importance plot data
+func (vc *VisualizationCollector) GenerateFeatureImportancePlot() PlotData {
+	if len(vc.coefficients) == 0 || len(vc.featureNames) == 0 {
+		return PlotData{}
+	}
+	
+	// Calculate absolute importance (abs coefficient values)
+	n := len(vc.coefficients)
+	importanceData := make([]DataPoint, n)
+	
+	// Create pairs of (feature, importance) for sorting
+	type featureImportance struct {
+		name       string
+		coefficient float64
+		absValue   float64
+		stdError   float64
+	}
+	
+	features := make([]featureImportance, n)
+	for i := 0; i < n; i++ {
+		stdErr := float64(0)
+		if len(vc.featureStdErrors) > i {
+			stdErr = vc.featureStdErrors[i]
+		}
+		
+		features[i] = featureImportance{
+			name:       vc.featureNames[i],
+			coefficient: vc.coefficients[i],
+			absValue:   math.Abs(vc.coefficients[i]),
+			stdError:   stdErr,
+		}
+	}
+	
+	// Sort by absolute importance (descending)
+	sort.Slice(features, func(i, j int) bool {
+		return features[i].absValue > features[j].absValue
+	})
+	
+	// Create data points for horizontal bar chart
+	for i, feat := range features {
+		importanceData[i] = DataPoint{
+			X:     feat.coefficient,
+			Y:     float64(i), // Y position for horizontal bars
+			Label: feat.name,
+		}
+	}
+	
+	// Calculate confidence intervals if standard errors are available
+	var errorBars []DataPoint
+	if len(vc.featureStdErrors) > 0 {
+		errorBars = make([]DataPoint, n)
+		for i, feat := range features {
+			// 95% confidence interval (1.96 * standard error)
+			margin := 1.96 * feat.stdError
+			errorBars[i] = DataPoint{
+				X: margin,
+				Y: float64(i),
+			}
+		}
+	}
+	
+	// Create colors based on coefficient sign
+	colors := make([]string, n)
+	for i, feat := range features {
+		if feat.coefficient > 0 {
+			colors[i] = "#2ECC71" // Green for positive
+		} else {
+			colors[i] = "#E74C3C" // Red for negative
+		}
+	}
+	
+	series := []SeriesData{
+		{
+			Name: "Feature Coefficients",
+			Type: "bar",
+			Data: importanceData,
+			Style: map[string]interface{}{
+				"orientation": "horizontal",
+				"colors": colors, // Pass the pre-calculated colors array
+				"alpha": 0.8,
+			},
+		},
+	}
+	
+	// Add error bars if available
+	if len(errorBars) > 0 {
+		series = append(series, SeriesData{
+			Name: "95% Confidence Interval",
+			Type: "errorbar",
+			Data: errorBars,
+			Style: map[string]interface{}{
+				"color": "#34495E",
+				"width": 2,
+				"capsize": 5,
+			},
+		})
+	}
+	
+	// Get feature labels in sorted order
+	featureLabels := make([]string, n)
+	for i, feat := range features {
+		featureLabels[i] = feat.name
+	}
+	
+	// Create descriptive title using model name if available
+	title := "Feature Importance Analysis"
+	if vc.modelName != "" && vc.modelName != "Model" {
+		title = vc.modelName + " - Feature Importance"
+	}
+	
+	return PlotData{
+		PlotType:  FeatureImportancePlot,
+		Title:     title,
+		Timestamp: time.Now(),
+		ModelName: vc.modelName,
+		Series:    series,
+		Config: PlotConfig{
+			XAxisLabel:  "Coefficient Value",
+			YAxisLabel:  "Features",
+			XAxisScale:  "linear",
+			ShowLegend:  len(errorBars) > 0,
+			ShowGrid:    true,
+			Width:       800,
+			Height:      max(400, n*40), // Dynamic height based on feature count
+			Interactive: true,
+			CustomOptions: map[string]interface{}{
+				"yTickLabels": featureLabels,
+				"zeroline":    true,
+				"subtitle":    "Regression coefficients showing feature contribution",
+			},
+		},
+		Metrics: map[string]interface{}{
+			"num_features": n,
+			"top_feature":  features[0].name,
+			"top_coeff":    features[0].coefficient,
+		},
+	}
+}
+
+// GenerateLearningCurvePlot generates learning curve plot data showing performance vs training set size
+func (vc *VisualizationCollector) GenerateLearningCurvePlot() PlotData {
+	if len(vc.trainingSizes) == 0 || len(vc.trainingScores) == 0 || len(vc.validationScores) == 0 {
+		return PlotData{}
+	}
+	
+	n := len(vc.trainingSizes)
+	
+	// Create training score data points
+	trainingData := make([]DataPoint, n)
+	for i := 0; i < n; i++ {
+		trainingData[i] = DataPoint{
+			X: float64(vc.trainingSizes[i]),
+			Y: vc.trainingScores[i],
+		}
+	}
+	
+	// Create validation score data points
+	validationData := make([]DataPoint, n)
+	for i := 0; i < n; i++ {
+		validationData[i] = DataPoint{
+			X: float64(vc.trainingSizes[i]),
+			Y: vc.validationScores[i],
+		}
+	}
+	
+	series := []SeriesData{
+		{
+			Name: "Training Score",
+			Type: "line",
+			Data: trainingData,
+			Style: map[string]interface{}{
+				"color":      "#2ECC71",
+				"line_width": 2,
+				"marker":     "circle",
+				"alpha":      0.8,
+			},
+		},
+		{
+			Name: "Validation Score",
+			Type: "line",
+			Data: validationData,
+			Style: map[string]interface{}{
+				"color":      "#E74C3C",
+				"line_width": 2,
+				"marker":     "circle",
+				"alpha":      0.8,
+			},
+		},
+	}
+	
+	// Add error bands if standard errors are available
+	if len(vc.trainingStdErrors) > 0 && len(vc.validationStdErrors) > 0 {
+		// Training error band (upper and lower bounds)
+		trainingUpperBand := make([]DataPoint, n)
+		trainingLowerBand := make([]DataPoint, n)
+		for i := 0; i < n; i++ {
+			trainingUpperBand[i] = DataPoint{
+				X: float64(vc.trainingSizes[i]),
+				Y: vc.trainingScores[i] + vc.trainingStdErrors[i],
+			}
+			trainingLowerBand[i] = DataPoint{
+				X: float64(vc.trainingSizes[i]),
+				Y: vc.trainingScores[i] - vc.trainingStdErrors[i],
+			}
+		}
+		
+		// Validation error band
+		validationUpperBand := make([]DataPoint, n)
+		validationLowerBand := make([]DataPoint, n)
+		for i := 0; i < n; i++ {
+			validationUpperBand[i] = DataPoint{
+				X: float64(vc.trainingSizes[i]),
+				Y: vc.validationScores[i] + vc.validationStdErrors[i],
+			}
+			validationLowerBand[i] = DataPoint{
+				X: float64(vc.trainingSizes[i]),
+				Y: vc.validationScores[i] - vc.validationStdErrors[i],
+			}
+		}
+		
+		// Add error band series
+		series = append(series, SeriesData{
+			Name: "Training Error Band",
+			Type: "fill",
+			Data: append(trainingUpperBand, reverse(trainingLowerBand)...),
+			Style: map[string]interface{}{
+				"color": "#2ECC71",
+				"alpha": 0.2,
+				"fill":  "tonexty",
+			},
+		})
+		
+		series = append(series, SeriesData{
+			Name: "Validation Error Band",
+			Type: "fill",
+			Data: append(validationUpperBand, reverse(validationLowerBand)...),
+			Style: map[string]interface{}{
+				"color": "#E74C3C",
+				"alpha": 0.2,
+				"fill":  "tonexty",
+			},
+		})
+	}
+	
+	// Calculate analysis metrics
+	finalTrainingScore := vc.trainingScores[n-1]
+	finalValidationScore := vc.validationScores[n-1]
+	gap := math.Abs(finalTrainingScore - finalValidationScore)
+	
+	// Determine learning curve characteristics
+	var diagnosis string
+	if gap > 0.1 && finalTrainingScore > finalValidationScore {
+		diagnosis = "Overfitting detected"
+	} else if finalTrainingScore < 0.7 && finalValidationScore < 0.7 {
+		diagnosis = "Underfitting detected"
+	} else if gap < 0.05 {
+		diagnosis = "Good fit"
+	} else {
+		diagnosis = "Slight overfitting"
+	}
+	
+	return PlotData{
+		PlotType:  LearningCurvePlot,
+		Title:     "Learning Curve Analysis",
+		Timestamp: time.Now(),
+		ModelName: vc.modelName,
+		Series:    series,
+		Config: PlotConfig{
+			XAxisLabel:  "Training Set Size",
+			YAxisLabel:  "Score",
+			XAxisScale:  "linear",
+			YAxisScale:  "linear",
+			ShowLegend:  true,
+			ShowGrid:    true,
+			Width:       800,
+			Height:      600,
+			Interactive: true,
+			CustomOptions: map[string]interface{}{
+				"subtitle": "Performance vs Training Set Size - Diagnose overfitting/underfitting",
+				"diagnosis": diagnosis,
+			},
+		},
+		Metrics: map[string]interface{}{
+			"final_training_score":   finalTrainingScore,
+			"final_validation_score": finalValidationScore,
+			"training_val_gap":       gap,
+			"num_training_sizes":     n,
+			"diagnosis":             diagnosis,
+		},
+	}
+}
+
+// reverse reverses a slice of DataPoint for fill_between functionality
+func reverse(data []DataPoint) []DataPoint {
+	reversed := make([]DataPoint, len(data))
+	for i, j := 0, len(data)-1; i < len(data); i, j = i+1, j-1 {
+		reversed[i] = data[j]
+	}
+	return reversed
 }
 
 // normalQuantile calculates approximate normal quantile for probability p
