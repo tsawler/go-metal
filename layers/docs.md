@@ -68,6 +68,13 @@ func (lf *LayerFactory) CreateDenseSpec(inputSize, outputSize int, useBias bool,
 ```
 CreateDenseSpec creates a dense layer specification
 
+#### func (*LayerFactory) CreateELUSpec
+
+```go
+func (lf *LayerFactory) CreateELUSpec(alpha float32, name string) LayerSpec
+```
+CreateELUSpec creates an ELU activation specification
+
 #### func (*LayerFactory) CreateLeakyReLUSpec
 
 ```go
@@ -146,6 +153,7 @@ const (
 	Dropout
 	BatchNorm
 	LeakyReLU
+	ELU
 )
 ```
 
@@ -208,6 +216,14 @@ func (mb *ModelBuilder) AddDropout(rate float32, name string) *ModelBuilder
 AddDropout adds a Dropout layer to the model rate: dropout probability (0.0 = no
 dropout, 1.0 = drop all) training: whether the layer is in training mode
 (affects dropout behavior)
+
+#### func (*ModelBuilder) AddELU
+
+```go
+func (mb *ModelBuilder) AddELU(alpha float32, name string) *ModelBuilder
+```
+AddELU adds an ELU activation to the model alpha: controls saturation level for
+negative inputs (default: 1.0)
 
 #### func (*ModelBuilder) AddLayer
 

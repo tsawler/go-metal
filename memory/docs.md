@@ -6,6 +6,10 @@
 ## Usage
 
 ```go
+var ConvertTensorTypeFunc func(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType DataType) error
+```
+
+```go
 var CopyFloat32DataFunc func(buffer unsafe.Pointer, data []float32) error
 ```
 
@@ -32,6 +36,13 @@ func CreateMockDevice() unsafe.Pointer
 ```
 CreateMockDevice creates a mock Metal device for testing
 
+#### func  GetDevice
+
+```go
+func GetDevice() unsafe.Pointer
+```
+GetDevice returns the device pointer from the global memory manager
+
 #### func  InitializeGlobalMemoryManager
 
 ```go
@@ -49,6 +60,19 @@ func SetupBridge(
 )
 ```
 SetupBridge allows external packages to set up bridge functions
+
+#### func  SetupBridgeWithConvert
+
+```go
+func SetupBridgeWithConvert(
+	toFloat32SliceFunc func(unsafe.Pointer, int) ([]float32, error),
+	copyFloat32DataFunc func(unsafe.Pointer, []float32) error,
+	copyInt32DataFunc func(unsafe.Pointer, []int32) error,
+	convertTensorTypeFunc func(unsafe.Pointer, unsafe.Pointer, []int, int, int) error,
+)
+```
+SetupBridgeWithConvert allows external packages to set up bridge functions
+including type conversion
 
 #### type BufferPool
 
@@ -211,6 +235,14 @@ NewTensor creates a new GPU-resident tensor
 func (t *Tensor) Clone() *Tensor
 ```
 Clone returns the same tensor with incremented reference count
+
+#### func (*Tensor) ConvertTo
+
+```go
+func (t *Tensor) ConvertTo(dtype DataType) (*Tensor, error)
+```
+ConvertTo creates a new tensor with the specified data type, performing type
+conversion on GPU
 
 #### func (*Tensor) CopyFloat32Data
 

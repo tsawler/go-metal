@@ -31,6 +31,13 @@ func CommitCommandBuffer(commandBuffer unsafe.Pointer) error
 ```
 CommitCommandBuffer commits a command buffer for execution
 
+#### func  ConvertTensorType
+
+```go
+func ConvertTensorType(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType int, device unsafe.Pointer) error
+```
+ConvertTensorType converts a tensor from one data type to another on GPU
+
 #### func  CopyDataToMetalBuffer
 
 ```go
@@ -457,6 +464,18 @@ func SetupMemoryBridge(setupFunc func(
 SetupMemoryBridge sets up bridge functions for memory package to avoid import
 cycles Call this from packages that need both cgo_bridge and memory
 functionality
+
+#### func  SetupMemoryBridgeWithConvert
+
+```go
+func SetupMemoryBridgeWithConvert(setupFunc func(
+	func(unsafe.Pointer, int) ([]float32, error),
+	func(unsafe.Pointer, []float32) error,
+	func(unsafe.Pointer, []int32) error,
+	func(unsafe.Pointer, unsafe.Pointer, []int, int, int) error,
+), getDeviceFunc func() unsafe.Pointer)
+```
+SetupMemoryBridgeWithConvert sets up bridge functions including type conversion
 
 #### func  WaitCommandBufferCompletion
 
