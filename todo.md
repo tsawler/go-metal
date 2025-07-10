@@ -103,7 +103,12 @@ This phase focuses on building out the core utility of the `go-metal` library by
 
 * **Expand Core ML Functionality:**
 
-    * ✅ **More Optimizers:** ~~Add support for other popular optimization algorithms like RMSprop, Adagrad, and potentially more advanced ones like L-BFGS.~~ **COMPLETED** - RMSProp optimizer fully implemented with centered/non-centered variants, complete MPSGraph integration, and production validation with regression and classification tasks.
+    * **More Optimizers:** Expand optimizer support beyond current SGD, Adam, and RMSProp implementations:
+      * ✅ **RMSProp:** **COMPLETED** - Fully implemented with centered/non-centered variants, complete MPSGraph integration, and production validation with regression and classification tasks
+      * **L-BFGS:** Quasi-Newton optimization algorithm for high-precision convergence on small-to-medium datasets and scientific computing applications
+      * **AdaGrad:** Adaptive gradient algorithm particularly effective for sparse data and NLP applications, with per-parameter learning rate adaptation
+      * **AdaDelta:** Extension of AdaGrad that addresses diminishing learning rate problem, requiring no manual learning rate tuning
+      * **Nadam:** Nesterov-accelerated Adam combining adaptive learning rates with Nesterov momentum for improved convergence in modern deep learning
 
     * ✅ **Common Loss Functions:** ~~Implement a broader range of loss functions, including Mean Squared Error (MSE), Binary Cross-Entropy with Logits (BCEWithLogitsLoss), Categorical Cross-Entropy, and Huber Loss.~~ **COMPLETED** - Full regression and classification loss function support implemented:
       * **Regression:** MSE, MAE, and Huber loss with MPSGraph implementations
