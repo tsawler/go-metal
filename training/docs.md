@@ -1575,9 +1575,15 @@ const (
 	ActivationPattern     PlotType = "activation_pattern"
 
 	// Regression plots
-	RegressionScatter PlotType = "regression_scatter"
-	ResidualPlot      PlotType = "residual_plot"
-	QQPlot            PlotType = "qq_plot"
+	RegressionScatter      PlotType = "regression_scatter"
+	ResidualPlot           PlotType = "residual_plot"
+	QQPlot                 PlotType = "qq_plot"
+	FeatureImportancePlot  PlotType = "feature_importance"
+	LearningCurvePlot      PlotType = "learning_curve"
+	ValidationCurvePlot    PlotType = "validation_curve"
+	PredictionIntervalPlot PlotType = "prediction_interval"
+	FeatureCorrelationPlot PlotType = "feature_correlation"
+	PartialDependencePlot  PlotType = "partial_dependence"
 )
 ```
 
@@ -2359,6 +2365,29 @@ func (vc *VisualizationCollector) GenerateConfusionMatrixPlot() PlotData
 ```
 GenerateConfusionMatrixPlot generates confusion matrix plot data
 
+#### func (*VisualizationCollector) GenerateFeatureCorrelationPlot
+
+```go
+func (vc *VisualizationCollector) GenerateFeatureCorrelationPlot() PlotData
+```
+GenerateFeatureCorrelationPlot generates feature correlation heatmap for
+multicollinearity analysis
+
+#### func (*VisualizationCollector) GenerateFeatureImportancePlot
+
+```go
+func (vc *VisualizationCollector) GenerateFeatureImportancePlot() PlotData
+```
+GenerateFeatureImportancePlot generates feature importance plot data
+
+#### func (*VisualizationCollector) GenerateLearningCurvePlot
+
+```go
+func (vc *VisualizationCollector) GenerateLearningCurvePlot() PlotData
+```
+GenerateLearningCurvePlot generates learning curve plot data showing performance
+vs training set size
+
 #### func (*VisualizationCollector) GenerateLearningRateSchedulePlot
 
 ```go
@@ -2366,12 +2395,28 @@ func (vc *VisualizationCollector) GenerateLearningRateSchedulePlot() PlotData
 ```
 GenerateLearningRateSchedulePlot generates learning rate schedule plot data
 
+#### func (*VisualizationCollector) GeneratePartialDependencePlot
+
+```go
+func (vc *VisualizationCollector) GeneratePartialDependencePlot() PlotData
+```
+GeneratePartialDependencePlot generates partial dependence plots for individual
+feature effect analysis
+
 #### func (*VisualizationCollector) GeneratePrecisionRecallPlot
 
 ```go
 func (vc *VisualizationCollector) GeneratePrecisionRecallPlot() PlotData
 ```
 GeneratePrecisionRecallPlot generates Precision-Recall curve plot data
+
+#### func (*VisualizationCollector) GeneratePredictionIntervalPlot
+
+```go
+func (vc *VisualizationCollector) GeneratePredictionIntervalPlot() PlotData
+```
+GeneratePredictionIntervalPlot generates prediction interval plot data showing
+prediction uncertainty
 
 #### func (*VisualizationCollector) GenerateQQPlot
 
@@ -2409,6 +2454,14 @@ func (vc *VisualizationCollector) GenerateTrainingCurvesPlot() PlotData
 ```
 GenerateTrainingCurvesPlot generates training curves plot data
 
+#### func (*VisualizationCollector) GenerateValidationCurvePlot
+
+```go
+func (vc *VisualizationCollector) GenerateValidationCurvePlot() PlotData
+```
+GenerateValidationCurvePlot generates validation curve plot data showing
+performance vs hyperparameter values
+
 #### func (*VisualizationCollector) IsEnabled
 
 ```go
@@ -2437,12 +2490,36 @@ func (vc *VisualizationCollector) RecordEpoch(epoch int, trainLoss, trainAcc, va
 ```
 RecordEpoch records epoch-level metrics
 
+#### func (*VisualizationCollector) RecordFeatureCorrelation
+
+```go
+func (vc *VisualizationCollector) RecordFeatureCorrelation(correlationMatrix [][]float64, featureNames []string)
+```
+RecordFeatureCorrelation records feature correlation matrix for
+multicollinearity analysis
+
+#### func (*VisualizationCollector) RecordFeatureImportance
+
+```go
+func (vc *VisualizationCollector) RecordFeatureImportance(featureNames []string, coefficients []float64, stdErrors []float64)
+```
+RecordFeatureImportance records feature names and their coefficients for
+regression models
+
 #### func (*VisualizationCollector) RecordGradientStats
 
 ```go
 func (vc *VisualizationCollector) RecordGradientStats(layerName, paramType string, stats GradientStats)
 ```
 RecordGradientStats records gradient statistics
+
+#### func (*VisualizationCollector) RecordLearningCurve
+
+```go
+func (vc *VisualizationCollector) RecordLearningCurve(trainingSizes []int, trainingScores, validationScores []float64, trainingStdErrors, validationStdErrors []float64)
+```
+RecordLearningCurve records learning curve data showing performance vs training
+set size
 
 #### func (*VisualizationCollector) RecordPRData
 
@@ -2457,6 +2534,22 @@ RecordPRData records Precision-Recall curve data points
 func (vc *VisualizationCollector) RecordParameterStats(layerName, paramType string, stats ParameterStats)
 ```
 RecordParameterStats records parameter distribution statistics
+
+#### func (*VisualizationCollector) RecordPartialDependence
+
+```go
+func (vc *VisualizationCollector) RecordPartialDependence(featureNames []string, featureValues [][]float64, partialEffects [][]float64)
+```
+RecordPartialDependence records partial dependence data for individual feature
+effect analysis
+
+#### func (*VisualizationCollector) RecordPredictionInterval
+
+```go
+func (vc *VisualizationCollector) RecordPredictionInterval(x, y []float64, confidenceLower, confidenceUpper, predictionLower, predictionUpper, standardErrors []float64)
+```
+RecordPredictionInterval records prediction interval data for regression
+uncertainty visualization
 
 #### func (*VisualizationCollector) RecordROCData
 
@@ -2478,6 +2571,14 @@ RecordRegressionData records regression predictions and true values
 func (vc *VisualizationCollector) RecordTrainingStep(step int, loss, accuracy, learningRate float64)
 ```
 RecordTrainingStep records training metrics for a single step
+
+#### func (*VisualizationCollector) RecordValidationCurve
+
+```go
+func (vc *VisualizationCollector) RecordValidationCurve(parameterName string, parameterValues []float64, trainingScores, validationScores []float64, trainingStdErrors, validationStdErrors []float64)
+```
+RecordValidationCurve records validation curve data showing performance vs
+hyperparameter values
 
 #### func (*VisualizationCollector) RecordValidationStep
 
