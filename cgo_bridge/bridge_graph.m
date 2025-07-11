@@ -1119,6 +1119,14 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
             NSLog(@"🚀 PRE-COMPILATION: Building RMSProp parameter update operations...");
             
+            // CRITICAL: Verify array integrity before use to prevent string/array confusion crashes
+            if (![engine->squaredGradPlaceholders isKindOfClass:[NSMutableArray class]]) {
+                NSLog(@"❌ CRITICAL: squaredGradPlaceholders is not NSMutableArray (type: %@) - aborting", [engine->squaredGradPlaceholders class]);
+                return NO;
+            }
+            
+            NSLog(@"🔍 Array verification: squaredGradPlaceholders has %lu items", [engine->squaredGradPlaceholders count]);
+            
             // Pre-compile RMSProp parameter updates
             NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
             NSMutableArray<MPSGraphTensor*>* precompiledUpdatedSquaredGrads = [[NSMutableArray alloc] init];
@@ -1128,6 +1136,13 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
                 MPSGraphTensor* paramTensor = [engine->allWeightPlaceholders objectAtIndex:i];
                 MPSGraphTensor* gradTensor = [precompiledGradientTensors objectAtIndex:i];
+                
+                // SAFE: Verify index bounds and type before accessing
+                if (i >= [engine->squaredGradPlaceholders count]) {
+                    NSLog(@"❌ CRITICAL: Index %d out of bounds for squaredGradPlaceholders (count: %lu)", i, [engine->squaredGradPlaceholders count]);
+                    return NO;
+                }
+                
                 MPSGraphTensor* squaredGradTensor = [engine->squaredGradPlaceholders objectAtIndex:i];
                 
                 if (gradTensor && squaredGradTensor) {

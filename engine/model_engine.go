@@ -1542,13 +1542,10 @@ func createModelConfigFromSpec(modelSpec *layers.ModelSpec) (cgo_bridge.ModelCon
 		}
 	}
 	
-	// For now, we only support models with exactly 3 conv layers + 2 FC layers
-	// This matches the current bridge implementation constraints
-	if len(convLayers) != 3 {
-		return cgo_bridge.ModelConfig{}, fmt.Errorf("current bridge implementation only supports models with exactly 3 Conv2D layers, got %d", len(convLayers))
-	}
-	if len(fcLayers) != 2 {
-		return cgo_bridge.ModelConfig{}, fmt.Errorf("current bridge implementation only supports models with exactly 2 Dense layers, got %d", len(fcLayers))
+	// Hybrid Engine optimizations are designed for 3 conv + 2 FC pattern
+	// For other architectures, recommend Dynamic Engine instead
+	if len(convLayers) != 3 || len(fcLayers) != 2 {
+		return cgo_bridge.ModelConfig{}, fmt.Errorf("Hybrid Engine is optimized for 3 Conv2D + 2 Dense layers (got %d conv, %d dense). Consider using Dynamic Engine for flexible architectures", len(convLayers), len(fcLayers))
 	}
 	
 	// Extract actual layer parameters from the model spec using the correct API

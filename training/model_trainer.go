@@ -162,6 +162,17 @@ func NewModelTrainer(
 			modelEngine, err = engine.NewModelTrainingEngine(modelSpec, bridgeConfig)
 		}
 		
+		// SMART FALLBACK: If Hybrid Engine fails due to architecture constraints,
+		// automatically fall back to Dynamic Engine for flexible architecture support
+		if err != nil && (selectedEngine == Hybrid) {
+			fmt.Printf("⚠️  Hybrid Engine incompatible with model architecture, falling back to Dynamic Engine\n")
+			fmt.Printf("    Error: %v\n", err)
+			modelEngine, err = engine.NewModelTrainingEngineDynamic(modelSpec, bridgeConfig)
+			if err == nil {
+				fmt.Printf("✅ Successfully created Dynamic Engine as fallback\n")
+			}
+		}
+		
 	default:
 		// Fallback to dynamic engine for unknown types
 		fmt.Printf("⚠️  Unknown engine type, falling back to Dynamic Engine\n")

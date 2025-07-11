@@ -9,8 +9,10 @@
 // PRODUCTION OPTIMIZATION: Cache Adam scalar tensors to eliminate allocation overhead
 void cacheAdamScalarTensors(training_engine_t* engine) {
     @autoreleasepool {
-        if (engine->adamScalarsCached || !engine->graph) {
-            return; // Already cached or no graph available
+        if (engine->adamScalarsCached || !engine->graph || !engine->device) {
+            NSLog(@"⚠️  Cannot cache Adam scalars: cached=%d, graph=%p, device=%p", 
+                  engine->adamScalarsCached, engine->graph, engine->device);
+            return; // Already cached or no graph/device available
         }
         
         NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching Adam scalar tensors to eliminate allocation overhead...");
@@ -46,10 +48,25 @@ void cacheAdamScalarTensors(training_engine_t* engine) {
                                                                        name:@"bias_correction_2"];
         
         // PERFORMANCE: Create cached bias correction buffers to avoid per-step allocations
+        // Additional safety check for device validity before buffer creation
+        if (!engine->device) {
+            NSLog(@"❌ CRITICAL: Device is nil during buffer creation - aborting Adam scalar caching");
+            return;
+        }
+        
         engine->cachedBiasCorr1Buffer = [engine->device newBufferWithLength:sizeof(float) 
                                                                      options:MTLResourceStorageModeShared];
+        if (!engine->cachedBiasCorr1Buffer) {
+            NSLog(@"❌ CRITICAL: Failed to create bias correction buffer 1");
+            return;
+        }
+        
         engine->cachedBiasCorr2Buffer = [engine->device newBufferWithLength:sizeof(float) 
                                                                      options:MTLResourceStorageModeShared];
+        if (!engine->cachedBiasCorr2Buffer) {
+            NSLog(@"❌ CRITICAL: Failed to create bias correction buffer 2");
+            return;
+        }
         
         engine->adamScalarsCached = YES;
         NSLog(@"✅ PRODUCTION OPTIMIZATION: Adam scalar tensors cached - zero scalar allocations during training");
@@ -59,8 +76,10 @@ void cacheAdamScalarTensors(training_engine_t* engine) {
 // PRODUCTION OPTIMIZATION: Cache RMSProp scalar tensors to eliminate allocation overhead
 void cacheRMSPropScalarTensors(training_engine_t* engine) {
     @autoreleasepool {
-        if (engine->rmspropScalarsCached || !engine->graph) {
-            return; // Already cached or no graph available
+        if (engine->rmspropScalarsCached || !engine->graph || !engine->device) {
+            NSLog(@"⚠️  Cannot cache RMSProp scalars: cached=%d, graph=%p, device=%p", 
+                  engine->rmspropScalarsCached, engine->graph, engine->device);
+            return; // Already cached or no graph/device available
         }
         
         NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching RMSProp scalar tensors to eliminate allocation overhead...");
@@ -96,8 +115,10 @@ void cacheRMSPropScalarTensors(training_engine_t* engine) {
 // PRODUCTION OPTIMIZATION: Cache SGD scalar tensors to eliminate allocation overhead
 void cacheSGDScalarTensors(training_engine_t* engine) {
     @autoreleasepool {
-        if (engine->sgdScalarsCached || !engine->graph) {
-            return; // Already cached or no graph available
+        if (engine->sgdScalarsCached || !engine->graph || !engine->device) {
+            NSLog(@"⚠️  Cannot cache SGD scalars: cached=%d, graph=%p, device=%p", 
+                  engine->sgdScalarsCached, engine->graph, engine->device);
+            return; // Already cached or no graph/device available
         }
         
         NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching SGD scalar tensors to eliminate allocation overhead...");

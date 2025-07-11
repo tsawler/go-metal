@@ -79,7 +79,84 @@ This phase prioritizes resolving existing limitations and implementing fundament
 
     * **Further Performance Optimization:** Continuously profile and optimize existing components to squeeze out additional performance gains.
 
+    * **Dynamic Engine CNN Performance Optimization:** **HIGH PRIORITY** - Optimize the Dynamic Engine to match or exceed Hybrid Engine performance for CNN architectures (currently 20k+ batches/second). This is critical as we've removed artificial architecture constraints and need Dynamic Engine to be the primary high-performance option.
+
+      **Background:**
+      * **Current Performance Gap:** Hybrid Engine achieves 20k+ batches/second for CNN workloads vs lower Dynamic Engine performance
+      * **Architecture Constraint Removal:** Hybrid Engine's 3 conv + 2 FC constraint has been removed with smart fallback to Dynamic Engine
+      * **Strategic Importance:** Dynamic Engine should become the default high-performance option for all architectures
+      * **Proven Architecture:** Dynamic Engine already supports any model architecture with MPSGraph-centric design
+
+      **Implementation Strategy:**
+
+      1. **CNN Pattern Detection & Optimization:**
+         * **Automatic CNN Pattern Recognition:** Enhance `AnalyzeModelArchitecture()` in `training/simple_trainer.go` to detect CNN patterns and trigger optimizations
+         * **Convolution-Specific Paths:** Add specialized MPSGraph construction paths for detected CNN patterns in `engine/model_engine.go:NewModelTrainingEngineDynamic()`
+         * **Layer Fusion Opportunities:** Implement Conv2D+ReLU, Conv2D+BatchNorm+ReLU fusion patterns in the dynamic graph builder
+         * **Memory Layout Optimization:** Optimize tensor memory layouts for CNN data flow patterns (NCHW vs NHWC considerations)
+
+      2. **MPSGraph Optimization Enhancements:**
+         * **Kernel Fusion Analysis:** Profile current Dynamic Engine MPSGraph execution to identify fusion opportunities missed by Apple's automatic fusion
+         * **Manual Fusion Paths:** Implement manual fusion for common CNN patterns (Conv+Bias+Activation, BatchNorm+Activation, etc.)
+         * **Graph Compilation Caching:** Cache compiled MPSGraphExecutable objects for repeated model architectures to avoid recompilation overhead
+         * **Tensor Reuse Optimization:** Implement smart tensor buffer reuse patterns for CNN forward/backward passes
+
+      3. **Memory Management Improvements:**
+         * **CNN Buffer Pooling:** Specialized buffer pooling for CNN tensor sizes (feature maps, kernels, etc.) in `memory/` package
+         * **Gradient Buffer Pre-allocation:** Pre-allocate all gradient tensors for CNN patterns to eliminate allocation overhead during training
+         * **Feature Map Sharing:** Implement in-place operations where possible for CNN layers (ReLU, some BatchNorm operations)
+         * **Memory Bandwidth Optimization:** Optimize memory access patterns for typical CNN data flows
+
+      4. **Bridge Optimization:**
+         * **CNN-Optimized CGO Interface:** Add specialized CGO bridge functions for detected CNN patterns in `cgo_bridge/bridge_training.m`
+         * **Batch Processing Optimization:** Optimize batch processing specifically for CNN workloads with 4D tensors
+         * **Command Buffer Optimization:** Implement CNN-specific command buffer pooling and reuse patterns
+         * **Metal Shader Optimization:** Custom Metal compute shaders for common CNN operations when MPSGraph isn't optimal
+
+      5. **Benchmark-Driven Development:**
+         * **Performance Baseline:** Establish detailed benchmarks comparing Dynamic vs Hybrid Engine on identical CNN architectures
+         * **Target Metrics:** Achieve 95%+ of Hybrid Engine performance for 3-conv+2-FC pattern, maintain flexibility for other architectures
+         * **Continuous Profiling:** Implement automated performance regression testing for CNN workloads
+         * **Memory Efficiency:** Monitor and optimize memory usage compared to Hybrid Engine's optimized allocations
+
+      **Key Files to Modify:**
+      * `training/simple_trainer.go` - CNN pattern detection and routing logic
+      * `engine/model_engine.go` - Dynamic engine CNN optimization paths
+      * `cgo_bridge/bridge_training.m` - CNN-optimized bridge functions
+      * `memory/` - CNN-specific buffer pooling and management
+      * `layers/` - Layer-specific optimizations for common CNN patterns
+
+      **Success Criteria:**
+      * Dynamic Engine achieves 18k+ batches/second for CNN workloads (90%+ of current Hybrid performance)
+      * Maintains flexibility for non-CNN architectures without performance regression
+      * Memory usage within 10% of optimized Hybrid Engine
+      * Zero breaking changes to existing Dynamic Engine API
+      * Automated benchmarks prevent performance regression
+
+      **Implementation Priority:**
+      1. **Phase 1 (Immediate):** CNN pattern detection and basic optimization paths
+      2. **Phase 2 (Short-term):** MPSGraph fusion optimization and memory management improvements  
+      3. **Phase 3 (Medium-term):** Bridge optimization and Metal shader enhancements
+      4. **Phase 4 (Long-term):** Advanced optimizations and continuous performance tuning
+
+      **Dependencies:**
+      * Performance profiling tools for MPSGraph execution analysis
+      * Benchmark infrastructure for automated performance testing
+      * Memory profiling tools for optimization validation
+
     * ✅ **Debug Output Cleanup:** ~~Clean up verbose debug logging for production use.~~ **COMPLETED** - Removed debug messages from CGO bridge files, console output now shows clean training progress only.
+
+    * ✅ **Dynamic Engine Crash Fixes:** **COMPLETED** - Resolved critical segmentation faults in Dynamic Engine that prevented MLP model training and multiple engine creation scenarios.
+      * ✅ **Root Cause Identified:** Invalid device pointer access in optimizer scalar tensor caching functions and uninitialized memory in `training_engine_t` structures
+      * ✅ **Device Validity Checks:** Added safety checks in `cacheAdamScalarTensors()`, `cacheRMSPropScalarTensors()`, and `cacheSGDScalarTensors()` functions
+      * ✅ **Enhanced Buffer Creation Safety:** Added defensive checks for Metal buffer allocation with proper error handling
+      * ✅ **Array Type Verification:** Added type checking in RMSProp pre-compilation to prevent string/array confusion crashes
+      * ✅ **Memory Initialization Fix:** Replaced `malloc()` + `memset()` with `calloc()` for proper zero-initialization of engine structures
+      * ✅ **Compiler Warning Resolution:** Eliminated non-trivial memaccess warnings by using safe memory allocation practices
+      * ✅ **Architecture Compliance:** All fixes maintain GPU-resident principles, minimize CGO calls, support MPSGraph-centric workflows, and implement proper memory management
+      * **Validation Results:** MLP models (2D input) and CNN models (4D input) both work correctly with Dynamic Engine across all optimizers (Adam, RMSProp, SGD)
+      * **Technical Impact:** Dynamic Engine now serves as the universal high-performance engine supporting ANY model architecture without artificial constraints
+      * **Files Modified:** `cgo_bridge/bridge_device.m`, `cgo_bridge/bridge_optimizer.m`, `cgo_bridge/bridge_graph.m`
 
 ### Phase 2: Core Library Expansion & Utilities (Short-to-Medium Term - Next 3-6 Months)
 
@@ -108,7 +185,7 @@ This phase focuses on building out the core utility of the `go-metal` library by
       * ✅ **L-BFGS:** **COMPLETED** - Fully implemented with GPU-resident two-loop recursion, circular history buffer management, direct Metal buffer operations for MPSGraph compatibility, and comprehensive demo application. Supports configurable history size, line search parameters, and memory-efficient circular buffers. Fixed race condition in rho buffer management for stable multi-step optimization.
       * ✅ **AdaGrad:** **COMPLETED** - Fully implemented with GPU-resident accumulated squared gradient tracking, adaptive per-parameter learning rates, MPSGraph-optimized computation, and comprehensive demo application. Supports weight decay (L2 regularization), sparse gradient handling, and is ideal for NLP, recommendation systems, and problems with infrequent but important features.
       * ✅ **AdaDelta:** **COMPLETED** - Fully implemented with GPU-resident exponential moving averages for gradients and parameter updates, RMS-based adaptive learning rate computation eliminating manual learning rate tuning, and comprehensive demo application. Features dual accumulator design (E[g²] and E[Δx²]), automatic learning rate adaptation, weight decay support, and robust optimization across different problem types without hyperparameter tuning.
-      * **Nadam:** Nesterov-accelerated Adam combining adaptive learning rates with Nesterov momentum for improved convergence in modern deep learning
+      * ✅ **Nadam:** **COMPLETED** - Fully implemented Nesterov-accelerated Adam optimizer combining adaptive learning rates with Nesterov momentum for improved convergence in modern deep learning. Features GPU-resident state management, momentum schedule parameters, bias correction, MPSGraph integration, comprehensive demo application, and extensive unit tests. Provides faster convergence than standard Adam through look-ahead gradient computation and adaptive momentum scheduling.
 
     * ✅ **Common Loss Functions:** ~~Implement a broader range of loss functions, including Mean Squared Error (MSE), Binary Cross-Entropy with Logits (BCEWithLogitsLoss), Categorical Cross-Entropy, and Huber Loss.~~ **COMPLETED** - Full regression and classification loss function support implemented:
       * **Regression:** MSE, MAE, and Huber loss with MPSGraph implementations

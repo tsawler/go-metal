@@ -763,8 +763,9 @@ uintptr_t create_training_engine_dynamic(
             return 0;
         }
         
-        // Allocate training engine
-        training_engine_t* engine = malloc(sizeof(training_engine_t));
+        // Allocate and zero-initialize training engine to prevent garbage values
+        // calloc is safe for structs with Objective-C objects since nil == 0
+        training_engine_t* engine = calloc(1, sizeof(training_engine_t));
         if (!engine) {
             NSLog(@"Failed to allocate training engine");
             return 0;
