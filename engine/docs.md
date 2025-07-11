@@ -252,6 +252,13 @@ func (e *MPSTrainingEngine) GetDevice() unsafe.Pointer
 ```
 GetDevice returns the Metal device
 
+#### func (*MPSTrainingEngine) GetLBFGSStats
+
+```go
+func (e *MPSTrainingEngine) GetLBFGSStats() map[string]interface{}
+```
+GetLBFGSStats returns L-BFGS optimizer statistics
+
 #### func (*MPSTrainingEngine) UpdateAdamLearningRate
 
 ```go
@@ -451,6 +458,16 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdam(
 ) (float32, error)
 ```
 ExecuteModelTrainingStepWithAdam executes model training with Adam optimizer
+
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepWithLBFGS
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithLBFGS(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error)
+```
+ExecuteModelTrainingStepWithLBFGS executes model training with L-BFGS optimizer
 
 #### func (*ModelTrainingEngine) GetModelSpec
 

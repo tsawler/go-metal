@@ -373,6 +373,32 @@ int execute_lbfgs_step_mpsgraph_pooled(
     uintptr_t command_pool,
     float* step_size
 );
+
+// AdaGrad optimizer forward declarations
+int execute_adagrad_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float epsilon,
+    float weight_decay
+);
+
+int execute_adagrad_step_mpsgraph_pooled(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float epsilon,
+    float weight_decay,
+    uintptr_t command_pool
+);
 */
 import "C"
 import (
@@ -2072,4 +2098,112 @@ func ExecuteLBFGSStepMPSGraph(
 	}
 
 	return float32(stepSize), nil
+}
+
+// ExecuteAdaGradStepMPSGraph executes a single AdaGrad optimization step using MPSGraph for optimal GPU performance
+func ExecuteAdaGradStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	learningRate float32,
+	epsilon float32,
+	weightDecay float32,
+) error {
+	if device == nil {
+		return fmt.Errorf("device cannot be nil")
+	}
+
+	if len(weightBuffers) != numWeights || len(gradientBuffers) != numWeights || 
+	   len(squaredGradAvgBuffers) != numWeights || len(bufferSizes) != numWeights {
+		return fmt.Errorf("buffer count mismatch: weights=%d, gradients=%d, squared_grad_avg=%d, sizes=%d, expected=%d",
+			len(weightBuffers), len(gradientBuffers), len(squaredGradAvgBuffers), len(bufferSizes), numWeights)
+	}
+
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cSquaredGradAvgBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		cSquaredGradAvgBuffers[i] = C.uintptr_t(uintptr(squaredGradAvgBuffers[i]))
+		cBufferSizes[i] = C.int(bufferSizes[i])
+	}
+
+	result := C.execute_adagrad_step_mpsgraph(
+		C.uintptr_t(uintptr(device)),
+		&cWeightBuffers[0],
+		&cGradientBuffers[0],
+		&cSquaredGradAvgBuffers[0],
+		C.int(numWeights),
+		&cBufferSizes[0],
+		C.float(learningRate),
+		C.float(epsilon),
+		C.float(weightDecay),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("AdaGrad MPSGraph step failed with error code: %d", result)
+	}
+
+	return nil
+}
+
+// ExecuteAdaGradStepMPSGraphPooled executes a single AdaGrad optimization step using MPSGraph with command buffer pooling
+func ExecuteAdaGradStepMPSGraphPooled(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	learningRate float32,
+	epsilon float32,
+	weightDecay float32,
+	commandPool unsafe.Pointer,
+) error {
+	if device == nil {
+		return fmt.Errorf("device cannot be nil")
+	}
+
+	if len(weightBuffers) != numWeights || len(gradientBuffers) != numWeights || 
+	   len(squaredGradAvgBuffers) != numWeights || len(bufferSizes) != numWeights {
+		return fmt.Errorf("buffer count mismatch: weights=%d, gradients=%d, squared_grad_avg=%d, sizes=%d, expected=%d",
+			len(weightBuffers), len(gradientBuffers), len(squaredGradAvgBuffers), len(bufferSizes), numWeights)
+	}
+
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cSquaredGradAvgBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		cSquaredGradAvgBuffers[i] = C.uintptr_t(uintptr(squaredGradAvgBuffers[i]))
+		cBufferSizes[i] = C.int(bufferSizes[i])
+	}
+
+	result := C.execute_adagrad_step_mpsgraph_pooled(
+		C.uintptr_t(uintptr(device)),
+		&cWeightBuffers[0],
+		&cGradientBuffers[0],
+		&cSquaredGradAvgBuffers[0],
+		C.int(numWeights),
+		&cBufferSizes[0],
+		C.float(learningRate),
+		C.float(epsilon),
+		C.float(weightDecay),
+		C.uintptr_t(uintptr(commandPool)),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("AdaGrad MPSGraph pooled step failed with error code: %d", result)
+	}
+
+	return nil
 }

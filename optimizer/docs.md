@@ -5,6 +5,96 @@
 
 ## Usage
 
+#### type AdaGradConfig
+
+```go
+type AdaGradConfig struct {
+	LearningRate float32 // Learning rate
+	Epsilon      float32 // Small constant for numerical stability
+	WeightDecay  float32 // L2 regularization strength
+}
+```
+
+AdaGradConfig holds configuration for AdaGrad optimizer
+
+#### func  DefaultAdaGradConfig
+
+```go
+func DefaultAdaGradConfig() AdaGradConfig
+```
+DefaultAdaGradConfig returns default AdaGrad optimizer configuration
+
+#### type AdaGradOptimizerState
+
+```go
+type AdaGradOptimizerState struct {
+	WeightBuffers []unsafe.Pointer // Current weight tensors
+}
+```
+
+AdaGradOptimizerState represents GPU-resident AdaGrad optimizer state
+
+#### func  NewAdaGradOptimizer
+
+```go
+func NewAdaGradOptimizer(
+	config AdaGradConfig,
+	weightShapes [][]int,
+	memoryManager *memory.MemoryManager,
+	device unsafe.Pointer,
+) (*AdaGradOptimizerState, error)
+```
+NewAdaGradOptimizer creates a new GPU-resident AdaGrad optimizer
+
+#### func (*AdaGradOptimizerState) Cleanup
+
+```go
+func (adagrad *AdaGradOptimizerState) Cleanup()
+```
+Cleanup releases all GPU buffers
+
+#### func (*AdaGradOptimizerState) GetStats
+
+```go
+func (adagrad *AdaGradOptimizerState) GetStats() map[string]interface{}
+```
+GetStats returns optimizer statistics
+
+#### func (*AdaGradOptimizerState) GetStep
+
+```go
+func (adagrad *AdaGradOptimizerState) GetStep() uint64
+```
+GetStep returns the current optimization step count
+
+#### func (*AdaGradOptimizerState) SetCommandPool
+
+```go
+func (adagrad *AdaGradOptimizerState) SetCommandPool(pool unsafe.Pointer)
+```
+SetCommandPool sets the command buffer pool for Metal operations
+
+#### func (*AdaGradOptimizerState) SetWeightBuffers
+
+```go
+func (adagrad *AdaGradOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error
+```
+SetWeightBuffers sets the current weight buffer pointers
+
+#### func (*AdaGradOptimizerState) Step
+
+```go
+func (adagrad *AdaGradOptimizerState) Step(gradientBuffers []unsafe.Pointer) error
+```
+Step performs a single AdaGrad optimization step
+
+#### func (*AdaGradOptimizerState) UpdateLearningRate
+
+```go
+func (adagrad *AdaGradOptimizerState) UpdateLearningRate(newLR float32) error
+```
+UpdateLearningRate updates the learning rate for the optimizer
+
 #### type AdamConfig
 
 ```go
@@ -130,6 +220,99 @@ type AdamStats struct {
 ```
 
 AdamStats provides statistics about the Adam optimizer
+
+#### type LBFGSConfig
+
+```go
+type LBFGSConfig struct {
+	HistorySize   int     // m parameter (number of corrections to store)
+	LineSearchTol float32 // Tolerance for line search
+	MaxLineSearch int     // Maximum line search iterations
+	C1            float32 // Armijo condition parameter
+	C2            float32 // Wolfe condition parameter
+	InitialStep   float32 // Initial step size for line search
+}
+```
+
+LBFGSConfig holds configuration for L-BFGS optimizer
+
+#### func  DefaultLBFGSConfig
+
+```go
+func DefaultLBFGSConfig() LBFGSConfig
+```
+DefaultLBFGSConfig returns default L-BFGS optimizer configuration
+
+#### type LBFGSOptimizerState
+
+```go
+type LBFGSOptimizerState struct {
+	WeightBuffers []unsafe.Pointer // Current weight tensors
+}
+```
+
+LBFGSOptimizerState represents GPU-resident L-BFGS optimizer state
+
+#### func  NewLBFGSOptimizer
+
+```go
+func NewLBFGSOptimizer(
+	config LBFGSConfig,
+	weightShapes [][]int,
+	memoryManager *memory.MemoryManager,
+	device unsafe.Pointer,
+) (*LBFGSOptimizerState, error)
+```
+NewLBFGSOptimizer creates a new GPU-resident L-BFGS optimizer
+
+#### func (*LBFGSOptimizerState) Cleanup
+
+```go
+func (lbfgs *LBFGSOptimizerState) Cleanup()
+```
+Cleanup releases all GPU buffers
+
+#### func (*LBFGSOptimizerState) GetStats
+
+```go
+func (lbfgs *LBFGSOptimizerState) GetStats() map[string]interface{}
+```
+GetStats returns optimizer statistics
+
+#### func (*LBFGSOptimizerState) GetStep
+
+```go
+func (lbfgs *LBFGSOptimizerState) GetStep() uint64
+```
+GetStep returns the current optimization step count
+
+#### func (*LBFGSOptimizerState) SetCommandPool
+
+```go
+func (lbfgs *LBFGSOptimizerState) SetCommandPool(pool unsafe.Pointer)
+```
+SetCommandPool sets the command buffer pool for Metal operations
+
+#### func (*LBFGSOptimizerState) SetWeightBuffers
+
+```go
+func (lbfgs *LBFGSOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error
+```
+SetWeightBuffers sets the current weight buffer pointers
+
+#### func (*LBFGSOptimizerState) Step
+
+```go
+func (lbfgs *LBFGSOptimizerState) Step(gradientBuffers []unsafe.Pointer, currentLoss float32) error
+```
+Step performs a single L-BFGS optimization step
+
+#### func (*LBFGSOptimizerState) UpdateLearningRate
+
+```go
+func (lbfgs *LBFGSOptimizerState) UpdateLearningRate(newLR float32) error
+```
+UpdateLearningRate is not used in L-BFGS (uses line search instead)
 
 #### type RMSPropConfig
 

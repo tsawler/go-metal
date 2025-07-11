@@ -105,7 +105,7 @@ This phase focuses on building out the core utility of the `go-metal` library by
 
     * **More Optimizers:** Expand optimizer support beyond current SGD, Adam, and RMSProp implementations:
       * ✅ **RMSProp:** **COMPLETED** - Fully implemented with centered/non-centered variants, complete MPSGraph integration, and production validation with regression and classification tasks
-      * **L-BFGS:** Quasi-Newton optimization algorithm for high-precision convergence on small-to-medium datasets and scientific computing applications
+      * ✅ **L-BFGS:** **COMPLETED** - Fully implemented with GPU-resident two-loop recursion, circular history buffer management, direct Metal buffer operations for MPSGraph compatibility, and comprehensive demo application. Supports configurable history size, line search parameters, and memory-efficient circular buffers. Fixed race condition in rho buffer management for stable multi-step optimization.
       * **AdaGrad:** Adaptive gradient algorithm particularly effective for sparse data and NLP applications, with per-parameter learning rate adaptation
       * **AdaDelta:** Extension of AdaGrad that addresses diminishing learning rate problem, requiring no manual learning rate tuning
       * **Nadam:** Nesterov-accelerated Adam combining adaptive learning rates with Nesterov momentum for improved convergence in modern deep learning

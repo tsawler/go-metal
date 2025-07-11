@@ -1226,3 +1226,200 @@ int execute_lbfgs_step_mpsgraph_pooled(
         initial_step, c1, c2, max_line_search, current_loss, prev_loss, step_size
     );
 }
+
+// AdaGrad Optimizer Implementation
+
+// Cache AdaGrad scalar tensors to eliminate allocation overhead
+void cacheAdaGradScalarTensors(training_engine_t* engine) {
+    @autoreleasepool {
+        if (engine->adagradScalarsCached || !engine->graph) {
+            return; // Already cached or no graph available
+        }
+        
+        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching AdaGrad scalar tensors...");
+        
+        // Create scalar tensors for AdaGrad hyperparameters ONCE
+        float lr = engine->config.learning_rate;
+        float epsilon = engine->config.epsilon;
+        float weight_decay = engine->config.weight_decay;
+        
+        engine->cachedLrTensor = [engine->graph constantWithScalar:lr dataType:MPSDataTypeFloat32];
+        engine->cachedEpsilonTensor = [engine->graph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+        engine->cachedWeightDecayTensor = [engine->graph constantWithScalar:weight_decay dataType:MPSDataTypeFloat32];
+        
+        engine->adagradScalarsCached = YES;
+        NSLog(@"✅ AdaGrad scalar tensors cached successfully");
+    }
+}
+
+// Execute AdaGrad optimization step using MPSGraph
+int execute_adagrad_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float epsilon,
+    float weight_decay
+) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
+        if (!device) {
+            NSLog(@"Device is nil in AdaGrad step");
+            return -1;
+        }
+        
+        // Create MPSGraph for AdaGrad optimization
+        MPSGraph* adagradGraph = [[MPSGraph alloc] init];
+        if (!adagradGraph) {
+            NSLog(@"Failed to create MPSGraph for AdaGrad optimization");
+            return -2;
+        }
+        
+        // Create command queue
+        id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+        if (!commandQueue) {
+            NSLog(@"Failed to create command queue for AdaGrad step");
+            return -3;
+        }
+        
+        @try {
+            // Create scalar tensors for AdaGrad hyperparameters
+            MPSGraphTensor* lrTensor = [adagradGraph constantWithScalar:learning_rate dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* epsilonTensor = [adagradGraph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* weightDecayTensor = [adagradGraph constantWithScalar:weight_decay dataType:MPSDataTypeFloat32];
+            
+            // Process each weight tensor
+            for (int i = 0; i < num_weights; i++) {
+                id<MTLBuffer> weightsBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                id<MTLBuffer> gradientsBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                id<MTLBuffer> squaredGradAvgBuffer = (__bridge id<MTLBuffer>)(void*)squared_grad_avg_buffers[i];
+                
+                int num_elements = buffer_sizes[i] / sizeof(float);
+                NSArray<NSNumber*>* shape = @[@(num_elements)];
+                
+                // Create placeholders for current values
+                MPSGraphTensor* weightsPlaceholder = [adagradGraph placeholderWithShape:shape
+                                                                             dataType:MPSDataTypeFloat32
+                                                                                 name:[NSString stringWithFormat:@"weights_%d", i]];
+                MPSGraphTensor* gradientsPlaceholder = [adagradGraph placeholderWithShape:shape
+                                                                                dataType:MPSDataTypeFloat32
+                                                                                    name:[NSString stringWithFormat:@"gradients_%d", i]];
+                MPSGraphTensor* squaredGradAvgPlaceholder = [adagradGraph placeholderWithShape:shape
+                                                                                    dataType:MPSDataTypeFloat32
+                                                                                        name:[NSString stringWithFormat:@"squared_grad_avg_%d", i]];
+                
+                // Step 1: Apply weight decay (if enabled)
+                MPSGraphTensor* effectiveGradient = gradientsPlaceholder;
+                if (weight_decay > 0.0f) {
+                    MPSGraphTensor* weightDecayGradient = [adagradGraph multiplicationWithPrimaryTensor:weightsPlaceholder
+                                                                                        secondaryTensor:weightDecayTensor
+                                                                                                   name:@"weight_decay_grad"];
+                    effectiveGradient = [adagradGraph additionWithPrimaryTensor:gradientsPlaceholder
+                                                               secondaryTensor:weightDecayGradient
+                                                                          name:@"effective_gradient"];
+                }
+                
+                // Step 2: Update squared gradient average
+                // squared_grad_avg = squared_grad_avg + gradient^2
+                MPSGraphTensor* gradSquared = [adagradGraph multiplicationWithPrimaryTensor:effectiveGradient
+                                                                           secondaryTensor:effectiveGradient
+                                                                                      name:@"grad_squared"];
+                MPSGraphTensor* newSquaredGradAvg = [adagradGraph additionWithPrimaryTensor:squaredGradAvgPlaceholder
+                                                                           secondaryTensor:gradSquared
+                                                                                      name:@"new_squared_grad_avg"];
+                
+                // Step 3: Compute adjusted learning rate
+                // lr_adj = lr / (sqrt(squared_grad_avg) + epsilon)
+                MPSGraphTensor* sqrtSquaredGradAvg = [adagradGraph squareRootWithTensor:newSquaredGradAvg
+                                                                                   name:@"sqrt_squared_grad_avg"];
+                MPSGraphTensor* denominator = [adagradGraph additionWithPrimaryTensor:sqrtSquaredGradAvg
+                                                                     secondaryTensor:epsilonTensor
+                                                                                name:@"denominator"];
+                MPSGraphTensor* adjustedLR = [adagradGraph divisionWithPrimaryTensor:lrTensor
+                                                                    secondaryTensor:denominator
+                                                                               name:@"adjusted_lr"];
+                
+                // Step 4: Update weights
+                // weights = weights - adjusted_lr * gradient
+                MPSGraphTensor* update = [adagradGraph multiplicationWithPrimaryTensor:adjustedLR
+                                                                      secondaryTensor:effectiveGradient
+                                                                                 name:@"update"];
+                MPSGraphTensor* newWeights = [adagradGraph subtractionWithPrimaryTensor:weightsPlaceholder
+                                                                        secondaryTensor:update
+                                                                                   name:@"new_weights"];
+                
+                // Create feeds dictionary
+                MPSGraphTensorData* weightsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightsBuffer
+                                                                                       shape:shape
+                                                                                    dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* gradientsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:gradientsBuffer
+                                                                                         shape:shape
+                                                                                      dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* squaredGradAvgData = [[MPSGraphTensorData alloc] initWithMTLBuffer:squaredGradAvgBuffer
+                                                                                               shape:shape
+                                                                                            dataType:MPSDataTypeFloat32];
+                
+                NSDictionary* feeds = @{
+                    weightsPlaceholder: weightsData,
+                    gradientsPlaceholder: gradientsData,
+                    squaredGradAvgPlaceholder: squaredGradAvgData
+                };
+                
+                // Execute graph and get results
+                NSDictionary* results = [adagradGraph runWithMTLCommandQueue:commandQueue
+                                                                       feeds:feeds
+                                                              targetTensors:@[newWeights, newSquaredGradAvg]
+                                                           targetOperations:nil];
+                
+                // Extract results
+                MPSGraphTensorData* newWeightsData = results[newWeights];
+                MPSGraphTensorData* newSquaredGradAvgData = results[newSquaredGradAvg];
+                
+                if (newWeightsData && newSquaredGradAvgData) {
+                    // Copy updated weights back to original weight buffer
+                    float* weightPtr = (float*)[weightsBuffer contents];
+                    [[newWeightsData mpsndarray] readBytes:weightPtr strideBytes:nil];
+                    [weightsBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    
+                    // Copy updated squared gradient average back to buffer
+                    float* squaredGradAvgPtr = (float*)[squaredGradAvgBuffer contents];
+                    [[newSquaredGradAvgData mpsndarray] readBytes:squaredGradAvgPtr strideBytes:nil];
+                    [squaredGradAvgBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                } else {
+                    NSLog(@"Failed to get AdaGrad results for weight %d", i);
+                    return -7;
+                }
+            }
+            
+            return 0;
+            
+        } @catch (NSException* exception) {
+            NSLog(@"❌ AdaGrad optimizer exception: %@", exception.reason);
+            return -8;
+        }
+    }
+}
+
+// Pooled version of AdaGrad optimizer
+int execute_adagrad_step_mpsgraph_pooled(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float epsilon,
+    float weight_decay,
+    uintptr_t command_pool
+) {
+    // For now, just call the non-pooled version
+    // TODO: Implement proper command buffer pooling for AdaGrad
+    return execute_adagrad_step_mpsgraph(
+        device_ptr, weight_buffers, gradient_buffers, squared_grad_avg_buffers,
+        num_weights, buffer_sizes, learning_rate, epsilon, weight_decay
+    );
+}

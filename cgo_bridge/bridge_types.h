@@ -258,6 +258,9 @@ typedef struct {
     MPSGraphTensor* lbfgsCachedInitialStepTensor;          // Cached initial step size scalar
     BOOL lbfgsScalarsCached;                                // Flag indicating L-BFGS scalars are cached
     
+    // AdaGrad-specific cached scalars
+    BOOL adagradScalarsCached;                              // Flag indicating AdaGrad scalars are cached
+    
     // Model configuration for dynamic dimensions
     model_config_t model_config;                             // Model architecture configuration
 } training_engine_t;

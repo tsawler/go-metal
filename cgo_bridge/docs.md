@@ -179,6 +179,43 @@ func DrainAutoreleasePool()
 ```
 DrainAutoreleasePool drains the autorelease pool to release Metal resources
 
+#### func  ExecuteAdaGradStepMPSGraph
+
+```go
+func ExecuteAdaGradStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	learningRate float32,
+	epsilon float32,
+	weightDecay float32,
+) error
+```
+ExecuteAdaGradStepMPSGraph executes a single AdaGrad optimization step using
+MPSGraph for optimal GPU performance
+
+#### func  ExecuteAdaGradStepMPSGraphPooled
+
+```go
+func ExecuteAdaGradStepMPSGraphPooled(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	learningRate float32,
+	epsilon float32,
+	weightDecay float32,
+	commandPool unsafe.Pointer,
+) error
+```
+ExecuteAdaGradStepMPSGraphPooled executes a single AdaGrad optimization step
+using MPSGraph with command buffer pooling
+
 #### func  ExecuteAdamStep
 
 ```go
@@ -243,6 +280,37 @@ func ExecuteAdamStepMPSGraphPooled(
 ExecuteAdamStepMPSGraphPooled performs Adam optimization with pooled command
 buffers RESOURCE LEAK FIX: Uses command buffer pooling to prevent Metal resource
 accumulation
+
+#### func  ExecuteLBFGSStepMPSGraph
+
+```go
+func ExecuteLBFGSStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	oldGradientBuffers []unsafe.Pointer,
+	searchDirBuffers []unsafe.Pointer,
+	sVectors [][]unsafe.Pointer,
+	yVectors [][]unsafe.Pointer,
+	rhoBuffers []unsafe.Pointer,
+	alphaBuffer unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	historySize int,
+	historyCount int,
+	historyIndex int,
+	initialStep float32,
+	c1 float32,
+	c2 float32,
+	maxLineSearch int,
+	currentLoss float32,
+	prevLoss float32,
+	commandPool unsafe.Pointer,
+	usePooling bool,
+) (float32, error)
+```
+ExecuteLBFGSStepMPSGraph executes a single L-BFGS optimization step using
+MPSGraph for optimal GPU performance
 
 #### func  ExecuteRMSPropStepMPSGraph
 
@@ -660,6 +728,7 @@ const (
 	SGD OptimizerType = iota
 	Adam
 	RMSProp
+	LBFGS
 )
 ```
 
