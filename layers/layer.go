@@ -161,6 +161,34 @@ func (lf *LayerFactory) CreateELUSpec(alpha float32, name string) LayerSpec {
 	}
 }
 
+// CreateDropoutSpec creates a Dropout layer specification
+func (lf *LayerFactory) CreateDropoutSpec(rate float32, name string) LayerSpec {
+	return LayerSpec{
+		Type: Dropout,
+		Name: name,
+		Parameters: map[string]interface{}{
+			"rate":     rate,
+			"training": true, // Default to training mode
+		},
+	}
+}
+
+// CreateBatchNormSpec creates a Batch Normalization layer specification
+func (lf *LayerFactory) CreateBatchNormSpec(numFeatures int, eps float32, momentum float32, affine bool, name string) LayerSpec {
+	return LayerSpec{
+		Type: BatchNorm,
+		Name: name,
+		Parameters: map[string]interface{}{
+			"num_features":        numFeatures,
+			"eps":                eps,
+			"momentum":           momentum,
+			"affine":             affine,
+			"track_running_stats": true, // Always track for training
+			"training":           true,  // Default to training mode
+		},
+	}
+}
+
 // ModelBuilder helps construct neural network models
 type ModelBuilder struct {
 	layers     []LayerSpec
