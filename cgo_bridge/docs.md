@@ -351,6 +351,28 @@ func ExecuteLBFGSStepMPSGraph(
 ExecuteLBFGSStepMPSGraph executes a single L-BFGS optimization step using
 MPSGraph for optimal GPU performance
 
+#### func  ExecuteNadamStepMPSGraph
+
+```go
+func ExecuteNadamStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	varianceBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	beta1 float32,
+	beta2 float32,
+	epsilon float32,
+	weightDecay float32,
+	stepCount int,
+) error
+```
+ExecuteNadamStepMPSGraph executes a single Nadam optimization step using
+MPSGraph for optimal GPU performance Nadam combines Adam's adaptive learning
+rates with Nesterov momentum
+
 #### func  ExecuteRMSPropStepMPSGraph
 
 ```go

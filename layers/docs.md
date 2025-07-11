@@ -51,6 +51,13 @@ func NewFactory() *LayerFactory
 ```
 NewFactory creates a new layer factory
 
+#### func (*LayerFactory) CreateBatchNormSpec
+
+```go
+func (lf *LayerFactory) CreateBatchNormSpec(numFeatures int, eps float32, momentum float32, affine bool, name string) LayerSpec
+```
+CreateBatchNormSpec creates a Batch Normalization layer specification
+
 #### func (*LayerFactory) CreateConv2DSpec
 
 ```go
@@ -67,6 +74,13 @@ CreateConv2DSpec creates a Conv2D layer specification
 func (lf *LayerFactory) CreateDenseSpec(inputSize, outputSize int, useBias bool, name string) LayerSpec
 ```
 CreateDenseSpec creates a dense layer specification
+
+#### func (*LayerFactory) CreateDropoutSpec
+
+```go
+func (lf *LayerFactory) CreateDropoutSpec(rate float32, name string) LayerSpec
+```
+CreateDropoutSpec creates a Dropout layer specification
 
 #### func (*LayerFactory) CreateELUSpec
 

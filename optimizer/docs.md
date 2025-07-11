@@ -404,6 +404,102 @@ func (lbfgs *LBFGSOptimizerState) UpdateLearningRate(newLR float32) error
 ```
 UpdateLearningRate is not used in L-BFGS (uses line search instead)
 
+#### type NadamConfig
+
+```go
+type NadamConfig struct {
+	LearningRate float32 // Base learning rate (typically 0.002)
+	Beta1        float32 // Exponential decay rate for first moment estimates (typically 0.9)
+	Beta2        float32 // Exponential decay rate for second moment estimates (typically 0.999)
+	Epsilon      float32 // Small constant for numerical stability (typically 1e-8)
+	WeightDecay  float32 // L2 regularization coefficient (typically 0.0)
+}
+```
+
+NadamConfig holds configuration for Nadam optimizer
+
+#### func  DefaultNadamConfig
+
+```go
+func DefaultNadamConfig() NadamConfig
+```
+DefaultNadamConfig returns default Nadam optimizer configuration
+
+#### type NadamOptimizerState
+
+```go
+type NadamOptimizerState struct {
+	WeightBuffers []unsafe.Pointer // Current weight tensors
+}
+```
+
+NadamOptimizerState represents GPU-resident Nadam optimizer state Nadam combines
+Adam's adaptive learning rates with Nesterov momentum
+
+#### func  NewNadamOptimizer
+
+```go
+func NewNadamOptimizer(
+	config NadamConfig,
+	weightShapes [][]int,
+	memoryManager *memory.MemoryManager,
+	device unsafe.Pointer,
+) (*NadamOptimizerState, error)
+```
+NewNadamOptimizer creates a new GPU-resident Nadam optimizer
+
+#### func (*NadamOptimizerState) Cleanup
+
+```go
+func (nadam *NadamOptimizerState) Cleanup()
+```
+Cleanup releases all GPU buffers
+
+#### func (*NadamOptimizerState) GetStats
+
+```go
+func (nadam *NadamOptimizerState) GetStats() map[string]interface{}
+```
+GetStats returns optimizer statistics as a map for generic access
+
+#### func (*NadamOptimizerState) GetStep
+
+```go
+func (nadam *NadamOptimizerState) GetStep() uint64
+```
+GetStep returns the current step count
+
+#### func (*NadamOptimizerState) SetCommandPool
+
+```go
+func (nadam *NadamOptimizerState) SetCommandPool(commandPool unsafe.Pointer)
+```
+SetCommandPool enables command buffer pooling for Metal operations
+
+#### func (*NadamOptimizerState) SetWeightBuffers
+
+```go
+func (nadam *NadamOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error
+```
+SetWeightBuffers sets the current weight buffer pointers This should be called
+before each optimization step
+
+#### func (*NadamOptimizerState) Step
+
+```go
+func (nadam *NadamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error
+```
+Step performs a single Nadam optimization step Nadam combines Adam's adaptive
+learning rates with Nesterov momentum
+
+#### func (*NadamOptimizerState) UpdateLearningRate
+
+```go
+func (nadam *NadamOptimizerState) UpdateLearningRate(newLR float32) error
+```
+UpdateLearningRate updates the learning rate (useful for learning rate
+scheduling)
+
 #### type RMSPropConfig
 
 ```go
