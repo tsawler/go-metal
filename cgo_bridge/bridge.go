@@ -399,6 +399,50 @@ int execute_adagrad_step_mpsgraph_pooled(
     float weight_decay,
     uintptr_t command_pool
 );
+
+// AdaDelta optimizer forward declarations
+int execute_adadelta_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    uintptr_t* squared_update_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float rho,
+    float epsilon,
+    float weight_decay
+);
+
+int execute_adadelta_step_mpsgraph_pooled(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    uintptr_t* squared_update_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float rho,
+    float epsilon,
+    float weight_decay,
+    uintptr_t command_pool
+);
+
+int execute_nadam_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* momentum_buffers,
+    uintptr_t* variance_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float beta1,
+    float beta2,
+    float epsilon,
+    float weight_decay,
+    int step_count
+);
 */
 import "C"
 import (
@@ -2203,6 +2247,188 @@ func ExecuteAdaGradStepMPSGraphPooled(
 
 	if result != 0 {
 		return fmt.Errorf("AdaGrad MPSGraph pooled step failed with error code: %d", result)
+	}
+
+	return nil
+}
+
+// ExecuteAdaDeltaStepMPSGraph executes a single AdaDelta optimization step using MPSGraph for optimal GPU performance
+func ExecuteAdaDeltaStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	squaredUpdateAvgBuffers []unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	rho float32,
+	epsilon float32,
+	weightDecay float32,
+) error {
+	if device == nil {
+		return fmt.Errorf("device cannot be nil")
+	}
+
+	if len(weightBuffers) != numWeights || len(gradientBuffers) != numWeights || 
+	   len(squaredGradAvgBuffers) != numWeights || len(squaredUpdateAvgBuffers) != numWeights || 
+	   len(bufferSizes) != numWeights {
+		return fmt.Errorf("buffer count mismatch: weights=%d, gradients=%d, squared_grad_avg=%d, squared_update_avg=%d, sizes=%d, expected=%d",
+			len(weightBuffers), len(gradientBuffers), len(squaredGradAvgBuffers), len(squaredUpdateAvgBuffers), len(bufferSizes), numWeights)
+	}
+
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cSquaredGradAvgBuffers := make([]C.uintptr_t, numWeights)
+	cSquaredUpdateAvgBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		cSquaredGradAvgBuffers[i] = C.uintptr_t(uintptr(squaredGradAvgBuffers[i]))
+		cSquaredUpdateAvgBuffers[i] = C.uintptr_t(uintptr(squaredUpdateAvgBuffers[i]))
+		cBufferSizes[i] = C.int(bufferSizes[i])
+	}
+
+	result := C.execute_adadelta_step_mpsgraph(
+		C.uintptr_t(uintptr(device)),
+		&cWeightBuffers[0],
+		&cGradientBuffers[0],
+		&cSquaredGradAvgBuffers[0],
+		&cSquaredUpdateAvgBuffers[0],
+		C.int(numWeights),
+		&cBufferSizes[0],
+		C.float(rho),
+		C.float(epsilon),
+		C.float(weightDecay),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("AdaDelta MPSGraph step failed with error code: %d", result)
+	}
+
+	return nil
+}
+
+// ExecuteAdaDeltaStepMPSGraphPooled executes a single AdaDelta optimization step using MPSGraph with command buffer pooling
+func ExecuteAdaDeltaStepMPSGraphPooled(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	squaredUpdateAvgBuffers []unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	rho float32,
+	epsilon float32,
+	weightDecay float32,
+	commandPool unsafe.Pointer,
+) error {
+	if device == nil {
+		return fmt.Errorf("device cannot be nil")
+	}
+
+	if len(weightBuffers) != numWeights || len(gradientBuffers) != numWeights || 
+	   len(squaredGradAvgBuffers) != numWeights || len(squaredUpdateAvgBuffers) != numWeights || 
+	   len(bufferSizes) != numWeights {
+		return fmt.Errorf("buffer count mismatch: weights=%d, gradients=%d, squared_grad_avg=%d, squared_update_avg=%d, sizes=%d, expected=%d",
+			len(weightBuffers), len(gradientBuffers), len(squaredGradAvgBuffers), len(squaredUpdateAvgBuffers), len(bufferSizes), numWeights)
+	}
+
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cSquaredGradAvgBuffers := make([]C.uintptr_t, numWeights)
+	cSquaredUpdateAvgBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		cSquaredGradAvgBuffers[i] = C.uintptr_t(uintptr(squaredGradAvgBuffers[i]))
+		cSquaredUpdateAvgBuffers[i] = C.uintptr_t(uintptr(squaredUpdateAvgBuffers[i]))
+		cBufferSizes[i] = C.int(bufferSizes[i])
+	}
+
+	result := C.execute_adadelta_step_mpsgraph_pooled(
+		C.uintptr_t(uintptr(device)),
+		&cWeightBuffers[0],
+		&cGradientBuffers[0],
+		&cSquaredGradAvgBuffers[0],
+		&cSquaredUpdateAvgBuffers[0],
+		C.int(numWeights),
+		&cBufferSizes[0],
+		C.float(rho),
+		C.float(epsilon),
+		C.float(weightDecay),
+		C.uintptr_t(uintptr(commandPool)),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("AdaDelta MPSGraph pooled step failed with error code: %d", result)
+	}
+
+	return nil
+}
+
+// ExecuteNadamStepMPSGraph executes a single Nadam optimization step using MPSGraph for optimal GPU performance
+// Nadam combines Adam's adaptive learning rates with Nesterov momentum
+func ExecuteNadamStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	varianceBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	beta1 float32,
+	beta2 float32,
+	epsilon float32,
+	weightDecay float32,
+	stepCount int,
+) error {
+	if len(weightBuffers) != len(gradientBuffers) ||
+		len(weightBuffers) != len(momentumBuffers) ||
+		len(weightBuffers) != len(varianceBuffers) ||
+		len(weightBuffers) != len(bufferSizes) {
+		return fmt.Errorf("all buffer arrays must have the same length")
+	}
+
+	numWeights := len(weightBuffers)
+
+	// Convert Go slices to C arrays
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cMomentumBuffers := make([]C.uintptr_t, numWeights)
+	cVarianceBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		cMomentumBuffers[i] = C.uintptr_t(uintptr(momentumBuffers[i]))
+		cVarianceBuffers[i] = C.uintptr_t(uintptr(varianceBuffers[i]))
+		cBufferSizes[i] = C.int(bufferSizes[i])
+	}
+
+	// Call C function
+	result := C.execute_nadam_step_mpsgraph(
+		C.uintptr_t(uintptr(device)),
+		(*C.uintptr_t)(unsafe.Pointer(&cWeightBuffers[0])),
+		(*C.uintptr_t)(unsafe.Pointer(&cGradientBuffers[0])),
+		(*C.uintptr_t)(unsafe.Pointer(&cMomentumBuffers[0])),
+		(*C.uintptr_t)(unsafe.Pointer(&cVarianceBuffers[0])),
+		C.int(numWeights),
+		(*C.int)(unsafe.Pointer(&cBufferSizes[0])),
+		C.float(learningRate),
+		C.float(beta1),
+		C.float(beta2),
+		C.float(epsilon),
+		C.float(weightDecay),
+		C.int(stepCount),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("Nadam MPSGraph step failed with error code: %d", result)
 	}
 
 	return nil

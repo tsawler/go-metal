@@ -104,6 +104,36 @@ int execute_adagrad_step_mpsgraph_pooled(
     uintptr_t command_pool
 );
 
+// AdaDelta optimizer functions
+void cacheAdaDeltaScalarTensors(training_engine_t* engine);
+
+int execute_adadelta_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    uintptr_t* squared_update_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float rho,
+    float epsilon,
+    float weight_decay
+);
+
+int execute_adadelta_step_mpsgraph_pooled(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    uintptr_t* squared_update_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float rho,
+    float epsilon,
+    float weight_decay,
+    uintptr_t command_pool
+);
+
 // L-BFGS optimizer functions
 void cacheLBFGSScalarTensors(training_engine_t* engine);
 
@@ -154,4 +184,21 @@ int execute_lbfgs_step_mpsgraph_pooled(
     float prev_loss,
     uintptr_t command_pool,
     float* step_size
+);
+
+// Nadam optimizer functions
+int execute_nadam_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* momentum_buffers,
+    uintptr_t* variance_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float beta1,
+    float beta2,
+    float epsilon,
+    float weight_decay,
+    int step_count
 );

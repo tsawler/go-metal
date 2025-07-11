@@ -1423,3 +1423,497 @@ int execute_adagrad_step_mpsgraph_pooled(
         num_weights, buffer_sizes, learning_rate, epsilon, weight_decay
     );
 }
+
+// AdaDelta Optimizer Implementation
+
+// Cache AdaDelta scalar tensors to eliminate allocation overhead
+void cacheAdaDeltaScalarTensors(training_engine_t* engine) {
+    @autoreleasepool {
+        if (engine->adadeltaScalarsCached || !engine->graph) {
+            return; // Already cached or no graph available
+        }
+        
+        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching AdaDelta scalar tensors...");
+        
+        // Create scalar tensors for AdaDelta hyperparameters ONCE
+        float rho = engine->config.alpha; // Using alpha field for rho parameter
+        float epsilon = engine->config.epsilon;
+        float weight_decay = engine->config.weight_decay;
+        
+        engine->cachedAlphaTensor = [engine->graph constantWithScalar:rho dataType:MPSDataTypeFloat32]; // Reuse alpha for rho
+        engine->cachedEpsilonTensor = [engine->graph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+        engine->cachedWeightDecayTensor = [engine->graph constantWithScalar:weight_decay dataType:MPSDataTypeFloat32];
+        
+        // Create derived constant tensors ONCE
+        engine->cachedOneTensor = [engine->graph constantWithScalar:1.0f dataType:MPSDataTypeFloat32];
+        engine->cachedOneMinusAlphaTensor = [engine->graph subtractionWithPrimaryTensor:engine->cachedOneTensor
+                                                                       secondaryTensor:engine->cachedAlphaTensor
+                                                                                  name:@"cached_1_minus_rho"];
+        
+        engine->adadeltaScalarsCached = YES;
+        NSLog(@"✅ AdaDelta scalar tensors cached successfully");
+    }
+}
+
+// Execute AdaDelta optimization step using MPSGraph
+int execute_adadelta_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    uintptr_t* squared_update_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float rho,
+    float epsilon,
+    float weight_decay
+) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
+        if (!device) {
+            NSLog(@"Device is nil in AdaDelta step");
+            return -1;
+        }
+        
+        // Create MPSGraph for AdaDelta optimization
+        MPSGraph* adadeltaGraph = [[MPSGraph alloc] init];
+        if (!adadeltaGraph) {
+            NSLog(@"Failed to create MPSGraph for AdaDelta optimization");
+            return -2;
+        }
+        
+        // Create command queue
+        id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+        if (!commandQueue) {
+            NSLog(@"Failed to create command queue for AdaDelta step");
+            return -3;
+        }
+        
+        @try {
+            // Create scalar tensors for AdaDelta hyperparameters
+            MPSGraphTensor* rhoTensor = [adadeltaGraph constantWithScalar:rho dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* oneMinusRhoTensor = [adadeltaGraph constantWithScalar:(1.0f - rho) dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* epsilonTensor = [adadeltaGraph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+            MPSGraphTensor* weightDecayTensor = [adadeltaGraph constantWithScalar:weight_decay dataType:MPSDataTypeFloat32];
+            
+            // Process each weight tensor
+            for (int i = 0; i < num_weights; i++) {
+                id<MTLBuffer> weightsBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                id<MTLBuffer> gradientsBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                id<MTLBuffer> squaredGradAvgBuffer = (__bridge id<MTLBuffer>)(void*)squared_grad_avg_buffers[i];
+                id<MTLBuffer> squaredUpdateAvgBuffer = (__bridge id<MTLBuffer>)(void*)squared_update_avg_buffers[i];
+                
+                int num_elements = buffer_sizes[i] / sizeof(float);
+                NSArray<NSNumber*>* shape = @[@(num_elements)];
+                
+                // Create placeholders for current values
+                MPSGraphTensor* weightsPlaceholder = [adadeltaGraph placeholderWithShape:shape
+                                                                             dataType:MPSDataTypeFloat32
+                                                                                 name:[NSString stringWithFormat:@"weights_%d", i]];
+                MPSGraphTensor* gradientsPlaceholder = [adadeltaGraph placeholderWithShape:shape
+                                                                                dataType:MPSDataTypeFloat32
+                                                                                    name:[NSString stringWithFormat:@"gradients_%d", i]];
+                MPSGraphTensor* squaredGradAvgPlaceholder = [adadeltaGraph placeholderWithShape:shape
+                                                                                    dataType:MPSDataTypeFloat32
+                                                                                        name:[NSString stringWithFormat:@"squared_grad_avg_%d", i]];
+                MPSGraphTensor* squaredUpdateAvgPlaceholder = [adadeltaGraph placeholderWithShape:shape
+                                                                                        dataType:MPSDataTypeFloat32
+                                                                                            name:[NSString stringWithFormat:@"squared_update_avg_%d", i]];
+                
+                // Step 1: Apply weight decay (if enabled)
+                MPSGraphTensor* effectiveGradient = gradientsPlaceholder;
+                if (weight_decay > 0.0f) {
+                    MPSGraphTensor* weightDecayGradient = [adadeltaGraph multiplicationWithPrimaryTensor:weightsPlaceholder
+                                                                                        secondaryTensor:weightDecayTensor
+                                                                                                   name:@"weight_decay_grad"];
+                    effectiveGradient = [adadeltaGraph additionWithPrimaryTensor:gradientsPlaceholder
+                                                               secondaryTensor:weightDecayGradient
+                                                                          name:@"effective_gradient"];
+                }
+                
+                // Step 2: Update accumulated squared gradients
+                // E[g^2]_t = ρ * E[g^2]_{t-1} + (1-ρ) * g_t^2
+                MPSGraphTensor* gradSquared = [adadeltaGraph multiplicationWithPrimaryTensor:effectiveGradient
+                                                                           secondaryTensor:effectiveGradient
+                                                                                      name:@"grad_squared"];
+                MPSGraphTensor* rhoTimesOldSquaredGradAvg = [adadeltaGraph multiplicationWithPrimaryTensor:squaredGradAvgPlaceholder
+                                                                                          secondaryTensor:rhoTensor
+                                                                                                     name:@"rho_times_old_E_g2"];
+                MPSGraphTensor* oneMinusRhoTimesGradSquared = [adadeltaGraph multiplicationWithPrimaryTensor:gradSquared
+                                                                                             secondaryTensor:oneMinusRhoTensor
+                                                                                                        name:@"1_minus_rho_times_g2"];
+                MPSGraphTensor* newSquaredGradAvg = [adadeltaGraph additionWithPrimaryTensor:rhoTimesOldSquaredGradAvg
+                                                                           secondaryTensor:oneMinusRhoTimesGradSquared
+                                                                                      name:@"new_E_g2"];
+                
+                // Step 3: Compute RMS of gradients and updates
+                // RMS[g]_t = sqrt(E[g^2]_t + ε)
+                MPSGraphTensor* squaredGradAvgPlusEpsilon = [adadeltaGraph additionWithPrimaryTensor:newSquaredGradAvg
+                                                                                     secondaryTensor:epsilonTensor
+                                                                                                name:@"E_g2_plus_epsilon"];
+                MPSGraphTensor* rmsGrad = [adadeltaGraph squareRootWithTensor:squaredGradAvgPlusEpsilon
+                                                                         name:@"rms_grad"];
+                
+                // RMS[Δx]_{t-1} = sqrt(E[Δx^2]_{t-1} + ε)
+                MPSGraphTensor* squaredUpdateAvgPlusEpsilon = [adadeltaGraph additionWithPrimaryTensor:squaredUpdateAvgPlaceholder
+                                                                                       secondaryTensor:epsilonTensor
+                                                                                                  name:@"E_dx2_plus_epsilon"];
+                MPSGraphTensor* rmsUpdate = [adadeltaGraph squareRootWithTensor:squaredUpdateAvgPlusEpsilon
+                                                                           name:@"rms_update"];
+                
+                // Step 4: Compute update
+                // Δx_t = -(RMS[Δx]_{t-1} / RMS[g]_t) * g_t
+                MPSGraphTensor* adaptiveLR = [adadeltaGraph divisionWithPrimaryTensor:rmsUpdate
+                                                                    secondaryTensor:rmsGrad
+                                                                               name:@"adaptive_lr"];
+                MPSGraphTensor* update = [adadeltaGraph multiplicationWithPrimaryTensor:adaptiveLR
+                                                                      secondaryTensor:effectiveGradient
+                                                                                 name:@"update"];
+                MPSGraphTensor* negativeUpdate = [adadeltaGraph negativeWithTensor:update
+                                                                               name:@"negative_update"];
+                
+                // Step 5: Update weights
+                // x_t = x_{t-1} + Δx_t
+                MPSGraphTensor* newWeights = [adadeltaGraph additionWithPrimaryTensor:weightsPlaceholder
+                                                                     secondaryTensor:negativeUpdate
+                                                                                name:@"new_weights"];
+                
+                // Step 6: Update accumulated squared updates
+                // E[Δx^2]_t = ρ * E[Δx^2]_{t-1} + (1-ρ) * Δx_t^2
+                MPSGraphTensor* updateSquared = [adadeltaGraph multiplicationWithPrimaryTensor:negativeUpdate
+                                                                              secondaryTensor:negativeUpdate
+                                                                                         name:@"update_squared"];
+                MPSGraphTensor* rhoTimesOldSquaredUpdateAvg = [adadeltaGraph multiplicationWithPrimaryTensor:squaredUpdateAvgPlaceholder
+                                                                                             secondaryTensor:rhoTensor
+                                                                                                        name:@"rho_times_old_E_dx2"];
+                MPSGraphTensor* oneMinusRhoTimesUpdateSquared = [adadeltaGraph multiplicationWithPrimaryTensor:updateSquared
+                                                                                               secondaryTensor:oneMinusRhoTensor
+                                                                                                          name:@"1_minus_rho_times_dx2"];
+                MPSGraphTensor* newSquaredUpdateAvg = [adadeltaGraph additionWithPrimaryTensor:rhoTimesOldSquaredUpdateAvg
+                                                                              secondaryTensor:oneMinusRhoTimesUpdateSquared
+                                                                                         name:@"new_E_dx2"];
+                
+                // Create feeds dictionary
+                MPSGraphTensorData* weightsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightsBuffer
+                                                                                       shape:shape
+                                                                                    dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* gradientsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:gradientsBuffer
+                                                                                         shape:shape
+                                                                                      dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* squaredGradAvgData = [[MPSGraphTensorData alloc] initWithMTLBuffer:squaredGradAvgBuffer
+                                                                                               shape:shape
+                                                                                            dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* squaredUpdateAvgData = [[MPSGraphTensorData alloc] initWithMTLBuffer:squaredUpdateAvgBuffer
+                                                                                                 shape:shape
+                                                                                              dataType:MPSDataTypeFloat32];
+                
+                NSDictionary* feeds = @{
+                    weightsPlaceholder: weightsData,
+                    gradientsPlaceholder: gradientsData,
+                    squaredGradAvgPlaceholder: squaredGradAvgData,
+                    squaredUpdateAvgPlaceholder: squaredUpdateAvgData
+                };
+                
+                // Execute graph and get results
+                NSDictionary* results = [adadeltaGraph runWithMTLCommandQueue:commandQueue
+                                                                        feeds:feeds
+                                                               targetTensors:@[newWeights, newSquaredGradAvg, newSquaredUpdateAvg]
+                                                            targetOperations:nil];
+                
+                // Extract results
+                MPSGraphTensorData* newWeightsData = results[newWeights];
+                MPSGraphTensorData* newSquaredGradAvgData = results[newSquaredGradAvg];
+                MPSGraphTensorData* newSquaredUpdateAvgData = results[newSquaredUpdateAvg];
+                
+                if (newWeightsData && newSquaredGradAvgData && newSquaredUpdateAvgData) {
+                    // Copy updated weights back to original weight buffer
+                    float* weightPtr = (float*)[weightsBuffer contents];
+                    [[newWeightsData mpsndarray] readBytes:weightPtr strideBytes:nil];
+                    [weightsBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    
+                    // Copy updated squared gradient average back to buffer
+                    float* squaredGradAvgPtr = (float*)[squaredGradAvgBuffer contents];
+                    [[newSquaredGradAvgData mpsndarray] readBytes:squaredGradAvgPtr strideBytes:nil];
+                    [squaredGradAvgBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    
+                    // Copy updated squared update average back to buffer
+                    float* squaredUpdateAvgPtr = (float*)[squaredUpdateAvgBuffer contents];
+                    [[newSquaredUpdateAvgData mpsndarray] readBytes:squaredUpdateAvgPtr strideBytes:nil];
+                    [squaredUpdateAvgBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                } else {
+                    NSLog(@"Failed to get AdaDelta results for weight %d", i);
+                    return -7;
+                }
+            }
+            
+            return 0;
+            
+        } @catch (NSException* exception) {
+            NSLog(@"❌ AdaDelta optimizer exception: %@", exception.reason);
+            return -8;
+        }
+    }
+}
+
+// Pooled version of AdaDelta optimizer
+int execute_adadelta_step_mpsgraph_pooled(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* squared_grad_avg_buffers,
+    uintptr_t* squared_update_avg_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float rho,
+    float epsilon,
+    float weight_decay,
+    uintptr_t command_pool
+) {
+    // For now, just call the non-pooled version
+    // TODO: Implement proper command buffer pooling for AdaDelta
+    return execute_adadelta_step_mpsgraph(
+        device_ptr, weight_buffers, gradient_buffers, squared_grad_avg_buffers,
+        squared_update_avg_buffers, num_weights, buffer_sizes, rho, epsilon, weight_decay
+    );
+}
+
+// Execute Nadam optimization step using MPSGraph for optimal GPU performance
+// Nadam combines Adam's adaptive learning rates with Nesterov momentum
+int execute_nadam_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* momentum_buffers,
+    uintptr_t* variance_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float beta1,
+    float beta2,
+    float epsilon,
+    float weight_decay,
+    int step_count
+) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
+        if (!device) {
+            NSLog(@"Device is nil in Nadam step");
+            return -1;
+        }
+        
+        // Create MPSGraph for Nadam optimization
+        MPSGraph* nadamGraph = [[MPSGraph alloc] init];
+        if (!nadamGraph) {
+            NSLog(@"Failed to create MPSGraph for Nadam optimization");
+            return -2;
+        }
+        
+        // Create command queue
+        id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+        if (!commandQueue) {
+            NSLog(@"Failed to create command queue for Nadam step");
+            return -3;
+        }
+        
+        @try {
+            // Calculate bias correction factors
+            float bias_correction1 = 1.0f - powf(beta1, (float)step_count);
+            float bias_correction2 = 1.0f - powf(beta2, (float)step_count);
+            
+            // Nadam-specific momentum schedule parameter
+            float momentum_schedule = beta1 * (1.0f - 0.5f * powf(0.96f, (float)step_count * 0.004f));
+            float momentum_schedule_next = beta1 * (1.0f - 0.5f * powf(0.96f, (float)(step_count + 1) * 0.004f));
+            
+            // Process each weight tensor using MPSGraph
+            for (int i = 0; i < num_weights; i++) {
+                id<MTLBuffer> weightsBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                id<MTLBuffer> gradientsBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                id<MTLBuffer> momentumBuffer = (__bridge id<MTLBuffer>)(void*)momentum_buffers[i];
+                id<MTLBuffer> varianceBuffer = (__bridge id<MTLBuffer>)(void*)variance_buffers[i];
+                
+                if (!weightsBuffer || !gradientsBuffer || !momentumBuffer || !varianceBuffer) {
+                    NSLog(@"One or more buffers are nil for weight %d", i);
+                    return -4;
+                }
+                
+                int size_bytes = buffer_sizes[i];
+                int num_elements = size_bytes / sizeof(float);
+                NSArray<NSNumber*>* shape = @[@(num_elements)];
+                
+                // Create placeholder tensors for inputs
+                MPSGraphTensor* weightsTensor = [nadamGraph placeholderWithShape:shape
+                                                                       dataType:MPSDataTypeFloat32
+                                                                           name:[NSString stringWithFormat:@"weights_%d", i]];
+                MPSGraphTensor* gradientsTensor = [nadamGraph placeholderWithShape:shape
+                                                                         dataType:MPSDataTypeFloat32
+                                                                             name:[NSString stringWithFormat:@"gradients_%d", i]];
+                MPSGraphTensor* momentumTensor = [nadamGraph placeholderWithShape:shape
+                                                                        dataType:MPSDataTypeFloat32
+                                                                            name:[NSString stringWithFormat:@"momentum_%d", i]];
+                MPSGraphTensor* varianceTensor = [nadamGraph placeholderWithShape:shape
+                                                                        dataType:MPSDataTypeFloat32
+                                                                            name:[NSString stringWithFormat:@"variance_%d", i]];
+                
+                // Create constant tensors for hyperparameters
+                MPSGraphTensor* beta1Tensor = [nadamGraph constantWithScalar:beta1 dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* beta2Tensor = [nadamGraph constantWithScalar:beta2 dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* oneMinusBeta1 = [nadamGraph constantWithScalar:(1.0f - beta1) dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* oneMinusBeta2 = [nadamGraph constantWithScalar:(1.0f - beta2) dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* epsilonTensor = [nadamGraph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* lrTensor = [nadamGraph constantWithScalar:learning_rate dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* biasCorr1Tensor = [nadamGraph constantWithScalar:bias_correction1 dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* biasCorr2Tensor = [nadamGraph constantWithScalar:bias_correction2 dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* momentumScheduleTensor = [nadamGraph constantWithScalar:momentum_schedule dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* momentumScheduleNextTensor = [nadamGraph constantWithScalar:momentum_schedule_next dataType:MPSDataTypeFloat32];
+                
+                // Nadam algorithm using MPSGraph operations:
+                // First, compute standard Adam momentum and variance updates
+                
+                // m_t = β1 * m_{t-1} + (1 - β1) * g_t
+                MPSGraphTensor* momentumScaled = [nadamGraph multiplicationWithPrimaryTensor:momentumTensor
+                                                                            secondaryTensor:beta1Tensor
+                                                                                       name:nil];
+                MPSGraphTensor* gradientScaled = [nadamGraph multiplicationWithPrimaryTensor:gradientsTensor
+                                                                            secondaryTensor:oneMinusBeta1
+                                                                                       name:nil];
+                MPSGraphTensor* newMomentum = [nadamGraph additionWithPrimaryTensor:momentumScaled
+                                                                   secondaryTensor:gradientScaled
+                                                                              name:nil];
+                
+                // v_t = β2 * v_{t-1} + (1 - β2) * g_t^2
+                MPSGraphTensor* gradientSquared = [nadamGraph multiplicationWithPrimaryTensor:gradientsTensor
+                                                                             secondaryTensor:gradientsTensor
+                                                                                        name:nil];
+                MPSGraphTensor* varianceScaled = [nadamGraph multiplicationWithPrimaryTensor:varianceTensor
+                                                                            secondaryTensor:beta2Tensor
+                                                                                       name:nil];
+                MPSGraphTensor* gradSquaredScaled = [nadamGraph multiplicationWithPrimaryTensor:gradientSquared
+                                                                               secondaryTensor:oneMinusBeta2
+                                                                                          name:nil];
+                MPSGraphTensor* newVariance = [nadamGraph additionWithPrimaryTensor:varianceScaled
+                                                                   secondaryTensor:gradSquaredScaled
+                                                                              name:nil];
+                
+                // Bias-corrected second moment: v_hat = v_t / (1 - β2^t)
+                MPSGraphTensor* varianceHat = [nadamGraph divisionWithPrimaryTensor:newVariance
+                                                                   secondaryTensor:biasCorr2Tensor
+                                                                              name:nil];
+                
+                // Nadam's key innovation: Nesterov momentum with bias correction
+                // m_bar = μ_t * m_hat + (1 - μ_t) * g_t / (1 - β1^t)
+                MPSGraphTensor* momentumHat = [nadamGraph divisionWithPrimaryTensor:newMomentum
+                                                                   secondaryTensor:biasCorr1Tensor
+                                                                              name:nil];
+                MPSGraphTensor* gradientBiasCorr = [nadamGraph divisionWithPrimaryTensor:gradientsTensor
+                                                                         secondaryTensor:biasCorr1Tensor
+                                                                                    name:nil];
+                
+                // Create (1 - momentum_schedule_next)
+                MPSGraphTensor* oneTensor = [nadamGraph constantWithScalar:1.0f dataType:MPSDataTypeFloat32];
+                MPSGraphTensor* oneMinusMomScheduleNext = [nadamGraph subtractionWithPrimaryTensor:oneTensor
+                                                                                   secondaryTensor:momentumScheduleNextTensor
+                                                                                              name:nil];
+                
+                // m_bar = μ_t+1 * m_hat + (1 - μ_t+1) * g_t / (1 - β1^t)
+                MPSGraphTensor* momentumTerm = [nadamGraph multiplicationWithPrimaryTensor:momentumHat
+                                                                          secondaryTensor:momentumScheduleNextTensor
+                                                                                     name:nil];
+                MPSGraphTensor* gradientTerm = [nadamGraph multiplicationWithPrimaryTensor:gradientBiasCorr
+                                                                          secondaryTensor:oneMinusMomScheduleNext
+                                                                                     name:nil];
+                MPSGraphTensor* nadamMomentum = [nadamGraph additionWithPrimaryTensor:momentumTerm
+                                                                      secondaryTensor:gradientTerm
+                                                                                 name:nil];
+                
+                // Compute denominator: sqrt(v_hat) + ε
+                MPSGraphTensor* sqrtVariance = [nadamGraph squareRootWithTensor:varianceHat name:nil];
+                MPSGraphTensor* denominator = [nadamGraph additionWithPrimaryTensor:sqrtVariance
+                                                                   secondaryTensor:epsilonTensor
+                                                                              name:nil];
+                
+                // Compute update: m_bar / (sqrt(v_hat) + ε)
+                MPSGraphTensor* update = [nadamGraph divisionWithPrimaryTensor:nadamMomentum
+                                                              secondaryTensor:denominator
+                                                                         name:nil];
+                
+                // Add weight decay if specified
+                if (weight_decay > 0.0f) {
+                    MPSGraphTensor* weightDecayTensor = [nadamGraph constantWithScalar:weight_decay
+                                                                              dataType:MPSDataTypeFloat32];
+                    MPSGraphTensor* weightDecayTerm = [nadamGraph multiplicationWithPrimaryTensor:weightsTensor
+                                                                                 secondaryTensor:weightDecayTensor
+                                                                                            name:nil];
+                    update = [nadamGraph additionWithPrimaryTensor:update
+                                                  secondaryTensor:weightDecayTerm
+                                                             name:nil];
+                }
+                
+                // Scale by learning rate
+                MPSGraphTensor* scaledUpdate = [nadamGraph multiplicationWithPrimaryTensor:update
+                                                                          secondaryTensor:lrTensor
+                                                                                     name:nil];
+                
+                // w_t = w_{t-1} - α * update
+                MPSGraphTensor* newWeights = [nadamGraph subtractionWithPrimaryTensor:weightsTensor
+                                                                     secondaryTensor:scaledUpdate
+                                                                                name:nil];
+                
+                // Create tensor data for buffers
+                MPSGraphTensorData* weightsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightsBuffer
+                                                                                            shape:shape
+                                                                                         dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* gradientsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:gradientsBuffer
+                                                                                              shape:shape
+                                                                                           dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* momentumData = [[MPSGraphTensorData alloc] initWithMTLBuffer:momentumBuffer
+                                                                                             shape:shape
+                                                                                          dataType:MPSDataTypeFloat32];
+                MPSGraphTensorData* varianceData = [[MPSGraphTensorData alloc] initWithMTLBuffer:varianceBuffer
+                                                                                             shape:shape
+                                                                                          dataType:MPSDataTypeFloat32];
+                
+                // Prepare feeds and results
+                NSDictionary* feeds = @{
+                    weightsTensor: weightsData,
+                    gradientsTensor: gradientsData,
+                    momentumTensor: momentumData,
+                    varianceTensor: varianceData
+                };
+                
+                NSDictionary* results = [nadamGraph runWithMTLCommandQueue:commandQueue
+                                                                      feeds:feeds
+                                                             targetTensors:@[newWeights, newMomentum, newVariance]
+                                                          targetOperations:nil];
+                
+                // Get results
+                MPSGraphTensorData* newWeightsData = results[newWeights];
+                MPSGraphTensorData* newMomentumData = results[newMomentum];
+                MPSGraphTensorData* newVarianceData = results[newVariance];
+                
+                if (newWeightsData && newMomentumData && newVarianceData) {
+                    // Copy results back to buffers
+                    float* weightPtr = (float*)[weightsBuffer contents];
+                    [[newWeightsData mpsndarray] readBytes:weightPtr strideBytes:nil];
+                    [weightsBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    
+                    float* momentumPtr = (float*)[momentumBuffer contents];
+                    [[newMomentumData mpsndarray] readBytes:momentumPtr strideBytes:nil];
+                    [momentumBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    
+                    float* variancePtr = (float*)[varianceBuffer contents];
+                    [[newVarianceData mpsndarray] readBytes:variancePtr strideBytes:nil];
+                    [varianceBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                } else {
+                    NSLog(@"Failed to get Nadam results for weight %d", i);
+                    return -5;
+                }
+            }
+            
+            return 0;
+            
+        } @catch (NSException* exception) {
+            NSLog(@"❌ Nadam optimizer exception: %@", exception.reason);
+            return -6;
+        }
+    }
+}

@@ -261,6 +261,12 @@ typedef struct {
     // AdaGrad-specific cached scalars
     BOOL adagradScalarsCached;                              // Flag indicating AdaGrad scalars are cached
     
+    // AdaDelta-specific cached scalars
+    BOOL adadeltaScalarsCached;                             // Flag indicating AdaDelta scalars are cached
+    
+    // Nadam-specific cached scalars
+    BOOL nadamScalarsCached;                                // Flag indicating Nadam scalars are cached
+    
     // Model configuration for dynamic dimensions
     model_config_t model_config;                             // Model architecture configuration
 } training_engine_t;

@@ -5,6 +5,96 @@
 
 ## Usage
 
+#### type AdaDeltaConfig
+
+```go
+type AdaDeltaConfig struct {
+	Rho         float32 // Decay rate for moving averages (typically 0.95)
+	Epsilon     float32 // Small constant for numerical stability
+	WeightDecay float32 // L2 regularization strength
+}
+```
+
+AdaDeltaConfig holds configuration for AdaDelta optimizer
+
+#### func  DefaultAdaDeltaConfig
+
+```go
+func DefaultAdaDeltaConfig() AdaDeltaConfig
+```
+DefaultAdaDeltaConfig returns default AdaDelta optimizer configuration
+
+#### type AdaDeltaOptimizerState
+
+```go
+type AdaDeltaOptimizerState struct {
+	WeightBuffers []unsafe.Pointer // Current weight tensors
+}
+```
+
+AdaDeltaOptimizerState represents GPU-resident AdaDelta optimizer state
+
+#### func  NewAdaDeltaOptimizer
+
+```go
+func NewAdaDeltaOptimizer(
+	config AdaDeltaConfig,
+	weightShapes [][]int,
+	memoryManager *memory.MemoryManager,
+	device unsafe.Pointer,
+) (*AdaDeltaOptimizerState, error)
+```
+NewAdaDeltaOptimizer creates a new GPU-resident AdaDelta optimizer
+
+#### func (*AdaDeltaOptimizerState) Cleanup
+
+```go
+func (adadelta *AdaDeltaOptimizerState) Cleanup()
+```
+Cleanup releases all GPU buffers
+
+#### func (*AdaDeltaOptimizerState) GetStats
+
+```go
+func (adadelta *AdaDeltaOptimizerState) GetStats() map[string]interface{}
+```
+GetStats returns optimizer statistics
+
+#### func (*AdaDeltaOptimizerState) GetStep
+
+```go
+func (adadelta *AdaDeltaOptimizerState) GetStep() uint64
+```
+GetStep returns the current optimization step count
+
+#### func (*AdaDeltaOptimizerState) SetCommandPool
+
+```go
+func (adadelta *AdaDeltaOptimizerState) SetCommandPool(pool unsafe.Pointer)
+```
+SetCommandPool sets the command buffer pool for Metal operations
+
+#### func (*AdaDeltaOptimizerState) SetWeightBuffers
+
+```go
+func (adadelta *AdaDeltaOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error
+```
+SetWeightBuffers sets the current weight buffer pointers
+
+#### func (*AdaDeltaOptimizerState) Step
+
+```go
+func (adadelta *AdaDeltaOptimizerState) Step(gradientBuffers []unsafe.Pointer) error
+```
+Step performs a single AdaDelta optimization step
+
+#### func (*AdaDeltaOptimizerState) UpdateLearningRate
+
+```go
+func (adadelta *AdaDeltaOptimizerState) UpdateLearningRate(newLR float32) error
+```
+UpdateLearningRate is not used in AdaDelta (it adapts automatically)
+
 #### type AdaGradConfig
 
 ```go

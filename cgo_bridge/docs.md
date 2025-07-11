@@ -179,6 +179,45 @@ func DrainAutoreleasePool()
 ```
 DrainAutoreleasePool drains the autorelease pool to release Metal resources
 
+#### func  ExecuteAdaDeltaStepMPSGraph
+
+```go
+func ExecuteAdaDeltaStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	squaredUpdateAvgBuffers []unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	rho float32,
+	epsilon float32,
+	weightDecay float32,
+) error
+```
+ExecuteAdaDeltaStepMPSGraph executes a single AdaDelta optimization step using
+MPSGraph for optimal GPU performance
+
+#### func  ExecuteAdaDeltaStepMPSGraphPooled
+
+```go
+func ExecuteAdaDeltaStepMPSGraphPooled(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	squaredGradAvgBuffers []unsafe.Pointer,
+	squaredUpdateAvgBuffers []unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	rho float32,
+	epsilon float32,
+	weightDecay float32,
+	commandPool unsafe.Pointer,
+) error
+```
+ExecuteAdaDeltaStepMPSGraphPooled executes a single AdaDelta optimization step
+using MPSGraph with command buffer pooling
+
 #### func  ExecuteAdaGradStepMPSGraph
 
 ```go
