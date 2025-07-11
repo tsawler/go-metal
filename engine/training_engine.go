@@ -17,7 +17,8 @@ type MPSTrainingEngine struct {
 	config       cgo_bridge.TrainingConfig
 	initialized  bool
 	isDynamic    bool                     // True if using dynamic engine, false for hybrid
-	adamOptimizer *optimizer.AdamOptimizerState // Optional Adam optimizer
+	adamOptimizer  *optimizer.AdamOptimizerState  // Optional Adam optimizer
+	lbfgsOptimizer *optimizer.LBFGSOptimizerState // Optional L-BFGS optimizer
 	
 	// RESOURCE LEAK FIX: Command buffer pooling support
 	commandQueue unsafe.Pointer           // MTLCommandQueue for command buffer creation
@@ -495,6 +496,15 @@ func (e *MPSTrainingEngine) GetAdamStats() *optimizer.AdamStats {
 	return &stats
 }
 
+// GetLBFGSStats returns L-BFGS optimizer statistics
+func (e *MPSTrainingEngine) GetLBFGSStats() map[string]interface{} {
+	if e.lbfgsOptimizer == nil {
+		return nil
+	}
+
+	return e.lbfgsOptimizer.GetStats()
+}
+
 // UpdateAdamLearningRate updates the Adam optimizer learning rate
 func (e *MPSTrainingEngine) UpdateAdamLearningRate(newLR float32) error {
 	if e.adamOptimizer == nil {
@@ -520,6 +530,11 @@ func (e *MPSTrainingEngine) Cleanup() {
 	if e.adamOptimizer != nil {
 		e.adamOptimizer.Cleanup()
 		e.adamOptimizer = nil
+	}
+	
+	if e.lbfgsOptimizer != nil {
+		e.lbfgsOptimizer.Cleanup()
+		e.lbfgsOptimizer = nil
 	}
 	
 	if e.initialized && e.engine != nil {

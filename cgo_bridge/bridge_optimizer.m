@@ -821,3 +821,408 @@ int execute_rmsprop_step_mpsgraph(
         }
     }
 }
+
+// L-BFGS Optimizer Implementation
+
+// Cache L-BFGS scalar tensors to eliminate allocation overhead
+void cacheLBFGSScalarTensors(training_engine_t* engine) {
+    @autoreleasepool {
+        if (engine->lbfgsScalarsCached || !engine->graph) {
+            return; // Already cached or no graph available
+        }
+        
+        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching L-BFGS scalar tensors...");
+        
+        // Create scalar tensors for L-BFGS hyperparameters ONCE
+        engine->lbfgsCachedInitialStepTensor = [engine->graph constantWithScalar:1.0f dataType:MPSDataTypeFloat32];
+        
+        engine->lbfgsScalarsCached = YES;
+        NSLog(@"✅ L-BFGS scalar tensors cached successfully");
+    }
+}
+
+// Helper function to compute dot product of two tensors
+static MPSGraphTensor* computeDotProduct(MPSGraph* graph, MPSGraphTensor* a, MPSGraphTensor* b) {
+    MPSGraphTensor* product = [graph multiplicationWithPrimaryTensor:a secondaryTensor:b name:@"elementwise_mul"];
+    MPSGraphTensor* dotProduct = [graph reductionSumWithTensor:product axes:nil name:@"dot_product"];
+    return dotProduct;
+}
+
+// Execute L-BFGS optimization step using MPSGraph
+int execute_lbfgs_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* old_gradient_buffers,
+    uintptr_t* search_dir_buffers,
+    uintptr_t* s_vectors_flat,
+    uintptr_t* y_vectors_flat,
+    uintptr_t* rho_buffers,
+    uintptr_t alpha_buffer,
+    int num_weights,
+    int* buffer_sizes,
+    int history_size,
+    int history_count,
+    int history_index,
+    float initial_step,
+    float c1,
+    float c2,
+    int max_line_search,
+    float current_loss,
+    float prev_loss,
+    float* step_size
+) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
+        if (!device) {
+            NSLog(@"Device is nil in L-BFGS step");
+            return -1;
+        }
+        
+        // Create MPSGraph for L-BFGS optimization
+        MPSGraph* lbfgsGraph = [[MPSGraph alloc] init];
+        if (!lbfgsGraph) {
+            NSLog(@"Failed to create MPSGraph for L-BFGS optimization");
+            return -2;
+        }
+        
+        // Create command queue
+        id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+        if (!commandQueue) {
+            NSLog(@"Failed to create command queue for L-BFGS step");
+            return -3;
+        }
+        
+        @try {
+            // Step 1: Initialize search direction q = -g (negative gradient)
+            for (int i = 0; i < num_weights; i++) {
+                id<MTLBuffer> gradBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                id<MTLBuffer> searchDirBuffer = (__bridge id<MTLBuffer>)(void*)search_dir_buffers[i];
+                
+                float* gradPtr = (float*)[gradBuffer contents];
+                float* searchDirPtr = (float*)[searchDirBuffer contents];
+                
+                int num_elements = buffer_sizes[i] / sizeof(float);
+                for (int j = 0; j < num_elements; j++) {
+                    searchDirPtr[j] = -gradPtr[j]; // q = -g
+                }
+                [searchDirBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+            }
+            
+            // Step 2: L-BFGS two-loop recursion using direct buffer operations
+            id<MTLBuffer> alphaMetalBuffer = (__bridge id<MTLBuffer>)(void*)alpha_buffer;
+            float* alphaValues = (float*)[alphaMetalBuffer contents];
+            
+            // First loop (backward): q = q - alpha[j] * y[j]
+            if (history_count > 0) {
+                NSLog(@"L-BFGS first loop: history_count=%d, history_index=%d, history_size=%d", 
+                      history_count, history_index, history_size);
+                
+                for (int j = history_count - 1; j >= 0; j--) {
+                    int idx = (history_index - history_count + j + history_size) % history_size;
+                    
+                    // Bounds checking
+                    if (idx < 0 || idx >= history_size) {
+                        NSLog(@"ERROR: Invalid history index %d (j=%d)", idx, j);
+                        continue;
+                    }
+                    
+                    // Get rho[j] and skip if invalid
+                    id<MTLBuffer> rhoBuffer = (__bridge id<MTLBuffer>)(void*)rho_buffers[idx];
+                    if (!rhoBuffer) {
+                        NSLog(@"ERROR: rhoBuffer is NULL for idx=%d", idx);
+                        continue;
+                    }
+                    
+                    float rho_j = ((float*)[rhoBuffer contents])[0];
+                    
+                    if (fabs(rho_j) < 1e-10) {
+                        alphaValues[j] = 0.0f;
+                        continue; // Skip invalid history entry
+                    }
+                    
+                    // Compute alpha[j] = rho[j] * (s[j]^T * q)
+                    float alpha_j = 0.0f;
+                    
+                    for (int i = 0; i < num_weights; i++) {
+                        int flat_idx = idx * num_weights + i;
+                        
+                        // Bounds checking for flattened array access
+                        int max_flat_idx = history_size * num_weights - 1;
+                        if (flat_idx < 0 || flat_idx > max_flat_idx) {
+                            NSLog(@"ERROR: Invalid flat_idx %d (max=%d) for idx=%d, i=%d in first loop", flat_idx, max_flat_idx, idx, i);
+                            continue;
+                        }
+                        
+                        NSLog(@"First loop: Accessing s_vectors_flat[%d] (idx=%d, i=%d)", flat_idx, idx, i);
+                        id<MTLBuffer> sBuffer = (__bridge id<MTLBuffer>)(void*)s_vectors_flat[flat_idx];
+                        
+                        if (!sBuffer) {
+                            NSLog(@"ERROR: sBuffer is NULL for flat_idx %d in first loop", flat_idx);
+                            continue;
+                        }
+                        id<MTLBuffer> searchDirBuffer = (__bridge id<MTLBuffer>)(void*)search_dir_buffers[i];
+                        
+                        float* sPtr = (float*)[sBuffer contents];
+                        float* qPtr = (float*)[searchDirBuffer contents];
+                        
+                        int num_elements = buffer_sizes[i] / sizeof(float);
+                        
+                        // Compute dot product s[j]^T * q
+                        float dot_product = 0.0f;
+                        for (int k = 0; k < num_elements; k++) {
+                            dot_product += sPtr[k] * qPtr[k];
+                        }
+                        alpha_j += dot_product;
+                    }
+                    
+                    // Compute alpha[j] = rho[j] * (s[j]^T * q)
+                    alpha_j *= rho_j;
+                    alphaValues[j] = alpha_j;
+                    
+                    // Update q = q - alpha[j] * y[j]
+                    for (int i = 0; i < num_weights; i++) {
+                        int flat_idx = idx * num_weights + i;
+                        id<MTLBuffer> yBuffer = (__bridge id<MTLBuffer>)(void*)y_vectors_flat[flat_idx];
+                        id<MTLBuffer> searchDirBuffer = (__bridge id<MTLBuffer>)(void*)search_dir_buffers[i];
+                        
+                        float* yPtr = (float*)[yBuffer contents];
+                        float* qPtr = (float*)[searchDirBuffer contents];
+                        
+                        int num_elements = buffer_sizes[i] / sizeof(float);
+                        for (int k = 0; k < num_elements; k++) {
+                            qPtr[k] = qPtr[k] - alpha_j * yPtr[k];
+                        }
+                        [searchDirBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    }
+                }
+            }
+            
+            // Apply initial Hessian approximation H_0 = I (identity)
+            // r = H_0 * q = q (no change needed)
+            
+            // Second loop (forward): r = r + (alpha[j] - beta) * s[j]
+            if (history_count > 0) {
+                NSLog(@"L-BFGS second loop: history_count=%d, history_index=%d", history_count, history_index);
+                
+                for (int j = 0; j < history_count; j++) {
+                    int idx = (history_index - history_count + j + history_size) % history_size;
+                    
+                    // Bounds checking
+                    if (idx < 0 || idx >= history_size) {
+                        NSLog(@"ERROR: Invalid history index %d in second loop (j=%d)", idx, j);
+                        continue;
+                    }
+                    
+                    // Get rho[j] and skip if invalid
+                    id<MTLBuffer> rhoBuffer = (__bridge id<MTLBuffer>)(void*)rho_buffers[idx];
+                    if (!rhoBuffer) {
+                        NSLog(@"ERROR: rhoBuffer is NULL for idx=%d", idx);
+                        continue;
+                    }
+                    
+                    float rho_j = ((float*)[rhoBuffer contents])[0];
+                    
+                    if (fabs(rho_j) < 1e-10) {
+                        continue; // Skip invalid history entry
+                    }
+                    
+                    // Compute beta = rho[j] * (y[j]^T * r)
+                    float beta = 0.0f;
+                    
+                    for (int i = 0; i < num_weights; i++) {
+                        int flat_idx = idx * num_weights + i;
+                        id<MTLBuffer> yBuffer = (__bridge id<MTLBuffer>)(void*)y_vectors_flat[flat_idx];
+                        id<MTLBuffer> searchDirBuffer = (__bridge id<MTLBuffer>)(void*)search_dir_buffers[i];
+                        
+                        float* yPtr = (float*)[yBuffer contents];
+                        float* rPtr = (float*)[searchDirBuffer contents];
+                        
+                        int num_elements = buffer_sizes[i] / sizeof(float);
+                        
+                        // Compute dot product y[j]^T * r
+                        float dot_product = 0.0f;
+                        for (int k = 0; k < num_elements; k++) {
+                            dot_product += yPtr[k] * rPtr[k];
+                        }
+                        beta += dot_product;
+                    }
+                    
+                    // Compute beta = rho[j] * (y[j]^T * r)
+                    beta *= rho_j;
+                    
+                    // Update r = r + (alpha[j] - beta) * s[j]
+                    float alpha_j = alphaValues[j];
+                    float coeff = alpha_j - beta;
+                    
+                    for (int i = 0; i < num_weights; i++) {
+                        int flat_idx = idx * num_weights + i;
+                        id<MTLBuffer> sBuffer = (__bridge id<MTLBuffer>)(void*)s_vectors_flat[flat_idx];
+                        id<MTLBuffer> searchDirBuffer = (__bridge id<MTLBuffer>)(void*)search_dir_buffers[i];
+                        
+                        float* sPtr = (float*)[sBuffer contents];
+                        float* rPtr = (float*)[searchDirBuffer contents];
+                        
+                        int num_elements = buffer_sizes[i] / sizeof(float);
+                        for (int k = 0; k < num_elements; k++) {
+                            rPtr[k] = rPtr[k] + coeff * sPtr[k];
+                        }
+                        [searchDirBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    }
+                }
+            }
+            
+            // Step 3: Negate to get descent direction: p = -r
+            for (int i = 0; i < num_weights; i++) {
+                id<MTLBuffer> searchDirBuffer = (__bridge id<MTLBuffer>)(void*)search_dir_buffers[i];
+                float* searchDirPtr = (float*)[searchDirBuffer contents];
+                
+                int num_elements = buffer_sizes[i] / sizeof(float);
+                for (int k = 0; k < num_elements; k++) {
+                    searchDirPtr[k] = -searchDirPtr[k]; // p = -r
+                }
+                [searchDirBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+            }
+            
+            // Step 4: Line search (simplified - use fixed step size)
+            float alpha = initial_step;
+            *step_size = alpha;
+            
+            // Step 5: Update parameters: x_{k+1} = x_k + alpha * p_k
+            for (int i = 0; i < num_weights; i++) {
+                id<MTLBuffer> weightsBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                id<MTLBuffer> searchDirBuffer = (__bridge id<MTLBuffer>)(void*)search_dir_buffers[i];
+                id<MTLBuffer> oldGradBuffer = (__bridge id<MTLBuffer>)(void*)old_gradient_buffers[i];
+                id<MTLBuffer> gradBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                
+                float* weightPtr = (float*)[weightsBuffer contents];
+                float* searchDirPtr = (float*)[searchDirBuffer contents];
+                
+                int num_elements = buffer_sizes[i] / sizeof(float);
+                
+                // Update weights: x = x + alpha * p
+                for (int k = 0; k < num_elements; k++) {
+                    weightPtr[k] = weightPtr[k] + alpha * searchDirPtr[k];
+                }
+                [weightsBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                
+                // Save current gradient as old gradient for next iteration
+                memcpy([oldGradBuffer contents], [gradBuffer contents], buffer_sizes[i]);
+                [oldGradBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+            }
+            
+            // Step 6: Update history (s_k, y_k, rho_k) for next iteration
+            int current_idx = history_index;
+            
+            // First, store s_k = alpha * p_k (the step we just took)
+            for (int i = 0; i < num_weights; i++) {
+                int flat_idx = current_idx * num_weights + i;
+                id<MTLBuffer> sBuffer = (__bridge id<MTLBuffer>)(void*)s_vectors_flat[flat_idx];
+                id<MTLBuffer> searchDirBuffer = (__bridge id<MTLBuffer>)(void*)search_dir_buffers[i];
+                
+                float* sPtr = (float*)[sBuffer contents];
+                float* searchDirPtr = (float*)[searchDirBuffer contents];
+                int numElements = buffer_sizes[i] / sizeof(float);
+                
+                for (int j = 0; j < numElements; j++) {
+                    sPtr[j] = alpha * searchDirPtr[j];
+                }
+                [sBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+            }
+            
+            // If this is not the first step, compute y_k and rho_k from previous iteration
+            if (history_count > 0) {
+                int prev_idx = (current_idx - 1 + history_size) % history_size;
+                
+                // Bounds checking for previous index
+                if (prev_idx < 0 || prev_idx >= history_size) {
+                    NSLog(@"ERROR: Invalid prev_idx %d in history update", prev_idx);
+                    return -5;
+                }
+                
+                NSLog(@"Computing y_k and rho_k: current_idx=%d, prev_idx=%d", current_idx, prev_idx);
+                float s_dot_y = 0.0f;
+                
+                // Compute y_k = g_k - g_{k-1} (current gradient - old gradient)
+                for (int i = 0; i < num_weights; i++) {
+                    int flat_idx = prev_idx * num_weights + i;
+                    id<MTLBuffer> yBuffer = (__bridge id<MTLBuffer>)(void*)y_vectors_flat[flat_idx];
+                    id<MTLBuffer> gradBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                    id<MTLBuffer> oldGradBuffer = (__bridge id<MTLBuffer>)(void*)old_gradient_buffers[i];
+                    
+                    float* yPtr = (float*)[yBuffer contents];
+                    float* gradPtr = (float*)[gradBuffer contents];
+                    float* oldGradPtr = (float*)[oldGradBuffer contents];
+                    
+                    int numElements = buffer_sizes[i] / sizeof(float);
+                    for (int j = 0; j < numElements; j++) {
+                        yPtr[j] = gradPtr[j] - oldGradPtr[j]; // y_k = g_k - g_{k-1}
+                    }
+                    [yBuffer didModifyRange:NSMakeRange(0, buffer_sizes[i])];
+                    
+                    // Compute s^T * y for rho calculation
+                    id<MTLBuffer> sPrevBuffer = (__bridge id<MTLBuffer>)(void*)s_vectors_flat[flat_idx];
+                    float* sPrevPtr = (float*)[sPrevBuffer contents];
+                    
+                    for (int j = 0; j < numElements; j++) {
+                        s_dot_y += sPrevPtr[j] * yPtr[j];
+                    }
+                }
+                
+                // Compute rho_k = 1 / (s^T * y), with safeguard against division by zero
+                id<MTLBuffer> rhoBuffer = (__bridge id<MTLBuffer>)(void*)rho_buffers[prev_idx];
+                float* rhoPtr = (float*)[rhoBuffer contents];
+                
+                if (fabs(s_dot_y) > 1e-10) {
+                    rhoPtr[0] = 1.0f / s_dot_y;
+                } else {
+                    // If s^T * y is too small, skip this update to maintain positive definiteness
+                    rhoPtr[0] = 0.0f;
+                    NSLog(@"Warning: Skipping L-BFGS update due to small s^T * y = %f", s_dot_y);
+                }
+                [rhoBuffer didModifyRange:NSMakeRange(0, 4)];
+            }
+            
+            return 0;
+            
+        } @catch (NSException* exception) {
+            NSLog(@"❌ L-BFGS optimizer exception: %@", exception.reason);
+            return -8;
+        }
+    }
+}
+
+// Pooled version of L-BFGS optimizer
+int execute_lbfgs_step_mpsgraph_pooled(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* old_gradient_buffers,
+    uintptr_t* search_dir_buffers,
+    uintptr_t* s_vectors_flat,
+    uintptr_t* y_vectors_flat,
+    uintptr_t* rho_buffers,
+    uintptr_t alpha_buffer,
+    int num_weights,
+    int* buffer_sizes,
+    int history_size,
+    int history_count,
+    int history_index,
+    float initial_step,
+    float c1,
+    float c2,
+    int max_line_search,
+    float current_loss,
+    float prev_loss,
+    uintptr_t command_pool,
+    float* step_size
+) {
+    // For now, just call the non-pooled version
+    // TODO: Implement proper command buffer pooling for L-BFGS
+    return execute_lbfgs_step_mpsgraph(
+        device_ptr, weight_buffers, gradient_buffers, old_gradient_buffers,
+        search_dir_buffers, s_vectors_flat, y_vectors_flat, rho_buffers, alpha_buffer,
+        num_weights, buffer_sizes, history_size, history_count, history_index,
+        initial_step, c1, c2, max_line_search, current_loss, prev_loss, step_size
+    );
+}

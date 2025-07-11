@@ -141,6 +141,37 @@ func NewModelTrainingEngineDynamic(
 		}
 	}
 	
+	// For L-BFGS optimizer, initialize the external optimizer state
+	if config.OptimizerType == cgo_bridge.LBFGS {
+		lbfgsConfig := optimizer.LBFGSConfig{
+			HistorySize:   10,    // Default history size
+			LineSearchTol: 1e-4,  // Line search tolerance
+			MaxLineSearch: 20,    // Maximum line search iterations
+			C1:            1e-4,  // Armijo condition parameter
+			C2:            0.9,   // Wolfe condition parameter
+			InitialStep:   1.0,   // Initial step size
+		}
+		
+		// Get all parameter shapes for L-BFGS initialization (dynamic engine uses all parameters)
+		paramShapes := modelSpec.ParameterShapes
+		lbfgsOptimizer, err := optimizer.NewLBFGSOptimizer(
+			lbfgsConfig,
+			paramShapes,
+			memory.GetGlobalMemoryManager(),
+			baseEngine.device,
+		)
+		if err != nil {
+			baseEngine.Cleanup()
+			return nil, fmt.Errorf("failed to create L-BFGS optimizer for dynamic engine: %v", err)
+		}
+		baseEngine.lbfgsOptimizer = lbfgsOptimizer
+		
+		// RESOURCE LEAK FIX: Enable command buffer pooling in L-BFGS optimizer
+		if baseEngine.useCommandPooling && baseEngine.commandQueue != nil {
+			lbfgsOptimizer.SetCommandPool(baseEngine.commandQueue)
+		}
+	}
+	
 	// Create parameter tensors for the model
 	paramTensors, err := modelSpec.CreateParameterTensors()
 	if err != nil {
@@ -805,6 +836,140 @@ func (mte *ModelTrainingEngine) executeAdamStepDynamicWithGradients(
 	return actualLoss, nil
 }
 
+// ExecuteModelTrainingStepWithLBFGS executes model training with L-BFGS optimizer
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithLBFGS(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	if !mte.compiledForModel {
+		return 0, fmt.Errorf("model not compiled for execution")
+	}
+	
+	if mte.isDynamicEngine {
+		// Dynamic engine uses external L-BFGS optimization with gradient extraction
+		return mte.executeLBFGSStepDynamic(inputTensor, labelTensor)
+	} else {
+		// Hybrid fallback engine - L-BFGS not yet supported for hybrid
+		return 0, fmt.Errorf("L-BFGS not yet supported for hybrid engine")
+	}
+}
+
+// executeLBFGSStepDynamic executes L-BFGS optimization for dynamic engines
+func (mte *ModelTrainingEngine) executeLBFGSStepDynamic(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	return mte.executeLBFGSStepDynamicWithGradients(inputTensor, labelTensor, mte.gradientTensors)
+}
+
+// executeLBFGSStepDynamicWithGradients executes L-BFGS optimization with persistent gradient tensors
+func (mte *ModelTrainingEngine) executeLBFGSStepDynamicWithGradients(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	persistentGradientTensors []*memory.Tensor,
+) (float32, error) {
+	// Step 1: Set weight buffers in L-BFGS optimizer
+	if mte.MPSTrainingEngine.lbfgsOptimizer == nil {
+		return 0, fmt.Errorf("L-BFGS optimizer not initialized for dynamic engine")
+	}
+	
+	// Get all parameter tensors for dynamic execution
+	allParameters := mte.getAllParameterTensors()
+	weightBuffers := make([]unsafe.Pointer, len(allParameters))
+	for i, param := range allParameters {
+		weightBuffers[i] = param.MetalBuffer()
+	}
+	
+	err := mte.MPSTrainingEngine.lbfgsOptimizer.SetWeightBuffers(weightBuffers)
+	if err != nil {
+		return 0, fmt.Errorf("failed to set weight buffers in L-BFGS optimizer: %v", err)
+	}
+	
+	// Step 2: Use persistent gradient tensors if provided, otherwise allocate
+	gradientBuffers := make([]unsafe.Pointer, len(allParameters))
+	var gradientTensors []*memory.Tensor
+	var allocatedGradients bool
+
+	if persistentGradientTensors != nil && len(persistentGradientTensors) == len(allParameters) {
+		// PERFORMANCE OPTIMIZATION: Use pre-allocated persistent gradient tensors
+		gradientTensors = persistentGradientTensors
+		allocatedGradients = false
+		for i, gradTensor := range gradientTensors {
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	} else {
+		// Allocate new gradient tensors
+		gradientTensors = make([]*memory.Tensor, len(allParameters))
+		allocatedGradients = true
+		for i, param := range allParameters {
+			gradTensor, err := memory.NewTensor(param.Shape(), memory.Float32, memory.GPU)
+			if err != nil {
+				return 0, fmt.Errorf("failed to create gradient tensor %d: %v", i, err)
+			}
+			gradientTensors[i] = gradTensor
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	}
+	
+	// Step 3: Execute forward and backward pass to get gradients
+	var actualLoss float32
+	
+	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
+		// Use pooled version with command queue for resource leak prevention
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradientsPooled(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			inputTensor.Shape()[0], // batch size
+			mte.MPSTrainingEngine.commandQueue,
+		)
+	} else {
+		// Use non-pooled version 
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			1.0, // learning rate (not used for L-BFGS since it uses line search)
+			inputTensor.Shape()[0], // batch size
+		)
+	}
+	
+	if err != nil {
+		if allocatedGradients {
+			for _, gradTensor := range gradientTensors {
+				gradTensor.Release()
+			}
+		}
+		return 0, fmt.Errorf("forward-backward pass failed: %v", err)
+	}
+	
+	// Step 4: Execute L-BFGS optimization step
+	// L-BFGS needs loss value for line search
+	err = mte.MPSTrainingEngine.lbfgsOptimizer.Step(gradientBuffers, actualLoss)
+	if err != nil {
+		if allocatedGradients {
+			for _, gradTensor := range gradientTensors {
+				gradTensor.Release()
+			}
+		}
+		return 0, fmt.Errorf("L-BFGS optimization step failed: %v", err)
+	}
+	
+	// Step 5: Clean up allocated gradient tensors
+	if allocatedGradients {
+		for _, gradTensor := range gradientTensors {
+			gradTensor.Release()
+		}
+	}
+	
+	// Return actual computed loss
+	return actualLoss, nil
+}
+
 // executeSGDStepDynamicWithGradients executes SGD optimization with Adam's resource management approach
 // PERFORMANCE CRITICAL: Matches Adam's persistent gradient tensor and pooled command buffer usage
 func (mte *ModelTrainingEngine) executeSGDStepDynamicWithGradients(
@@ -1077,6 +1242,8 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatched(
 		// Check configured optimizer type for hybrid engine
 		if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Adam {
 			loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.LBFGS {
+			loss, err = mte.ExecuteModelTrainingStepWithLBFGS(inputTensor, labelTensor)
 		} else {
 			// SGD optimizer - use regular training step with learning rate
 			loss, err = mte.ExecuteModelTrainingStep(inputTensor, labelTensor, mte.MPSTrainingEngine.config.LearningRate)
@@ -1178,6 +1345,8 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGra
 		// Check configured optimizer type for hybrid engine
 		if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Adam {
 			loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.LBFGS {
+			loss, err = mte.ExecuteModelTrainingStepWithLBFGS(inputTensor, labelTensor)
 		} else {
 			// SGD optimizer - use regular training step with learning rate
 			loss, err = mte.ExecuteModelTrainingStep(inputTensor, labelTensor, mte.MPSTrainingEngine.config.LearningRate)

@@ -14,7 +14,7 @@ typedef struct {
     float alpha;             // RMSProp smoothing constant (typically 0.99)
     float momentum;          // RMSProp momentum coefficient (typically 0.0)
     int centered;            // RMSProp centered variant flag (0=false, 1=true)
-    int optimizer_type;      // 0 = SGD, 1 = Adam, 2 = RMSProp
+    int optimizer_type;      // 0 = SGD, 1 = Adam, 2 = RMSProp, 3 = L-BFGS
     int problem_type;        // 0 = Classification, 1 = Regression
     int loss_function;       // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = MSE, 3 = MAE, 4 = Huber
 } training_config_t;
@@ -323,6 +323,56 @@ int execute_rmsprop_step_mpsgraph(
     _Bool centered,
     int step_count
 );
+
+// L-BFGS optimizer functions (using flattened arrays for CGO compatibility)
+int execute_lbfgs_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* old_gradient_buffers,
+    uintptr_t* search_dir_buffers,
+    uintptr_t* s_vectors_flat,
+    uintptr_t* y_vectors_flat,
+    uintptr_t* rho_buffers,
+    uintptr_t alpha_buffer,
+    int num_weights,
+    int* buffer_sizes,
+    int history_size,
+    int history_count,
+    int history_index,
+    float initial_step,
+    float c1,
+    float c2,
+    int max_line_search,
+    float current_loss,
+    float prev_loss,
+    float* step_size
+);
+
+int execute_lbfgs_step_mpsgraph_pooled(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* old_gradient_buffers,
+    uintptr_t* search_dir_buffers,
+    uintptr_t* s_vectors_flat,
+    uintptr_t* y_vectors_flat,
+    uintptr_t* rho_buffers,
+    uintptr_t alpha_buffer,
+    int num_weights,
+    int* buffer_sizes,
+    int history_size,
+    int history_count,
+    int history_index,
+    float initial_step,
+    float c1,
+    float c2,
+    int max_line_search,
+    float current_loss,
+    float prev_loss,
+    uintptr_t command_pool,
+    float* step_size
+);
 */
 import "C"
 import (
@@ -375,6 +425,7 @@ const (
 	SGD OptimizerType = iota
 	Adam
 	RMSProp
+	LBFGS
 )
 
 // TrainingConfig holds training configuration
@@ -1893,4 +1944,132 @@ func ExecuteRMSPropStepMPSGraph(
 	}
 
 	return nil
+}
+
+// ExecuteLBFGSStepMPSGraph executes a single L-BFGS optimization step using MPSGraph for optimal GPU performance
+func ExecuteLBFGSStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	oldGradientBuffers []unsafe.Pointer,
+	searchDirBuffers []unsafe.Pointer,
+	sVectors [][]unsafe.Pointer,
+	yVectors [][]unsafe.Pointer,
+	rhoBuffers []unsafe.Pointer,
+	alphaBuffer unsafe.Pointer,
+	numWeights int,
+	bufferSizes []int,
+	historySize int,
+	historyCount int,
+	historyIndex int,
+	initialStep float32,
+	c1 float32,
+	c2 float32,
+	maxLineSearch int,
+	currentLoss float32,
+	prevLoss float32,
+	commandPool unsafe.Pointer,
+	usePooling bool,
+) (float32, error) {
+	// Validate inputs
+	if len(weightBuffers) != numWeights ||
+		len(gradientBuffers) != numWeights ||
+		len(oldGradientBuffers) != numWeights ||
+		len(searchDirBuffers) != numWeights ||
+		len(bufferSizes) != numWeights {
+		return 0, fmt.Errorf("buffer arrays must have length %d", numWeights)
+	}
+
+	// Convert Go slices to C arrays
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cOldGradientBuffers := make([]C.uintptr_t, numWeights)
+	cSearchDirBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		cOldGradientBuffers[i] = C.uintptr_t(uintptr(oldGradientBuffers[i]))
+		cSearchDirBuffers[i] = C.uintptr_t(uintptr(searchDirBuffers[i]))
+		cBufferSizes[i] = C.int(bufferSizes[i])
+	}
+
+	// Convert history vectors to flattened C arrays to avoid CGO pointer issues
+	// Layout: [hist0_weight0, hist0_weight1, ..., hist1_weight0, hist1_weight1, ...]
+	cSVectorsFlat := make([]C.uintptr_t, historySize*numWeights)
+	cYVectorsFlat := make([]C.uintptr_t, historySize*numWeights)
+	
+	for h := 0; h < historySize; h++ {
+		for w := 0; w < numWeights; w++ {
+			idx := h*numWeights + w
+			cSVectorsFlat[idx] = C.uintptr_t(uintptr(sVectors[h][w]))
+			cYVectorsFlat[idx] = C.uintptr_t(uintptr(yVectors[h][w]))
+		}
+	}
+	cRhoBuffers := make([]C.uintptr_t, historySize)
+
+	for h := 0; h < historySize; h++ {
+		cRhoBuffers[h] = C.uintptr_t(uintptr(rhoBuffers[h]))
+	}
+
+	var stepSize C.float = 0.0
+	var result C.int
+
+	if usePooling && commandPool != nil {
+		result = C.execute_lbfgs_step_mpsgraph_pooled(
+			C.uintptr_t(uintptr(device)),
+			&cWeightBuffers[0],
+			&cGradientBuffers[0],
+			&cOldGradientBuffers[0],
+			&cSearchDirBuffers[0],
+			&cSVectorsFlat[0],
+			&cYVectorsFlat[0],
+			&cRhoBuffers[0],
+			C.uintptr_t(uintptr(alphaBuffer)),
+			C.int(numWeights),
+			&cBufferSizes[0],
+			C.int(historySize),
+			C.int(historyCount),
+			C.int(historyIndex),
+			C.float(initialStep),
+			C.float(c1),
+			C.float(c2),
+			C.int(maxLineSearch),
+			C.float(currentLoss),
+			C.float(prevLoss),
+			C.uintptr_t(uintptr(commandPool)),
+			&stepSize,
+		)
+	} else {
+		result = C.execute_lbfgs_step_mpsgraph(
+			C.uintptr_t(uintptr(device)),
+			&cWeightBuffers[0],
+			&cGradientBuffers[0],
+			&cOldGradientBuffers[0],
+			&cSearchDirBuffers[0],
+			&cSVectorsFlat[0],
+			&cYVectorsFlat[0],
+			&cRhoBuffers[0],
+			C.uintptr_t(uintptr(alphaBuffer)),
+			C.int(numWeights),
+			&cBufferSizes[0],
+			C.int(historySize),
+			C.int(historyCount),
+			C.int(historyIndex),
+			C.float(initialStep),
+			C.float(c1),
+			C.float(c2),
+			C.int(maxLineSearch),
+			C.float(currentLoss),
+			C.float(prevLoss),
+			&stepSize,
+		)
+	}
+
+	if result != 0 {
+		return 0, fmt.Errorf("L-BFGS MPSGraph step failed with error code: %d", result)
+	}
+
+	return float32(stepSize), nil
 }

@@ -153,6 +153,10 @@ func NewModelTrainer(
 				"weight_decay":  config.WeightDecay,
 			}
 			modelEngine, err = engine.NewModelTrainingEngineWithAdam(modelSpec, bridgeConfig, adamConfig)
+		} else if config.OptimizerType == cgo_bridge.LBFGS {
+			// L-BFGS requires dynamic engine due to its complexity
+			fmt.Printf("📊 L-BFGS optimizer detected, switching to Dynamic Engine\n")
+			modelEngine, err = engine.NewModelTrainingEngineDynamic(modelSpec, bridgeConfig)
 		} else {
 			// SGD or RMSProp with hybrid engine
 			modelEngine, err = engine.NewModelTrainingEngine(modelSpec, bridgeConfig)
@@ -433,6 +437,8 @@ func (mt *ModelTrainer) TrainBatch(
 	var loss float32
 	if mt.config.OptimizerType == cgo_bridge.Adam {
 		loss, err = mt.modelEngine.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+	} else if mt.config.OptimizerType == cgo_bridge.LBFGS {
+		loss, err = mt.modelEngine.ExecuteModelTrainingStepWithLBFGS(inputTensor, labelTensor)
 	} else {
 		loss, err = mt.modelEngine.ExecuteModelTrainingStep(inputTensor, labelTensor, mt.config.LearningRate)
 	}
@@ -847,6 +853,8 @@ func (mt *ModelTrainer) TrainBatchWithCommandPool(
 	var loss float32
 	if mt.config.OptimizerType == cgo_bridge.Adam {
 		loss, err = mt.modelEngine.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+	} else if mt.config.OptimizerType == cgo_bridge.LBFGS {
+		loss, err = mt.modelEngine.ExecuteModelTrainingStepWithLBFGS(inputTensor, labelTensor)
 	} else {
 		loss, err = mt.modelEngine.ExecuteModelTrainingStep(inputTensor, labelTensor, mt.config.LearningRate)
 	}
@@ -1260,6 +1268,17 @@ func validateTrainerConfig(config TrainerConfig) error {
 		}
 		if config.Epsilon <= 0 {
 			return fmt.Errorf("Adam epsilon must be positive, got %f", config.Epsilon)
+		}
+	}
+	
+	if config.OptimizerType == cgo_bridge.LBFGS {
+		if config.LearningRate <= 0 {
+			return fmt.Errorf("L-BFGS learning rate must be positive, got %f", config.LearningRate)
+		}
+		// L-BFGS is suitable for full-batch or large-batch training
+		// For very small batches, recommend Adam or SGD instead
+		if config.BatchSize < 32 {
+			fmt.Printf("⚠️  Warning: L-BFGS with small batch size (%d) may be inefficient. Consider Adam or SGD for mini-batch training.\n", config.BatchSize)
 		}
 	}
 	

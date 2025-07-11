@@ -72,7 +72,7 @@ typedef struct {
     float alpha;             // RMSProp smoothing constant (typically 0.99)
     float momentum;          // RMSProp momentum coefficient (typically 0.0)
     int centered;            // RMSProp centered variant flag (0=false, 1=true)
-    int optimizer_type;      // 0 = SGD, 1 = Adam, 2 = RMSProp
+    int optimizer_type;      // 0 = SGD, 1 = Adam, 2 = RMSProp, 3 = L-BFGS
     int problem_type;        // 0 = Classification, 1 = Regression
     int loss_function;       // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = BinaryCrossEntropy, 3 = BCEWithLogits, 4 = CategoricalCrossEntropy, 5 = MSE, 6 = MAE, 7 = Huber
 } training_config_t;
@@ -230,6 +230,33 @@ typedef struct {
     MPSGraphTensor* rmspropCachedMomentumTensor;           // Cached RMSProp momentum scalar
     MPSGraphTensor* rmspropCachedEpsilonTensor;            // Cached RMSProp epsilon scalar
     BOOL rmspropScalarsCached;                             // Flag indicating RMSProp scalars are cached
+    
+    // L-BFGS-specific graph compilation
+    BOOL lbfgsGraphCompiled;                                // Flag indicating L-BFGS graph is compiled
+    BOOL lbfgsStateInitialized;                             // Flag indicating L-BFGS state is ready
+    NSMutableArray* lbfgsPrecompiledGradients;              // L-BFGS pre-compiled gradient tensors
+    NSMutableArray* lbfgsPrecompiledUpdatedParams;          // L-BFGS pre-compiled parameter updates
+    NSMutableArray* lbfgsPrecompiledSearchDirections;       // L-BFGS pre-compiled search directions
+    
+    // L-BFGS-specific state arrays
+    NSMutableArray* lbfgsHistorySVectors;                   // History of parameter differences (s_k = x_{k+1} - x_k)
+    NSMutableArray* lbfgsHistoryYVectors;                   // History of gradient differences (y_k = g_{k+1} - g_k)
+    NSMutableArray* lbfgsRhoBuffers;                        // Scalar values ρ_k = 1/(y_k^T s_k)
+    NSMutableArray* lbfgsOldGradientBuffers;                // Previous gradients for computing y_k
+    NSMutableArray* lbfgsSearchDirBuffers;                  // Search direction buffers p_k
+    id<MTLBuffer> lbfgsAlphaBuffer;                         // Alpha values for two-loop recursion
+    
+    // L-BFGS-specific configuration
+    int lbfgsHistorySize;                                   // Number of past gradients to store (m parameter)
+    int lbfgsHistoryCount;                                  // Current number of stored history pairs
+    int lbfgsHistoryIndex;                                  // Circular buffer index
+    float lbfgsC1;                                          // Armijo condition parameter
+    float lbfgsC2;                                          // Wolfe condition parameter
+    int lbfgsMaxLineSearch;                                 // Maximum line search iterations
+    
+    // L-BFGS-specific cached scalars
+    MPSGraphTensor* lbfgsCachedInitialStepTensor;          // Cached initial step size scalar
+    BOOL lbfgsScalarsCached;                                // Flag indicating L-BFGS scalars are cached
     
     // Model configuration for dynamic dimensions
     model_config_t model_config;                             // Model architecture configuration
