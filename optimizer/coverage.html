@@ -1,0 +1,1785 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>optimizer: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/tsawler/go-metal/optimizer/adadelta.go (1.8%)</option>
+				
+				<option value="file1">github.com/tsawler/go-metal/optimizer/adagrad.go (0.0%)</option>
+				
+				<option value="file2">github.com/tsawler/go-metal/optimizer/adam.go (13.8%)</option>
+				
+				<option value="file3">github.com/tsawler/go-metal/optimizer/lbfgs.go (1.0%)</option>
+				
+				<option value="file4">github.com/tsawler/go-metal/optimizer/nadam.go (43.4%)</option>
+				
+				<option value="file5">github.com/tsawler/go-metal/optimizer/rmsprop.go (12.6%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package optimizer
+
+import (
+        "fmt"
+        "unsafe"
+
+        "github.com/tsawler/go-metal/cgo_bridge"
+        "github.com/tsawler/go-metal/memory"
+)
+
+// AdaDeltaOptimizerState represents GPU-resident AdaDelta optimizer state
+type AdaDeltaOptimizerState struct {
+        // Configuration
+        config AdaDeltaConfig
+        
+        // GPU-resident state buffers
+        squaredGradAvgBuffers []unsafe.Pointer // E[g^2]_t - Accumulated squared gradient averages
+        squaredUpdateAvgBuffers []unsafe.Pointer // E[Δx^2]_t - Accumulated squared update averages
+        WeightBuffers         []unsafe.Pointer // Current weight tensors
+        
+        // Step tracking
+        currentStep uint64
+        
+        // Buffer management
+        memoryManager *memory.MemoryManager
+        device        unsafe.Pointer
+        bufferSizes   []int
+        
+        // Command buffer pooling
+        commandPool unsafe.Pointer
+        usePooling  bool
+}
+
+// AdaDeltaConfig holds configuration for AdaDelta optimizer
+type AdaDeltaConfig struct {
+        Rho         float32 // Decay rate for moving averages (typically 0.95)
+        Epsilon     float32 // Small constant for numerical stability
+        WeightDecay float32 // L2 regularization strength
+}
+
+// DefaultAdaDeltaConfig returns default AdaDelta optimizer configuration
+func DefaultAdaDeltaConfig() AdaDeltaConfig <span class="cov8" title="1">{
+        return AdaDeltaConfig{
+                Rho:         0.95,
+                Epsilon:     1e-6,
+                WeightDecay: 0.0,
+        }
+}</span>
+
+// NewAdaDeltaOptimizer creates a new GPU-resident AdaDelta optimizer
+func NewAdaDeltaOptimizer(
+        config AdaDeltaConfig,
+        weightShapes [][]int,
+        memoryManager *memory.MemoryManager,
+        device unsafe.Pointer,
+) (*AdaDeltaOptimizerState, error) <span class="cov0" title="0">{
+        if memoryManager == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("memory manager cannot be nil")
+        }</span>
+        
+        <span class="cov0" title="0">if device == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("device cannot be nil")
+        }</span>
+        
+        <span class="cov0" title="0">if len(weightShapes) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no weight shapes provided")
+        }</span>
+        
+        <span class="cov0" title="0">if config.Rho &lt;= 0 || config.Rho &gt;= 1 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("rho must be in range (0, 1), got %f", config.Rho)
+        }</span>
+        
+        <span class="cov0" title="0">numWeights := len(weightShapes)
+        
+        adadelta := &amp;AdaDeltaOptimizerState{
+                config:                  config,
+                squaredGradAvgBuffers:   make([]unsafe.Pointer, numWeights),
+                squaredUpdateAvgBuffers: make([]unsafe.Pointer, numWeights),
+                WeightBuffers:           make([]unsafe.Pointer, numWeights),
+                currentStep:             0,
+                memoryManager:           memoryManager,
+                device:                  device,
+                bufferSizes:             make([]int, numWeights),
+        }
+        
+        // Calculate buffer sizes and allocate state buffers
+        for i, shape := range weightShapes </span><span class="cov0" title="0">{
+                adadelta.bufferSizes[i] = calculateTensorSize(shape) * 4 // 4 bytes per float32
+                
+                // Allocate squared gradient average buffer (E[g^2])
+                squaredGradAvgBuffer := adadelta.memoryManager.AllocateBuffer(adadelta.bufferSizes[i])
+                if squaredGradAvgBuffer == nil </span><span class="cov0" title="0">{
+                        adadelta.cleanup()
+                        return nil, fmt.Errorf("failed to allocate squared gradient average buffer for weight %d", i)
+                }</span>
+                <span class="cov0" title="0">adadelta.squaredGradAvgBuffers[i] = squaredGradAvgBuffer
+                
+                // Allocate squared update average buffer (E[Δx^2])
+                squaredUpdateAvgBuffer := adadelta.memoryManager.AllocateBuffer(adadelta.bufferSizes[i])
+                if squaredUpdateAvgBuffer == nil </span><span class="cov0" title="0">{
+                        adadelta.cleanup()
+                        return nil, fmt.Errorf("failed to allocate squared update average buffer for weight %d", i)
+                }</span>
+                <span class="cov0" title="0">adadelta.squaredUpdateAvgBuffers[i] = squaredUpdateAvgBuffer
+                
+                // Initialize both to zero
+                if err := cgo_bridge.ZeroMetalBuffer(adadelta.device, squaredGradAvgBuffer, adadelta.bufferSizes[i]); err != nil </span><span class="cov0" title="0">{
+                        adadelta.cleanup()
+                        return nil, fmt.Errorf("failed to zero squared gradient average buffer: %v", err)
+                }</span>
+                <span class="cov0" title="0">if err := cgo_bridge.ZeroMetalBuffer(adadelta.device, squaredUpdateAvgBuffer, adadelta.bufferSizes[i]); err != nil </span><span class="cov0" title="0">{
+                        adadelta.cleanup()
+                        return nil, fmt.Errorf("failed to zero squared update average buffer: %v", err)
+                }</span>
+        }
+        
+        <span class="cov0" title="0">return adadelta, nil</span>
+}
+
+// cleanup releases all allocated buffers
+func (adadelta *AdaDeltaOptimizerState) cleanup() <span class="cov0" title="0">{
+        for i := range adadelta.squaredGradAvgBuffers </span><span class="cov0" title="0">{
+                if adadelta.squaredGradAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                        adadelta.memoryManager.ReleaseBuffer(adadelta.squaredGradAvgBuffers[i])
+                }</span>
+                <span class="cov0" title="0">if adadelta.squaredUpdateAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                        adadelta.memoryManager.ReleaseBuffer(adadelta.squaredUpdateAvgBuffers[i])
+                }</span>
+        }
+}
+
+// SetWeightBuffers sets the current weight buffer pointers
+func (adadelta *AdaDeltaOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(weightBuffers) != len(adadelta.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("expected %d weight buffers, got %d", len(adadelta.WeightBuffers), len(weightBuffers))
+        }</span>
+        
+        <span class="cov0" title="0">copy(adadelta.WeightBuffers, weightBuffers)
+        return nil</span>
+}
+
+// Step performs a single AdaDelta optimization step
+func (adadelta *AdaDeltaOptimizerState) Step(gradientBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(gradientBuffers) != len(adadelta.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("gradient buffers length (%d) doesn't match weight buffers length (%d)",
+                        len(gradientBuffers), len(adadelta.WeightBuffers))
+        }</span>
+        
+        <span class="cov0" title="0">adadelta.currentStep++
+        
+        // Execute AdaDelta step using CGO bridge
+        var err error
+        if adadelta.usePooling &amp;&amp; adadelta.commandPool != nil </span><span class="cov0" title="0">{
+                err = cgo_bridge.ExecuteAdaDeltaStepMPSGraphPooled(
+                        adadelta.device,
+                        adadelta.WeightBuffers,
+                        gradientBuffers,
+                        adadelta.squaredGradAvgBuffers,
+                        adadelta.squaredUpdateAvgBuffers,
+                        len(adadelta.WeightBuffers),
+                        adadelta.bufferSizes,
+                        adadelta.config.Rho,
+                        adadelta.config.Epsilon,
+                        adadelta.config.WeightDecay,
+                        adadelta.commandPool,
+                )
+        }</span> else<span class="cov0" title="0"> {
+                err = cgo_bridge.ExecuteAdaDeltaStepMPSGraph(
+                        adadelta.device,
+                        adadelta.WeightBuffers,
+                        gradientBuffers,
+                        adadelta.squaredGradAvgBuffers,
+                        adadelta.squaredUpdateAvgBuffers,
+                        len(adadelta.WeightBuffers),
+                        adadelta.bufferSizes,
+                        adadelta.config.Rho,
+                        adadelta.config.Epsilon,
+                        adadelta.config.WeightDecay,
+                )
+        }</span>
+        
+        <span class="cov0" title="0">if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("AdaDelta step failed: %v", err)
+        }</span>
+        
+        // Log progress periodically
+        <span class="cov0" title="0">if adadelta.currentStep%10 == 0 </span><span class="cov0" title="0">{
+                fmt.Printf("AdaDelta step %d completed, rho=%.3f\n", adadelta.currentStep, adadelta.config.Rho)
+        }</span>
+        
+        <span class="cov0" title="0">return nil</span>
+}
+
+// SetCommandPool sets the command buffer pool for Metal operations
+func (adadelta *AdaDeltaOptimizerState) SetCommandPool(pool unsafe.Pointer) <span class="cov0" title="0">{
+        adadelta.commandPool = pool
+        adadelta.usePooling = (pool != nil)
+}</span>
+
+// GetStep returns the current optimization step count
+func (adadelta *AdaDeltaOptimizerState) GetStep() uint64 <span class="cov0" title="0">{
+        return adadelta.currentStep
+}</span>
+
+// GetStats returns optimizer statistics
+func (adadelta *AdaDeltaOptimizerState) GetStats() map[string]interface{} <span class="cov0" title="0">{
+        return map[string]interface{}{
+                "step":        adadelta.currentStep,
+                "rho":         adadelta.config.Rho,
+                "epsilon":     adadelta.config.Epsilon,
+                "weight_decay": adadelta.config.WeightDecay,
+        }
+}</span>
+
+// Cleanup releases all GPU buffers
+func (adadelta *AdaDeltaOptimizerState) Cleanup() <span class="cov0" title="0">{
+        adadelta.cleanup()
+}</span>
+
+// UpdateLearningRate is not used in AdaDelta (it adapts automatically)
+func (adadelta *AdaDeltaOptimizerState) UpdateLearningRate(newLR float32) error <span class="cov0" title="0">{
+        return fmt.Errorf("AdaDelta does not use a fixed learning rate; it adapts automatically based on parameter updates")
+}</pre>
+		
+		<pre class="file" id="file1" style="display: none">package optimizer
+
+import (
+        "fmt"
+        "unsafe"
+
+        "github.com/tsawler/go-metal/cgo_bridge"
+        "github.com/tsawler/go-metal/memory"
+)
+
+// AdaGradOptimizerState represents GPU-resident AdaGrad optimizer state
+type AdaGradOptimizerState struct {
+        // Configuration
+        config AdaGradConfig
+        
+        // GPU-resident state buffers
+        squaredGradAvgBuffers []unsafe.Pointer // Accumulated squared gradient averages
+        WeightBuffers         []unsafe.Pointer // Current weight tensors
+        
+        // Step tracking
+        currentStep uint64
+        
+        // Buffer management
+        memoryManager *memory.MemoryManager
+        device        unsafe.Pointer
+        bufferSizes   []int
+        
+        // Command buffer pooling
+        commandPool unsafe.Pointer
+        usePooling  bool
+}
+
+// AdaGradConfig holds configuration for AdaGrad optimizer
+type AdaGradConfig struct {
+        LearningRate float32 // Learning rate
+        Epsilon      float32 // Small constant for numerical stability
+        WeightDecay  float32 // L2 regularization strength
+}
+
+// DefaultAdaGradConfig returns default AdaGrad optimizer configuration
+func DefaultAdaGradConfig() AdaGradConfig <span class="cov0" title="0">{
+        return AdaGradConfig{
+                LearningRate: 0.01,
+                Epsilon:      1e-10,
+                WeightDecay:  0.0,
+        }
+}</span>
+
+// NewAdaGradOptimizer creates a new GPU-resident AdaGrad optimizer
+func NewAdaGradOptimizer(
+        config AdaGradConfig,
+        weightShapes [][]int,
+        memoryManager *memory.MemoryManager,
+        device unsafe.Pointer,
+) (*AdaGradOptimizerState, error) <span class="cov0" title="0">{
+        if memoryManager == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("memory manager cannot be nil")
+        }</span>
+        
+        <span class="cov0" title="0">if device == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("device cannot be nil")
+        }</span>
+        
+        <span class="cov0" title="0">if len(weightShapes) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no weight shapes provided")
+        }</span>
+        
+        <span class="cov0" title="0">numWeights := len(weightShapes)
+        
+        adagrad := &amp;AdaGradOptimizerState{
+                config:                config,
+                squaredGradAvgBuffers: make([]unsafe.Pointer, numWeights),
+                WeightBuffers:         make([]unsafe.Pointer, numWeights),
+                currentStep:           0,
+                memoryManager:         memoryManager,
+                device:                device,
+                bufferSizes:           make([]int, numWeights),
+        }
+        
+        // Calculate buffer sizes and allocate squared gradient average buffers
+        for i, shape := range weightShapes </span><span class="cov0" title="0">{
+                adagrad.bufferSizes[i] = calculateTensorSize(shape) * 4 // 4 bytes per float32
+                
+                // Allocate squared gradient average buffer
+                squaredGradAvgBuffer := adagrad.memoryManager.AllocateBuffer(adagrad.bufferSizes[i])
+                if squaredGradAvgBuffer == nil </span><span class="cov0" title="0">{
+                        adagrad.cleanup()
+                        return nil, fmt.Errorf("failed to allocate squared gradient average buffer for weight %d", i)
+                }</span>
+                <span class="cov0" title="0">adagrad.squaredGradAvgBuffers[i] = squaredGradAvgBuffer
+                
+                // Initialize to zero
+                if err := cgo_bridge.ZeroMetalBuffer(adagrad.device, squaredGradAvgBuffer, adagrad.bufferSizes[i]); err != nil </span><span class="cov0" title="0">{
+                        adagrad.cleanup()
+                        return nil, fmt.Errorf("failed to zero squared gradient average buffer: %v", err)
+                }</span>
+        }
+        
+        <span class="cov0" title="0">return adagrad, nil</span>
+}
+
+// cleanup releases all allocated buffers
+func (adagrad *AdaGradOptimizerState) cleanup() <span class="cov0" title="0">{
+        for i := range adagrad.squaredGradAvgBuffers </span><span class="cov0" title="0">{
+                if adagrad.squaredGradAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                        adagrad.memoryManager.ReleaseBuffer(adagrad.squaredGradAvgBuffers[i])
+                }</span>
+        }
+}
+
+// SetWeightBuffers sets the current weight buffer pointers
+func (adagrad *AdaGradOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(weightBuffers) != len(adagrad.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("expected %d weight buffers, got %d", len(adagrad.WeightBuffers), len(weightBuffers))
+        }</span>
+        
+        <span class="cov0" title="0">copy(adagrad.WeightBuffers, weightBuffers)
+        return nil</span>
+}
+
+// Step performs a single AdaGrad optimization step
+func (adagrad *AdaGradOptimizerState) Step(gradientBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(gradientBuffers) != len(adagrad.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("gradient buffers length (%d) doesn't match weight buffers length (%d)",
+                        len(gradientBuffers), len(adagrad.WeightBuffers))
+        }</span>
+        
+        <span class="cov0" title="0">adagrad.currentStep++
+        
+        // Execute AdaGrad step using CGO bridge
+        var err error
+        if adagrad.usePooling &amp;&amp; adagrad.commandPool != nil </span><span class="cov0" title="0">{
+                err = cgo_bridge.ExecuteAdaGradStepMPSGraphPooled(
+                        adagrad.device,
+                        adagrad.WeightBuffers,
+                        gradientBuffers,
+                        adagrad.squaredGradAvgBuffers,
+                        len(adagrad.WeightBuffers),
+                        adagrad.bufferSizes,
+                        adagrad.config.LearningRate,
+                        adagrad.config.Epsilon,
+                        adagrad.config.WeightDecay,
+                        adagrad.commandPool,
+                )
+        }</span> else<span class="cov0" title="0"> {
+                err = cgo_bridge.ExecuteAdaGradStepMPSGraph(
+                        adagrad.device,
+                        adagrad.WeightBuffers,
+                        gradientBuffers,
+                        adagrad.squaredGradAvgBuffers,
+                        len(adagrad.WeightBuffers),
+                        adagrad.bufferSizes,
+                        adagrad.config.LearningRate,
+                        adagrad.config.Epsilon,
+                        adagrad.config.WeightDecay,
+                )
+        }</span>
+        
+        <span class="cov0" title="0">if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("AdaGrad step failed: %v", err)
+        }</span>
+        
+        // Log progress periodically
+        <span class="cov0" title="0">if adagrad.currentStep%10 == 0 </span><span class="cov0" title="0">{
+                fmt.Printf("AdaGrad step %d completed, lr=%.6f\n", adagrad.currentStep, adagrad.config.LearningRate)
+        }</span>
+        
+        <span class="cov0" title="0">return nil</span>
+}
+
+// SetCommandPool sets the command buffer pool for Metal operations
+func (adagrad *AdaGradOptimizerState) SetCommandPool(pool unsafe.Pointer) <span class="cov0" title="0">{
+        adagrad.commandPool = pool
+        adagrad.usePooling = (pool != nil)
+}</span>
+
+// GetStep returns the current optimization step count
+func (adagrad *AdaGradOptimizerState) GetStep() uint64 <span class="cov0" title="0">{
+        return adagrad.currentStep
+}</span>
+
+// GetStats returns optimizer statistics
+func (adagrad *AdaGradOptimizerState) GetStats() map[string]interface{} <span class="cov0" title="0">{
+        return map[string]interface{}{
+                "step":          adagrad.currentStep,
+                "learning_rate": adagrad.config.LearningRate,
+                "epsilon":       adagrad.config.Epsilon,
+                "weight_decay":  adagrad.config.WeightDecay,
+        }
+}</span>
+
+// Cleanup releases all GPU buffers
+func (adagrad *AdaGradOptimizerState) Cleanup() <span class="cov0" title="0">{
+        adagrad.cleanup()
+}</span>
+
+// UpdateLearningRate updates the learning rate for the optimizer
+func (adagrad *AdaGradOptimizerState) UpdateLearningRate(newLR float32) error <span class="cov0" title="0">{
+        if newLR &lt;= 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("learning rate must be positive, got %f", newLR)
+        }</span>
+        <span class="cov0" title="0">adagrad.config.LearningRate = newLR
+        return nil</span>
+}</pre>
+		
+		<pre class="file" id="file2" style="display: none">package optimizer
+
+import (
+        "fmt"
+        "unsafe"
+
+        "github.com/tsawler/go-metal/cgo_bridge"
+        "github.com/tsawler/go-metal/memory"
+)
+
+// AdamOptimizerState represents GPU-resident Adam optimizer state
+type AdamOptimizerState struct {
+        // Hyperparameters
+        LearningRate float32
+        Beta1        float32 // Momentum decay (typically 0.9)
+        Beta2        float32 // Variance decay (typically 0.999)
+        Epsilon      float32 // Small constant to prevent division by zero (typically 1e-8)
+        WeightDecay  float32 // L2 regularization coefficient
+
+        // GPU-resident state buffers
+        MomentumBuffers []unsafe.Pointer // First moment (momentum) for each weight tensor
+        VarianceBuffers []unsafe.Pointer // Second moment (variance) for each weight tensor
+        WeightBuffers   []unsafe.Pointer // Current weight tensors
+
+        // Step tracking for bias correction
+        StepCount uint64
+
+        // Buffer management
+        memoryManager *memory.MemoryManager
+        device        unsafe.Pointer
+
+        // Buffer sizes for proper cleanup
+        bufferSizes []int
+        
+        // RESOURCE LEAK FIX: Command buffer pooling
+        commandPool unsafe.Pointer  // Optional command buffer pool for Metal operations
+        usePooling  bool           // Whether to use command buffer pooling
+}
+
+// AdamConfig holds configuration for Adam optimizer
+type AdamConfig struct {
+        LearningRate float32
+        Beta1        float32
+        Beta2        float32
+        Epsilon      float32
+        WeightDecay  float32
+}
+
+// DefaultAdamConfig returns default Adam optimizer configuration
+func DefaultAdamConfig() AdamConfig <span class="cov8" title="1">{
+        return AdamConfig{
+                LearningRate: 0.001,
+                Beta1:        0.9,
+                Beta2:        0.999,
+                Epsilon:      1e-8,
+                WeightDecay:  0.0,
+        }
+}</span>
+
+// NewAdamOptimizer creates a new GPU-resident Adam optimizer
+func NewAdamOptimizer(
+        config AdamConfig,
+        weightShapes [][]int,
+        memoryManager *memory.MemoryManager,
+        device unsafe.Pointer,
+) (*AdamOptimizerState, error) <span class="cov0" title="0">{
+        if memoryManager == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("memory manager cannot be nil")
+        }</span>
+
+        <span class="cov0" title="0">if device == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("device cannot be nil")
+        }</span>
+
+        <span class="cov0" title="0">if len(weightShapes) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no weight shapes provided")
+        }</span>
+
+        <span class="cov0" title="0">numWeights := len(weightShapes)
+
+        adam := &amp;AdamOptimizerState{
+                LearningRate:    config.LearningRate,
+                Beta1:           config.Beta1,
+                Beta2:           config.Beta2,
+                Epsilon:         config.Epsilon,
+                WeightDecay:     config.WeightDecay,
+                MomentumBuffers: make([]unsafe.Pointer, numWeights),
+                VarianceBuffers: make([]unsafe.Pointer, numWeights),
+                WeightBuffers:   make([]unsafe.Pointer, numWeights),
+                StepCount:       0,
+                memoryManager:   memoryManager,
+                device:          device,
+                bufferSizes:     make([]int, numWeights),
+        }
+
+        // Allocate GPU buffers for momentum and variance
+        for i, shape := range weightShapes </span><span class="cov0" title="0">{
+                // Calculate buffer size (assume float32)
+                size := calculateTensorSize(shape) * 4 // 4 bytes per float32
+                adam.bufferSizes[i] = size
+
+                // Allocate momentum buffer
+                momentumBuffer := adam.memoryManager.AllocateBuffer(size)
+                if momentumBuffer == nil </span><span class="cov0" title="0">{
+                        adam.cleanup(i) // Cleanup previously allocated buffers
+                        return nil, fmt.Errorf("failed to allocate momentum buffer for weight %d", i)
+                }</span>
+                <span class="cov0" title="0">adam.MomentumBuffers[i] = momentumBuffer
+
+                // Allocate variance buffer
+                varianceBuffer := adam.memoryManager.AllocateBuffer(size)
+                if varianceBuffer == nil </span><span class="cov0" title="0">{
+                        adam.memoryManager.ReleaseBuffer(momentumBuffer)
+                        adam.cleanup(i) // Cleanup previously allocated buffers
+                        return nil, fmt.Errorf("failed to allocate variance buffer for weight %d", i)
+                }</span>
+                <span class="cov0" title="0">adam.VarianceBuffers[i] = varianceBuffer
+
+                // Initialize buffers to zero (momentum and variance start at 0)
+                err := cgo_bridge.ZeroMetalBuffer(adam.device, momentumBuffer, size)
+                if err != nil </span><span class="cov0" title="0">{
+                        adam.memoryManager.ReleaseBuffer(momentumBuffer)
+                        adam.memoryManager.ReleaseBuffer(varianceBuffer)
+                        adam.cleanup(i)
+                        return nil, fmt.Errorf("failed to zero momentum buffer for weight %d: %v", i, err)
+                }</span>
+
+                <span class="cov0" title="0">err = cgo_bridge.ZeroMetalBuffer(adam.device, varianceBuffer, size)
+                if err != nil </span><span class="cov0" title="0">{
+                        adam.memoryManager.ReleaseBuffer(momentumBuffer)
+                        adam.memoryManager.ReleaseBuffer(varianceBuffer)
+                        adam.cleanup(i)
+                        return nil, fmt.Errorf("failed to zero variance buffer for weight %d: %v", i, err)
+                }</span>
+        }
+
+        <span class="cov0" title="0">return adam, nil</span>
+}
+
+// calculateTensorSize calculates the number of elements in a tensor
+func calculateTensorSize(shape []int) int <span class="cov8" title="1">{
+        size := 1
+        for _, dim := range shape </span><span class="cov8" title="1">{
+                size *= dim
+        }</span>
+        <span class="cov8" title="1">return size</span>
+}
+
+// cleanup releases previously allocated buffers in case of partial initialization failure
+func (adam *AdamOptimizerState) cleanup(upToIndex int) <span class="cov0" title="0">{
+        for i := 0; i &lt; upToIndex; i++ </span><span class="cov0" title="0">{
+                if adam.MomentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                        adam.memoryManager.ReleaseBuffer(adam.MomentumBuffers[i])
+                        adam.MomentumBuffers[i] = nil
+                }</span>
+                <span class="cov0" title="0">if adam.VarianceBuffers[i] != nil </span><span class="cov0" title="0">{
+                        adam.memoryManager.ReleaseBuffer(adam.VarianceBuffers[i])
+                        adam.VarianceBuffers[i] = nil
+                }</span>
+        }
+}
+
+// SetWeightBuffers sets the current weight buffer pointers
+// This should be called before each optimization step
+func (adam *AdamOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(weightBuffers) != len(adam.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("expected %d weight buffers, got %d", len(adam.WeightBuffers), len(weightBuffers))
+        }</span>
+
+        <span class="cov0" title="0">copy(adam.WeightBuffers, weightBuffers)
+        return nil</span>
+}
+
+// Step performs a single Adam optimization step
+// This will be implemented as a Metal compute kernel for maximum performance
+func (adam *AdamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(gradientBuffers) != len(adam.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("gradient buffers length (%d) doesn't match weight buffers length (%d)",
+                        len(gradientBuffers), len(adam.WeightBuffers))
+        }</span>
+
+        <span class="cov0" title="0">adam.StepCount++
+
+        // DEBUG: Add logging to verify Adam is being called
+        // if adam.StepCount%10 == 1 {
+        //        fmt.Printf("🔧 Adam step %d: lr=%.6f, %d weights, %d gradients\n", 
+        //                adam.StepCount, adam.LearningRate, len(adam.WeightBuffers), len(gradientBuffers))
+        // }
+
+        // DEBUG: Temporarily disable pooled Adam to test if non-pooled works
+        // Learning broke again - need to isolate issue
+        var err error
+        // if adam.usePooling &amp;&amp; adam.commandPool != nil {
+        //         // Use pooled command buffers with proper bias correction
+        //         err = cgo_bridge.ExecuteAdamStepMPSGraphPooled(
+        //                 adam.device,
+        //                 adam.WeightBuffers,
+        //                 gradientBuffers,
+        //                 adam.MomentumBuffers,
+        //                 adam.VarianceBuffers,
+        //                 adam.bufferSizes,
+        //                 adam.LearningRate,
+        //                 adam.Beta1,
+        //                 adam.Beta2,
+        //                 adam.Epsilon,
+        //                 adam.WeightDecay,
+        //                 int(adam.StepCount),
+        //                 adam.commandPool,
+        //         )
+        // } else {
+                // Force non-pooled version to test learning
+                err = cgo_bridge.ExecuteAdamStepMPSGraph(
+                        adam.device,
+                        adam.WeightBuffers,
+                        gradientBuffers,
+                        adam.MomentumBuffers,
+                        adam.VarianceBuffers,
+                        adam.bufferSizes,
+                        adam.LearningRate,
+                        adam.Beta1,
+                        adam.Beta2,
+                        adam.Epsilon,
+                        adam.WeightDecay,
+                        int(adam.StepCount),
+                )
+        // }
+
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("Adam step execution failed: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// pow computes x^y for float32
+func pow(x, y float32) float32 <span class="cov0" title="0">{
+        if y == 0 </span><span class="cov0" title="0">{
+                return 1.0
+        }</span>
+        <span class="cov0" title="0">if y == 1 </span><span class="cov0" title="0">{
+                return x
+        }</span>
+        
+        // Simple implementation for small integer powers
+        <span class="cov0" title="0">result := float32(1.0)
+        for i := 0; i &lt; int(y); i++ </span><span class="cov0" title="0">{
+                result *= x
+        }</span>
+        <span class="cov0" title="0">return result</span>
+}
+
+// UpdateLearningRate updates the learning rate (useful for learning rate scheduling)
+func (adam *AdamOptimizerState) UpdateLearningRate(newLR float32) <span class="cov8" title="1">{
+        adam.LearningRate = newLR
+}</span>
+
+// SetCommandPool enables command buffer pooling for Metal operations
+// RESOURCE LEAK FIX: Allows Adam optimizer to use pooled command buffers
+func (adam *AdamOptimizerState) SetCommandPool(commandPool unsafe.Pointer) <span class="cov0" title="0">{
+        adam.commandPool = commandPool
+        adam.usePooling = (commandPool != nil)
+}</span>
+
+// GetStep returns the current step count
+func (adam *AdamOptimizerState) GetStep() uint64 <span class="cov8" title="1">{
+        return adam.StepCount
+}</span>
+
+// GetStats returns optimizer statistics
+func (adam *AdamOptimizerState) GetStats() AdamStats <span class="cov8" title="1">{
+        return AdamStats{
+                StepCount:       adam.StepCount,
+                LearningRate:    adam.LearningRate,
+                Beta1:           adam.Beta1,
+                Beta2:           adam.Beta2,
+                Epsilon:         adam.Epsilon,
+                WeightDecay:     adam.WeightDecay,
+                NumParameters:   len(adam.WeightBuffers),
+                TotalBufferSize: adam.getTotalBufferSize(),
+        }
+}</span>
+
+// AdamStats provides statistics about the Adam optimizer
+type AdamStats struct {
+        StepCount       uint64
+        LearningRate    float32
+        Beta1           float32
+        Beta2           float32
+        Epsilon         float32
+        WeightDecay     float32
+        NumParameters   int
+        TotalBufferSize int
+}
+
+// getTotalBufferSize calculates total memory used by optimizer state
+func (adam *AdamOptimizerState) getTotalBufferSize() int <span class="cov8" title="1">{
+        total := 0
+        for _, size := range adam.bufferSizes </span><span class="cov8" title="1">{
+                total += size * 2 // momentum + variance buffers
+        }</span>
+        <span class="cov8" title="1">return total</span>
+}
+
+// Cleanup releases all GPU buffers
+func (adam *AdamOptimizerState) Cleanup() <span class="cov0" title="0">{
+        for i := range adam.MomentumBuffers </span><span class="cov0" title="0">{
+                if adam.MomentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                        adam.memoryManager.ReleaseBuffer(adam.MomentumBuffers[i])
+                        adam.MomentumBuffers[i] = nil
+                }</span>
+                <span class="cov0" title="0">if adam.VarianceBuffers[i] != nil </span><span class="cov0" title="0">{
+                        adam.memoryManager.ReleaseBuffer(adam.VarianceBuffers[i])
+                        adam.VarianceBuffers[i] = nil
+                }</span>
+        }
+        
+        // Clear slices
+        <span class="cov0" title="0">adam.MomentumBuffers = nil
+        adam.VarianceBuffers = nil
+        adam.WeightBuffers = nil
+        adam.bufferSizes = nil</span>
+}</pre>
+		
+		<pre class="file" id="file3" style="display: none">package optimizer
+
+import (
+        "fmt"
+        "unsafe"
+
+        "github.com/tsawler/go-metal/cgo_bridge"
+        "github.com/tsawler/go-metal/memory"
+)
+
+// LBFGSOptimizerState represents GPU-resident L-BFGS optimizer state
+type LBFGSOptimizerState struct {
+        // Configuration
+        config LBFGSConfig
+        
+        // GPU-resident state buffers
+        sVectors      [][]unsafe.Pointer // Parameter differences s_k = x_{k+1} - x_k
+        yVectors      [][]unsafe.Pointer // Gradient differences y_k = g_{k+1} - g_k
+        rhoBuffers    []unsafe.Pointer   // Scalar values ρ_k = 1/(y_k^T s_k)
+        alphaBuffer   unsafe.Pointer     // Alpha values for two-loop recursion
+        oldGradients  []unsafe.Pointer   // Previous gradients for computing y_k
+        searchDir     []unsafe.Pointer   // Search direction p_k
+        WeightBuffers []unsafe.Pointer   // Current weight tensors
+        
+        // History tracking
+        currentStep  uint64
+        historyCount int  // Current number of stored history pairs
+        historyIndex int  // Circular buffer index
+        
+        // Buffer management
+        memoryManager *memory.MemoryManager
+        device        unsafe.Pointer
+        bufferSizes   []int
+        
+        // Command buffer pooling
+        commandPool unsafe.Pointer
+        usePooling  bool
+        
+        // Line search state
+        prevLoss     float32
+        prevGradNorm float32
+}
+
+// LBFGSConfig holds configuration for L-BFGS optimizer
+type LBFGSConfig struct {
+        HistorySize   int     // m parameter (number of corrections to store)
+        LineSearchTol float32 // Tolerance for line search
+        MaxLineSearch int     // Maximum line search iterations
+        C1            float32 // Armijo condition parameter
+        C2            float32 // Wolfe condition parameter
+        InitialStep   float32 // Initial step size for line search
+}
+
+// DefaultLBFGSConfig returns default L-BFGS optimizer configuration
+func DefaultLBFGSConfig() LBFGSConfig <span class="cov8" title="1">{
+        return LBFGSConfig{
+                HistorySize:   10,
+                LineSearchTol: 1e-4,
+                MaxLineSearch: 20,
+                C1:            1e-4,
+                C2:            0.9,
+                InitialStep:   1.0,
+        }
+}</span>
+
+// NewLBFGSOptimizer creates a new GPU-resident L-BFGS optimizer
+func NewLBFGSOptimizer(
+        config LBFGSConfig,
+        weightShapes [][]int,
+        memoryManager *memory.MemoryManager,
+        device unsafe.Pointer,
+) (*LBFGSOptimizerState, error) <span class="cov0" title="0">{
+        if memoryManager == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("memory manager cannot be nil")
+        }</span>
+        
+        <span class="cov0" title="0">if device == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("device cannot be nil")
+        }</span>
+        
+        <span class="cov0" title="0">if len(weightShapes) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no weight shapes provided")
+        }</span>
+        
+        <span class="cov0" title="0">if config.HistorySize &lt;= 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("history size must be positive, got %d", config.HistorySize)
+        }</span>
+        
+        <span class="cov0" title="0">numWeights := len(weightShapes)
+        
+        lbfgs := &amp;LBFGSOptimizerState{
+                config:        config,
+                sVectors:      make([][]unsafe.Pointer, config.HistorySize),
+                yVectors:      make([][]unsafe.Pointer, config.HistorySize),
+                rhoBuffers:    make([]unsafe.Pointer, config.HistorySize),
+                oldGradients:  make([]unsafe.Pointer, numWeights),
+                searchDir:     make([]unsafe.Pointer, numWeights),
+                WeightBuffers: make([]unsafe.Pointer, numWeights),
+                currentStep:   0,
+                historyCount:  0,
+                historyIndex:  0,
+                memoryManager: memoryManager,
+                device:        device,
+                bufferSizes:   make([]int, numWeights),
+        }
+        
+        // Calculate buffer sizes
+        for i, shape := range weightShapes </span><span class="cov0" title="0">{
+                lbfgs.bufferSizes[i] = calculateTensorSize(shape) * 4 // 4 bytes per float32
+        }</span>
+        
+        // Allocate history vectors (s and y) for circular buffer
+        <span class="cov0" title="0">for h := 0; h &lt; config.HistorySize; h++ </span><span class="cov0" title="0">{
+                lbfgs.sVectors[h] = make([]unsafe.Pointer, numWeights)
+                lbfgs.yVectors[h] = make([]unsafe.Pointer, numWeights)
+                
+                // Allocate buffers for each weight tensor
+                for i, size := range lbfgs.bufferSizes </span><span class="cov0" title="0">{
+                        // Allocate s vector
+                        sBuffer := lbfgs.memoryManager.AllocateBuffer(size)
+                        if sBuffer == nil </span><span class="cov0" title="0">{
+                                lbfgs.cleanup()
+                                return nil, fmt.Errorf("failed to allocate s vector buffer for history %d, weight %d", h, i)
+                        }</span>
+                        <span class="cov0" title="0">lbfgs.sVectors[h][i] = sBuffer
+                        
+                        // Allocate y vector
+                        yBuffer := lbfgs.memoryManager.AllocateBuffer(size)
+                        if yBuffer == nil </span><span class="cov0" title="0">{
+                                lbfgs.cleanup()
+                                return nil, fmt.Errorf("failed to allocate y vector buffer for history %d, weight %d", h, i)
+                        }</span>
+                        <span class="cov0" title="0">lbfgs.yVectors[h][i] = yBuffer
+                        
+                        // Initialize to zero
+                        if err := cgo_bridge.ZeroMetalBuffer(lbfgs.device, sBuffer, size); err != nil </span><span class="cov0" title="0">{
+                                lbfgs.cleanup()
+                                return nil, fmt.Errorf("failed to zero s buffer: %v", err)
+                        }</span>
+                        <span class="cov0" title="0">if err := cgo_bridge.ZeroMetalBuffer(lbfgs.device, yBuffer, size); err != nil </span><span class="cov0" title="0">{
+                                lbfgs.cleanup()
+                                return nil, fmt.Errorf("failed to zero y buffer: %v", err)
+                        }</span>
+                }
+                
+                // Allocate rho scalar buffer (single float32)
+                <span class="cov0" title="0">rhoBuffer := lbfgs.memoryManager.AllocateBuffer(4)
+                if rhoBuffer == nil </span><span class="cov0" title="0">{
+                        lbfgs.cleanup()
+                        return nil, fmt.Errorf("failed to allocate rho buffer for history %d", h)
+                }</span>
+                <span class="cov0" title="0">lbfgs.rhoBuffers[h] = rhoBuffer</span>
+        }
+        
+        // Allocate alpha buffer for two-loop recursion
+        <span class="cov0" title="0">alphaSize := config.HistorySize * 4 // m float32 values
+        lbfgs.alphaBuffer = lbfgs.memoryManager.AllocateBuffer(alphaSize)
+        if lbfgs.alphaBuffer == nil </span><span class="cov0" title="0">{
+                lbfgs.cleanup()
+                return nil, fmt.Errorf("failed to allocate alpha buffer")
+        }</span>
+        
+        // Allocate old gradients and search direction buffers
+        <span class="cov0" title="0">for i, size := range lbfgs.bufferSizes </span><span class="cov0" title="0">{
+                // Old gradients
+                oldGradBuffer := lbfgs.memoryManager.AllocateBuffer(size)
+                if oldGradBuffer == nil </span><span class="cov0" title="0">{
+                        lbfgs.cleanup()
+                        return nil, fmt.Errorf("failed to allocate old gradient buffer for weight %d", i)
+                }</span>
+                <span class="cov0" title="0">lbfgs.oldGradients[i] = oldGradBuffer
+                
+                // Search direction
+                searchDirBuffer := lbfgs.memoryManager.AllocateBuffer(size)
+                if searchDirBuffer == nil </span><span class="cov0" title="0">{
+                        lbfgs.cleanup()
+                        return nil, fmt.Errorf("failed to allocate search direction buffer for weight %d", i)
+                }</span>
+                <span class="cov0" title="0">lbfgs.searchDir[i] = searchDirBuffer
+                
+                // Initialize to zero
+                if err := cgo_bridge.ZeroMetalBuffer(lbfgs.device, oldGradBuffer, size); err != nil </span><span class="cov0" title="0">{
+                        lbfgs.cleanup()
+                        return nil, fmt.Errorf("failed to zero old gradient buffer: %v", err)
+                }</span>
+                <span class="cov0" title="0">if err := cgo_bridge.ZeroMetalBuffer(lbfgs.device, searchDirBuffer, size); err != nil </span><span class="cov0" title="0">{
+                        lbfgs.cleanup()
+                        return nil, fmt.Errorf("failed to zero search direction buffer: %v", err)
+                }</span>
+        }
+        
+        <span class="cov0" title="0">return lbfgs, nil</span>
+}
+
+// cleanup releases all allocated buffers
+func (lbfgs *LBFGSOptimizerState) cleanup() <span class="cov0" title="0">{
+        // Clean up history vectors
+        for h := 0; h &lt; lbfgs.config.HistorySize; h++ </span><span class="cov0" title="0">{
+                if lbfgs.sVectors[h] != nil </span><span class="cov0" title="0">{
+                        for i := 0; i &lt; len(lbfgs.WeightBuffers); i++ </span><span class="cov0" title="0">{
+                                if lbfgs.sVectors[h][i] != nil </span><span class="cov0" title="0">{
+                                        lbfgs.memoryManager.ReleaseBuffer(lbfgs.sVectors[h][i])
+                                }</span>
+                        }
+                }
+                <span class="cov0" title="0">if lbfgs.yVectors[h] != nil </span><span class="cov0" title="0">{
+                        for i := 0; i &lt; len(lbfgs.WeightBuffers); i++ </span><span class="cov0" title="0">{
+                                if lbfgs.yVectors[h][i] != nil </span><span class="cov0" title="0">{
+                                        lbfgs.memoryManager.ReleaseBuffer(lbfgs.yVectors[h][i])
+                                }</span>
+                        }
+                }
+                <span class="cov0" title="0">if lbfgs.rhoBuffers[h] != nil </span><span class="cov0" title="0">{
+                        lbfgs.memoryManager.ReleaseBuffer(lbfgs.rhoBuffers[h])
+                }</span>
+        }
+        
+        // Clean up alpha buffer
+        <span class="cov0" title="0">if lbfgs.alphaBuffer != nil </span><span class="cov0" title="0">{
+                lbfgs.memoryManager.ReleaseBuffer(lbfgs.alphaBuffer)
+        }</span>
+        
+        // Clean up old gradients and search direction
+        <span class="cov0" title="0">for i := 0; i &lt; len(lbfgs.WeightBuffers); i++ </span><span class="cov0" title="0">{
+                if lbfgs.oldGradients[i] != nil </span><span class="cov0" title="0">{
+                        lbfgs.memoryManager.ReleaseBuffer(lbfgs.oldGradients[i])
+                }</span>
+                <span class="cov0" title="0">if lbfgs.searchDir[i] != nil </span><span class="cov0" title="0">{
+                        lbfgs.memoryManager.ReleaseBuffer(lbfgs.searchDir[i])
+                }</span>
+        }
+}
+
+// SetWeightBuffers sets the current weight buffer pointers
+func (lbfgs *LBFGSOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(weightBuffers) != len(lbfgs.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("expected %d weight buffers, got %d", len(lbfgs.WeightBuffers), len(weightBuffers))
+        }</span>
+        
+        <span class="cov0" title="0">copy(lbfgs.WeightBuffers, weightBuffers)
+        return nil</span>
+}
+
+// Step performs a single L-BFGS optimization step
+func (lbfgs *LBFGSOptimizerState) Step(gradientBuffers []unsafe.Pointer, currentLoss float32) error <span class="cov0" title="0">{
+        if len(gradientBuffers) != len(lbfgs.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("gradient buffers length (%d) doesn't match weight buffers length (%d)",
+                        len(gradientBuffers), len(lbfgs.WeightBuffers))
+        }</span>
+        
+        <span class="cov0" title="0">lbfgs.currentStep++
+        
+        // Execute L-BFGS step using CGO bridge
+        stepSize, err := cgo_bridge.ExecuteLBFGSStepMPSGraph(
+                lbfgs.device,
+                lbfgs.WeightBuffers,
+                gradientBuffers,
+                lbfgs.oldGradients,
+                lbfgs.searchDir,
+                lbfgs.sVectors,
+                lbfgs.yVectors,
+                lbfgs.rhoBuffers,
+                lbfgs.alphaBuffer,
+                len(lbfgs.WeightBuffers),
+                lbfgs.bufferSizes,
+                lbfgs.config.HistorySize,
+                lbfgs.historyCount,
+                lbfgs.historyIndex,
+                lbfgs.config.InitialStep,
+                lbfgs.config.C1,
+                lbfgs.config.C2,
+                lbfgs.config.MaxLineSearch,
+                currentLoss,
+                lbfgs.prevLoss,
+                lbfgs.commandPool,
+                lbfgs.usePooling,
+        )
+        
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("L-BFGS step failed: %v", err)
+        }</span>
+        
+        // Note: y_k and rho_k computation is now handled entirely in the C code
+        // to avoid race conditions and ensure proper buffer management
+        
+        // Update history tracking
+        <span class="cov0" title="0">lbfgs.historyIndex = (lbfgs.historyIndex + 1) % lbfgs.config.HistorySize
+        if lbfgs.historyCount &lt; lbfgs.config.HistorySize </span><span class="cov0" title="0">{
+                lbfgs.historyCount++
+        }</span>
+        
+        <span class="cov0" title="0">lbfgs.prevLoss = currentLoss
+        
+        // Log progress periodically
+        if lbfgs.currentStep%10 == 0 </span><span class="cov0" title="0">{
+                fmt.Printf("L-BFGS step %d: loss=%.6f, step_size=%.6f, history=%d/%d\n",
+                        lbfgs.currentStep, currentLoss, stepSize, lbfgs.historyCount, lbfgs.config.HistorySize)
+        }</span>
+        
+        <span class="cov0" title="0">return nil</span>
+}
+
+// SetCommandPool sets the command buffer pool for Metal operations
+func (lbfgs *LBFGSOptimizerState) SetCommandPool(pool unsafe.Pointer) <span class="cov0" title="0">{
+        lbfgs.commandPool = pool
+        lbfgs.usePooling = (pool != nil)
+}</span>
+
+// GetStep returns the current optimization step count
+func (lbfgs *LBFGSOptimizerState) GetStep() uint64 <span class="cov0" title="0">{
+        return lbfgs.currentStep
+}</span>
+
+// GetStats returns optimizer statistics
+func (lbfgs *LBFGSOptimizerState) GetStats() map[string]interface{} <span class="cov0" title="0">{
+        return map[string]interface{}{
+                "step":         lbfgs.currentStep,
+                "history_size": lbfgs.config.HistorySize,
+                "history_used": lbfgs.historyCount,
+                "prev_loss":    lbfgs.prevLoss,
+        }
+}</span>
+
+// Cleanup releases all GPU buffers
+func (lbfgs *LBFGSOptimizerState) Cleanup() <span class="cov0" title="0">{
+        lbfgs.cleanup()
+}</span>
+
+// UpdateLearningRate is not used in L-BFGS (uses line search instead)
+func (lbfgs *LBFGSOptimizerState) UpdateLearningRate(newLR float32) error <span class="cov0" title="0">{
+        return fmt.Errorf("L-BFGS does not use a fixed learning rate; it uses line search")
+}</pre>
+		
+		<pre class="file" id="file4" style="display: none">package optimizer
+
+import (
+        "fmt"
+        "unsafe"
+
+        "github.com/tsawler/go-metal/cgo_bridge"
+        "github.com/tsawler/go-metal/memory"
+)
+
+// NadamOptimizerState represents GPU-resident Nadam optimizer state
+// Nadam combines Adam's adaptive learning rates with Nesterov momentum
+type NadamOptimizerState struct {
+        config NadamConfig
+
+        // GPU-resident state buffers
+        momentumBuffers []unsafe.Pointer // First moment (momentum) for each weight tensor
+        varianceBuffers []unsafe.Pointer // Second moment (variance) for each weight tensor
+        WeightBuffers   []unsafe.Pointer // Current weight tensors
+
+        // Step tracking for bias correction
+        currentStep uint64
+
+        // Buffer management
+        memoryManager *memory.MemoryManager
+        device        unsafe.Pointer
+
+        // Buffer sizes for proper cleanup
+        bufferSizes []int
+
+        // Command buffer pooling
+        commandPool unsafe.Pointer // Optional command buffer pool for Metal operations
+        usePooling  bool           // Whether to use command buffer pooling
+}
+
+// NadamConfig holds configuration for Nadam optimizer
+type NadamConfig struct {
+        LearningRate float32 // Base learning rate (typically 0.002)
+        Beta1        float32 // Exponential decay rate for first moment estimates (typically 0.9)
+        Beta2        float32 // Exponential decay rate for second moment estimates (typically 0.999)
+        Epsilon      float32 // Small constant for numerical stability (typically 1e-8)
+        WeightDecay  float32 // L2 regularization coefficient (typically 0.0)
+}
+
+// DefaultNadamConfig returns default Nadam optimizer configuration
+func DefaultNadamConfig() NadamConfig <span class="cov8" title="1">{
+        return NadamConfig{
+                LearningRate: 0.002, // Nadam typically uses slightly higher LR than Adam
+                Beta1:        0.9,
+                Beta2:        0.999,
+                Epsilon:      1e-8,
+                WeightDecay:  0.0,
+        }
+}</span>
+
+// NewNadamOptimizer creates a new GPU-resident Nadam optimizer
+func NewNadamOptimizer(
+        config NadamConfig,
+        weightShapes [][]int,
+        memoryManager *memory.MemoryManager,
+        device unsafe.Pointer,
+) (*NadamOptimizerState, error) <span class="cov8" title="1">{
+        if memoryManager == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("memory manager cannot be nil")
+        }</span>
+
+        <span class="cov8" title="1">if device == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("device cannot be nil")
+        }</span>
+
+        <span class="cov8" title="1">if len(weightShapes) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no weight shapes provided")
+        }</span>
+
+        // Validate configuration
+        <span class="cov8" title="1">if config.LearningRate &lt;= 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("learning rate must be positive, got %f", config.LearningRate)
+        }</span>
+        <span class="cov8" title="1">if config.Beta1 &lt; 0 || config.Beta1 &gt;= 1 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("beta1 must be in [0, 1), got %f", config.Beta1)
+        }</span>
+        <span class="cov8" title="1">if config.Beta2 &lt; 0 || config.Beta2 &gt;= 1 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("beta2 must be in [0, 1), got %f", config.Beta2)
+        }</span>
+        <span class="cov8" title="1">if config.Epsilon &lt;= 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("epsilon must be positive, got %e", config.Epsilon)
+        }</span>
+        <span class="cov8" title="1">if config.WeightDecay &lt; 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("weight decay must be non-negative, got %f", config.WeightDecay)
+        }</span>
+
+        <span class="cov8" title="1">numWeights := len(weightShapes)
+
+        nadam := &amp;NadamOptimizerState{
+                config:          config,
+                momentumBuffers: make([]unsafe.Pointer, numWeights),
+                varianceBuffers: make([]unsafe.Pointer, numWeights),
+                WeightBuffers:   make([]unsafe.Pointer, numWeights),
+                currentStep:     0,
+                memoryManager:   memoryManager,
+                device:          device,
+                bufferSizes:     make([]int, numWeights),
+        }
+
+        // Allocate GPU buffers for momentum and variance
+        for i, shape := range weightShapes </span><span class="cov8" title="1">{
+                // Calculate buffer size (assume float32)
+                size := calculateTensorSize(shape) * 4 // 4 bytes per float32
+                nadam.bufferSizes[i] = size
+
+                // Allocate momentum buffer
+                momentumBuffer := nadam.memoryManager.AllocateBuffer(size)
+                if momentumBuffer == nil </span><span class="cov0" title="0">{
+                        nadam.cleanup(i) // Cleanup previously allocated buffers
+                        return nil, fmt.Errorf("failed to allocate momentum buffer for weight %d", i)
+                }</span>
+                <span class="cov8" title="1">nadam.momentumBuffers[i] = momentumBuffer
+
+                // Allocate variance buffer
+                varianceBuffer := nadam.memoryManager.AllocateBuffer(size)
+                if varianceBuffer == nil </span><span class="cov0" title="0">{
+                        nadam.memoryManager.ReleaseBuffer(momentumBuffer)
+                        nadam.cleanup(i) // Cleanup previously allocated buffers
+                        return nil, fmt.Errorf("failed to allocate variance buffer for weight %d", i)
+                }</span>
+                <span class="cov8" title="1">nadam.varianceBuffers[i] = varianceBuffer
+
+                // Initialize buffers to zero (momentum and variance start at 0)
+                err := cgo_bridge.ZeroMetalBuffer(nadam.device, momentumBuffer, size)
+                if err != nil </span><span class="cov0" title="0">{
+                        nadam.memoryManager.ReleaseBuffer(momentumBuffer)
+                        nadam.memoryManager.ReleaseBuffer(varianceBuffer)
+                        nadam.cleanup(i)
+                        return nil, fmt.Errorf("failed to zero momentum buffer for weight %d: %v", i, err)
+                }</span>
+
+                <span class="cov8" title="1">err = cgo_bridge.ZeroMetalBuffer(nadam.device, varianceBuffer, size)
+                if err != nil </span><span class="cov0" title="0">{
+                        nadam.memoryManager.ReleaseBuffer(momentumBuffer)
+                        nadam.memoryManager.ReleaseBuffer(varianceBuffer)
+                        nadam.cleanup(i)
+                        return nil, fmt.Errorf("failed to zero variance buffer for weight %d: %v", i, err)
+                }</span>
+        }
+
+        <span class="cov8" title="1">return nadam, nil</span>
+}
+
+// cleanup releases previously allocated buffers in case of partial initialization failure
+func (nadam *NadamOptimizerState) cleanup(upToIndex int) <span class="cov0" title="0">{
+        for i := 0; i &lt; upToIndex; i++ </span><span class="cov0" title="0">{
+                if nadam.momentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                        nadam.memoryManager.ReleaseBuffer(nadam.momentumBuffers[i])
+                        nadam.momentumBuffers[i] = nil
+                }</span>
+                <span class="cov0" title="0">if nadam.varianceBuffers[i] != nil </span><span class="cov0" title="0">{
+                        nadam.memoryManager.ReleaseBuffer(nadam.varianceBuffers[i])
+                        nadam.varianceBuffers[i] = nil
+                }</span>
+        }
+}
+
+// SetWeightBuffers sets the current weight buffer pointers
+// This should be called before each optimization step
+func (nadam *NadamOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(weightBuffers) != len(nadam.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("expected %d weight buffers, got %d", len(nadam.WeightBuffers), len(weightBuffers))
+        }</span>
+
+        <span class="cov0" title="0">copy(nadam.WeightBuffers, weightBuffers)
+        return nil</span>
+}
+
+// Step performs a single Nadam optimization step
+// Nadam combines Adam's adaptive learning rates with Nesterov momentum
+func (nadam *NadamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(gradientBuffers) != len(nadam.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("gradient buffers length (%d) doesn't match weight buffers length (%d)",
+                        len(gradientBuffers), len(nadam.WeightBuffers))
+        }</span>
+
+        <span class="cov0" title="0">nadam.currentStep++
+
+        // Execute Nadam step using MPSGraph
+        err := cgo_bridge.ExecuteNadamStepMPSGraph(
+                nadam.device,
+                nadam.WeightBuffers,
+                gradientBuffers,
+                nadam.momentumBuffers,
+                nadam.varianceBuffers,
+                nadam.bufferSizes,
+                nadam.config.LearningRate,
+                nadam.config.Beta1,
+                nadam.config.Beta2,
+                nadam.config.Epsilon,
+                nadam.config.WeightDecay,
+                int(nadam.currentStep),
+        )
+
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("Nadam step execution failed: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// UpdateLearningRate updates the learning rate (useful for learning rate scheduling)
+func (nadam *NadamOptimizerState) UpdateLearningRate(newLR float32) error <span class="cov0" title="0">{
+        if newLR &lt;= 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("learning rate must be positive, got %f", newLR)
+        }</span>
+        <span class="cov0" title="0">nadam.config.LearningRate = newLR
+        return nil</span>
+}
+
+// SetCommandPool enables command buffer pooling for Metal operations
+func (nadam *NadamOptimizerState) SetCommandPool(commandPool unsafe.Pointer) <span class="cov0" title="0">{
+        nadam.commandPool = commandPool
+        nadam.usePooling = (commandPool != nil)
+}</span>
+
+// GetStep returns the current step count
+func (nadam *NadamOptimizerState) GetStep() uint64 <span class="cov0" title="0">{
+        return nadam.currentStep
+}</span>
+
+// GetStats returns optimizer statistics as a map for generic access
+func (nadam *NadamOptimizerState) GetStats() map[string]interface{} <span class="cov0" title="0">{
+        return map[string]interface{}{
+                "step":          nadam.currentStep,
+                "learning_rate": nadam.config.LearningRate,
+                "beta1":         nadam.config.Beta1,
+                "beta2":         nadam.config.Beta2,
+                "epsilon":       nadam.config.Epsilon,
+                "weight_decay":  nadam.config.WeightDecay,
+        }
+}</span>
+
+// Cleanup releases all GPU buffers
+func (nadam *NadamOptimizerState) Cleanup() <span class="cov8" title="1">{
+        for i := range nadam.momentumBuffers </span><span class="cov8" title="1">{
+                if nadam.momentumBuffers[i] != nil </span><span class="cov8" title="1">{
+                        nadam.memoryManager.ReleaseBuffer(nadam.momentumBuffers[i])
+                        nadam.momentumBuffers[i] = nil
+                }</span>
+                <span class="cov8" title="1">if nadam.varianceBuffers[i] != nil </span><span class="cov8" title="1">{
+                        nadam.memoryManager.ReleaseBuffer(nadam.varianceBuffers[i])
+                        nadam.varianceBuffers[i] = nil
+                }</span>
+        }
+
+        // Clear slices
+        <span class="cov8" title="1">nadam.momentumBuffers = nil
+        nadam.varianceBuffers = nil
+        nadam.WeightBuffers = nil
+        nadam.bufferSizes = nil</span>
+}</pre>
+		
+		<pre class="file" id="file5" style="display: none">package optimizer
+
+import (
+        "fmt"
+        "unsafe"
+
+        "github.com/tsawler/go-metal/cgo_bridge"
+        "github.com/tsawler/go-metal/memory"
+)
+
+// RMSPropOptimizerState represents GPU-resident RMSProp optimizer state
+type RMSPropOptimizerState struct {
+        // Hyperparameters
+        LearningRate float32
+        Alpha        float32 // Smoothing constant (typically 0.99)
+        Epsilon      float32 // Small constant to prevent division by zero (typically 1e-8)
+        WeightDecay  float32 // L2 regularization coefficient
+        Momentum     float32 // Momentum coefficient (typically 0.9, 0.0 for no momentum)
+        Centered     bool    // Whether to use centered RMSProp (subtract mean of gradients)
+
+        // GPU-resident state buffers
+        SquaredGradAvgBuffers []unsafe.Pointer // Running average of squared gradients for each weight tensor
+        MomentumBuffers       []unsafe.Pointer // Momentum buffers for each weight tensor (if momentum &gt; 0)
+        GradientAvgBuffers    []unsafe.Pointer // Running average of gradients for each weight tensor (if centered)
+        WeightBuffers         []unsafe.Pointer // Current weight tensors
+
+        // Step tracking
+        StepCount uint64
+
+        // Buffer management
+        memoryManager *memory.MemoryManager
+        device        unsafe.Pointer
+
+        // Buffer sizes for proper cleanup
+        bufferSizes []int
+
+        // Command buffer pooling
+        commandPool unsafe.Pointer // Optional command buffer pool for Metal operations
+        usePooling  bool           // Whether to use command buffer pooling
+}
+
+// RMSPropConfig holds configuration for RMSProp optimizer
+type RMSPropConfig struct {
+        LearningRate float32
+        Alpha        float32
+        Epsilon      float32
+        WeightDecay  float32
+        Momentum     float32
+        Centered     bool
+}
+
+// DefaultRMSPropConfig returns default RMSProp optimizer configuration
+func DefaultRMSPropConfig() RMSPropConfig <span class="cov8" title="1">{
+        return RMSPropConfig{
+                LearningRate: 0.01,
+                Alpha:        0.99,
+                Epsilon:      1e-8,
+                WeightDecay:  0.0,
+                Momentum:     0.0,
+                Centered:     false,
+        }
+}</span>
+
+// NewRMSPropOptimizer creates a new GPU-resident RMSProp optimizer
+func NewRMSPropOptimizer(
+        config RMSPropConfig,
+        weightShapes [][]int,
+        memoryManager *memory.MemoryManager,
+        device unsafe.Pointer,
+) (*RMSPropOptimizerState, error) <span class="cov0" title="0">{
+        if memoryManager == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("memory manager cannot be nil")
+        }</span>
+
+        <span class="cov0" title="0">if device == nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("device cannot be nil")
+        }</span>
+
+        <span class="cov0" title="0">if len(weightShapes) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no weight shapes provided")
+        }</span>
+
+        <span class="cov0" title="0">numWeights := len(weightShapes)
+
+        rmsprop := &amp;RMSPropOptimizerState{
+                LearningRate:          config.LearningRate,
+                Alpha:                 config.Alpha,
+                Epsilon:               config.Epsilon,
+                WeightDecay:           config.WeightDecay,
+                Momentum:              config.Momentum,
+                Centered:              config.Centered,
+                SquaredGradAvgBuffers: make([]unsafe.Pointer, numWeights),
+                MomentumBuffers:       make([]unsafe.Pointer, numWeights),
+                GradientAvgBuffers:    make([]unsafe.Pointer, numWeights),
+                WeightBuffers:         make([]unsafe.Pointer, numWeights),
+                StepCount:             0,
+                memoryManager:         memoryManager,
+                device:                device,
+                bufferSizes:           make([]int, numWeights),
+        }
+
+        // Allocate GPU buffers for squared gradient averages (always needed)
+        for i, shape := range weightShapes </span><span class="cov0" title="0">{
+                // Calculate buffer size (assume float32)
+                size := calculateTensorSize(shape) * 4 // 4 bytes per float32
+                rmsprop.bufferSizes[i] = size
+
+                // Allocate squared gradient average buffer
+                squaredGradAvgBuffer := rmsprop.memoryManager.AllocateBuffer(size)
+                if squaredGradAvgBuffer == nil </span><span class="cov0" title="0">{
+                        rmsprop.cleanup(i) // Cleanup previously allocated buffers
+                        return nil, fmt.Errorf("failed to allocate squared gradient average buffer for weight %d", i)
+                }</span>
+                <span class="cov0" title="0">rmsprop.SquaredGradAvgBuffers[i] = squaredGradAvgBuffer
+
+                // Allocate momentum buffer if momentum &gt; 0
+                if config.Momentum &gt; 0.0 </span><span class="cov0" title="0">{
+                        momentumBuffer := rmsprop.memoryManager.AllocateBuffer(size)
+                        if momentumBuffer == nil </span><span class="cov0" title="0">{
+                                rmsprop.memoryManager.ReleaseBuffer(squaredGradAvgBuffer)
+                                rmsprop.cleanup(i)
+                                return nil, fmt.Errorf("failed to allocate momentum buffer for weight %d", i)
+                        }</span>
+                        <span class="cov0" title="0">rmsprop.MomentumBuffers[i] = momentumBuffer</span>
+                }
+
+                // Allocate gradient average buffer if centered
+                <span class="cov0" title="0">if config.Centered </span><span class="cov0" title="0">{
+                        gradientAvgBuffer := rmsprop.memoryManager.AllocateBuffer(size)
+                        if gradientAvgBuffer == nil </span><span class="cov0" title="0">{
+                                rmsprop.memoryManager.ReleaseBuffer(squaredGradAvgBuffer)
+                                if rmsprop.MomentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
+                                }</span>
+                                <span class="cov0" title="0">rmsprop.cleanup(i)
+                                return nil, fmt.Errorf("failed to allocate gradient average buffer for weight %d", i)</span>
+                        }
+                        <span class="cov0" title="0">rmsprop.GradientAvgBuffers[i] = gradientAvgBuffer</span>
+                }
+
+                // Initialize buffers to zero
+                <span class="cov0" title="0">err := cgo_bridge.ZeroMetalBuffer(rmsprop.device, squaredGradAvgBuffer, size)
+                if err != nil </span><span class="cov0" title="0">{
+                        rmsprop.memoryManager.ReleaseBuffer(squaredGradAvgBuffer)
+                        if rmsprop.MomentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                                rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
+                        }</span>
+                        <span class="cov0" title="0">if rmsprop.GradientAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                                rmsprop.memoryManager.ReleaseBuffer(rmsprop.GradientAvgBuffers[i])
+                        }</span>
+                        <span class="cov0" title="0">rmsprop.cleanup(i)
+                        return nil, fmt.Errorf("failed to zero squared gradient average buffer for weight %d: %v", i, err)</span>
+                }
+
+                <span class="cov0" title="0">if rmsprop.MomentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                        err = cgo_bridge.ZeroMetalBuffer(rmsprop.device, rmsprop.MomentumBuffers[i], size)
+                        if err != nil </span><span class="cov0" title="0">{
+                                rmsprop.memoryManager.ReleaseBuffer(squaredGradAvgBuffer)
+                                rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
+                                if rmsprop.GradientAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.GradientAvgBuffers[i])
+                                }</span>
+                                <span class="cov0" title="0">rmsprop.cleanup(i)
+                                return nil, fmt.Errorf("failed to zero momentum buffer for weight %d: %v", i, err)</span>
+                        }
+                }
+
+                <span class="cov0" title="0">if rmsprop.GradientAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                        err = cgo_bridge.ZeroMetalBuffer(rmsprop.device, rmsprop.GradientAvgBuffers[i], size)
+                        if err != nil </span><span class="cov0" title="0">{
+                                rmsprop.memoryManager.ReleaseBuffer(squaredGradAvgBuffer)
+                                if rmsprop.MomentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
+                                }</span>
+                                <span class="cov0" title="0">rmsprop.memoryManager.ReleaseBuffer(rmsprop.GradientAvgBuffers[i])
+                                rmsprop.cleanup(i)
+                                return nil, fmt.Errorf("failed to zero gradient average buffer for weight %d: %v", i, err)</span>
+                        }
+                }
+        }
+
+        <span class="cov0" title="0">return rmsprop, nil</span>
+}
+
+// cleanup releases previously allocated buffers in case of partial initialization failure
+func (rmsprop *RMSPropOptimizerState) cleanup(upToIndex int) <span class="cov0" title="0">{
+        for i := 0; i &lt; upToIndex; i++ </span><span class="cov0" title="0">{
+                if rmsprop.SquaredGradAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.SquaredGradAvgBuffers[i])
+                        rmsprop.SquaredGradAvgBuffers[i] = nil
+                }</span>
+                <span class="cov0" title="0">if rmsprop.MomentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
+                        rmsprop.MomentumBuffers[i] = nil
+                }</span>
+                <span class="cov0" title="0">if rmsprop.GradientAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.GradientAvgBuffers[i])
+                        rmsprop.GradientAvgBuffers[i] = nil
+                }</span>
+        }
+}
+
+// SetWeightBuffers sets the current weight buffer pointers
+// This should be called before each optimization step
+func (rmsprop *RMSPropOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(weightBuffers) != len(rmsprop.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("expected %d weight buffers, got %d", len(rmsprop.WeightBuffers), len(weightBuffers))
+        }</span>
+
+        <span class="cov0" title="0">copy(rmsprop.WeightBuffers, weightBuffers)
+        return nil</span>
+}
+
+// Step performs a single RMSProp optimization step
+func (rmsprop *RMSPropOptimizerState) Step(gradientBuffers []unsafe.Pointer) error <span class="cov0" title="0">{
+        if len(gradientBuffers) != len(rmsprop.WeightBuffers) </span><span class="cov0" title="0">{
+                return fmt.Errorf("gradient buffers length (%d) doesn't match weight buffers length (%d)",
+                        len(gradientBuffers), len(rmsprop.WeightBuffers))
+        }</span>
+
+        <span class="cov0" title="0">rmsprop.StepCount++
+
+        var err error
+        err = cgo_bridge.ExecuteRMSPropStepMPSGraph(
+                rmsprop.device,
+                rmsprop.WeightBuffers,
+                gradientBuffers,
+                rmsprop.SquaredGradAvgBuffers,
+                rmsprop.MomentumBuffers,
+                rmsprop.GradientAvgBuffers,
+                rmsprop.bufferSizes,
+                rmsprop.LearningRate,
+                rmsprop.Alpha,
+                rmsprop.Epsilon,
+                rmsprop.WeightDecay,
+                rmsprop.Momentum,
+                rmsprop.Centered,
+                int(rmsprop.StepCount),
+        )
+
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("RMSProp step execution failed: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// UpdateLearningRate updates the learning rate (useful for learning rate scheduling)
+func (rmsprop *RMSPropOptimizerState) UpdateLearningRate(newLR float32) <span class="cov8" title="1">{
+        rmsprop.LearningRate = newLR
+}</span>
+
+// SetCommandPool enables command buffer pooling for Metal operations
+func (rmsprop *RMSPropOptimizerState) SetCommandPool(commandPool unsafe.Pointer) <span class="cov8" title="1">{
+        rmsprop.commandPool = commandPool
+        rmsprop.usePooling = (commandPool != nil)
+}</span>
+
+// GetStep returns the current step count
+func (rmsprop *RMSPropOptimizerState) GetStep() uint64 <span class="cov8" title="1">{
+        return rmsprop.StepCount
+}</span>
+
+// GetStats returns optimizer statistics
+func (rmsprop *RMSPropOptimizerState) GetStats() RMSPropStats <span class="cov8" title="1">{
+        return RMSPropStats{
+                StepCount:       rmsprop.StepCount,
+                LearningRate:    rmsprop.LearningRate,
+                Alpha:           rmsprop.Alpha,
+                Epsilon:         rmsprop.Epsilon,
+                WeightDecay:     rmsprop.WeightDecay,
+                Momentum:        rmsprop.Momentum,
+                Centered:        rmsprop.Centered,
+                NumParameters:   len(rmsprop.WeightBuffers),
+                TotalBufferSize: rmsprop.getTotalBufferSize(),
+        }
+}</span>
+
+// RMSPropStats provides statistics about the RMSProp optimizer
+type RMSPropStats struct {
+        StepCount       uint64
+        LearningRate    float32
+        Alpha           float32
+        Epsilon         float32
+        WeightDecay     float32
+        Momentum        float32
+        Centered        bool
+        NumParameters   int
+        TotalBufferSize int
+}
+
+// getTotalBufferSize calculates total memory used by optimizer state
+func (rmsprop *RMSPropOptimizerState) getTotalBufferSize() int <span class="cov8" title="1">{
+        total := 0
+        for _, size := range rmsprop.bufferSizes </span><span class="cov8" title="1">{
+                total += size // squared gradient average buffer (always present)
+                if rmsprop.Momentum &gt; 0.0 </span><span class="cov8" title="1">{
+                        total += size // momentum buffer
+                }</span>
+                <span class="cov8" title="1">if rmsprop.Centered </span><span class="cov8" title="1">{
+                        total += size // gradient average buffer
+                }</span>
+        }
+        <span class="cov8" title="1">return total</span>
+}
+
+// Cleanup releases all GPU buffers
+func (rmsprop *RMSPropOptimizerState) Cleanup() <span class="cov0" title="0">{
+        for i := range rmsprop.SquaredGradAvgBuffers </span><span class="cov0" title="0">{
+                if rmsprop.SquaredGradAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.SquaredGradAvgBuffers[i])
+                        rmsprop.SquaredGradAvgBuffers[i] = nil
+                }</span>
+                <span class="cov0" title="0">if rmsprop.MomentumBuffers[i] != nil </span><span class="cov0" title="0">{
+                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
+                        rmsprop.MomentumBuffers[i] = nil
+                }</span>
+                <span class="cov0" title="0">if rmsprop.GradientAvgBuffers[i] != nil </span><span class="cov0" title="0">{
+                        rmsprop.memoryManager.ReleaseBuffer(rmsprop.GradientAvgBuffers[i])
+                        rmsprop.GradientAvgBuffers[i] = nil
+                }</span>
+        }
+
+        // Clear slices
+        <span class="cov0" title="0">rmsprop.SquaredGradAvgBuffers = nil
+        rmsprop.MomentumBuffers = nil
+        rmsprop.GradientAvgBuffers = nil
+        rmsprop.WeightBuffers = nil
+        rmsprop.bufferSizes = nil</span>
+}</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
