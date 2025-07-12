@@ -48,11 +48,19 @@ Total "For now" comments found: 31 (17 unique concerns after excluding test skip
 
 ## Medium Priority Concerns
 
-### 4. Inference Engine Defaults
+### 4. Inference Engine Defaults ✅ RESOLVED
 **Location:** `engine/inference_engine.go:225`
 **Issue:** Uses hardcoded normalization values (mean=0, var=1)
 **Impact:** May produce incorrect results for models expecting different normalization
 **Severity:** MEDIUM - Affects accuracy but workaround exists
+**Resolution:** Implemented comprehensive configurable normalization system:
+- Enhanced `ConvertToInferenceLayerSpecs()` to properly extract and use running statistics
+- Updated inference engine to copy running statistics from trained models
+- Added `SetCustomNormalization()` for setting arbitrary normalization values
+- Added `SetStandardNormalization()` for backward compatibility
+- Added `ListBatchNormLayers()` to help users identify configurable layers
+- Maintains GPU-resident architecture and minimal CGO calls
+- Library now supports ANY model architecture with flexible normalization
 
 ### 5. Memory Transfer Implementation
 **Location:** `async/staging_pool.go:179`

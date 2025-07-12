@@ -118,7 +118,7 @@ func NewModelInferenceEngine(
 			RunningMean:     spec.RunningMean,
 			RunningVar:      spec.RunningVar,
 			RunningStatsSize: int32(len(spec.RunningMean)),
-			HasRunningStats:  spec.HasRunningStats,
+			HasRunningStats:  func() int32 { if spec.HasRunningStats { return 1 }; return 0 }(),
 		}
 	}
 	
@@ -414,7 +414,7 @@ func (mie *ModelInferenceEngine) loadRunningStatistics(runningStatsWeights []che
 	runningStatsMap := make(map[string]map[string][]float32)
 	
 	for _, weight := range runningStatsWeights {
-		layerName := weight.LayerName
+		layerName := weight.Layer
 		statType := weight.Type // "running_mean" or "running_var"
 		
 		if runningStatsMap[layerName] == nil {
@@ -489,11 +489,11 @@ func (mie *ModelInferenceEngine) recompileForInference() error {
 			RunningMean:     spec.RunningMean,
 			RunningVar:      spec.RunningVar,
 			RunningStatsSize: int32(len(spec.RunningMean)),
-			HasRunningStats:  spec.HasRunningStats,
+			HasRunningStats:  func() int32 { if spec.HasRunningStats { return 1 }; return 0 }(),
 		}
 		
 		// Log running statistics for debugging
-		if spec.HasRunningStats == 1 {
+		if spec.HasRunningStats {
 			fmt.Printf("Layer %d (%s): RunningMean=%v, RunningVar=%v\n", 
 				i, string(spec.NameBytes[:]), 
 				spec.RunningMean[:min(3, len(spec.RunningMean))], 

@@ -983,7 +983,7 @@ func (ms *ModelSpec) ConvertToInferenceLayerSpecs() ([]DynamicLayerSpec, error) 
 				
 				// If no running statistics are available, initialize with proper defaults
 				// Use num_features to determine size
-				if spec.HasRunningStats == 0 && spec.ParamIntCount > 0 {
+				if !spec.HasRunningStats && spec.ParamIntCount > 0 {
 					numFeatures := int(spec.ParamInt[0]) // num_features is ParamInt[0]
 					if numFeatures > 0 {
 						// Initialize with standard defaults: mean=0, var=1
@@ -993,7 +993,7 @@ func (ms *ModelSpec) ConvertToInferenceLayerSpecs() ([]DynamicLayerSpec, error) 
 							spec.RunningMean[i] = 0.0 // Default mean
 							spec.RunningVar[i] = 1.0  // Default variance
 						}
-						spec.HasRunningStats = boolToInt32(true)
+						spec.HasRunningStats = true
 					}
 				}
 				
