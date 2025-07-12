@@ -38,12 +38,29 @@ func ConvertTensorType(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType
 ```
 ConvertTensorType converts a tensor from one data type to another on GPU
 
+#### func  CopyBufferToBufferAsync
+
+```go
+func CopyBufferToBufferAsync(srcBuffer, dstBuffer unsafe.Pointer,
+	srcOffset, dstOffset, size int,
+	commandQueue unsafe.Pointer) error
+```
+CopyBufferToBufferAsync performs asynchronous buffer-to-buffer copy using Metal
+blit encoder
+
 #### func  CopyDataToMetalBuffer
 
 ```go
 func CopyDataToMetalBuffer(buffer unsafe.Pointer, data []byte) error
 ```
 CopyDataToMetalBuffer copies raw byte data to a Metal buffer
+
+#### func  CopyDataToStagingBuffer
+
+```go
+func CopyDataToStagingBuffer(stagingBuffer unsafe.Pointer, data []byte) error
+```
+CopyDataToStagingBuffer copies data from CPU memory to staging buffer
 
 #### func  CopyFloat32ArrayToMetalBuffer
 
@@ -72,6 +89,25 @@ CopyMetalBufferToFloat32Array copies data from a Metal buffer to a float32 array
 func CopyMetalBufferToInt32Array(buffer unsafe.Pointer, numElements int) ([]int32, error)
 ```
 CopyMetalBufferToInt32Array copies data from a Metal buffer to an int32 array
+
+#### func  CopyStagingToGPUBufferAsync
+
+```go
+func CopyStagingToGPUBufferAsync(stagingBuffer, gpuBuffer unsafe.Pointer,
+	stagingOffset, gpuOffset, size int,
+	commandQueue unsafe.Pointer) error
+```
+CopyStagingToGPUBufferAsync copies from staging buffer to GPU buffer
+asynchronously
+
+#### func  CopyTensorBufferSync
+
+```go
+func CopyTensorBufferSync(srcBuffer, dstBuffer unsafe.Pointer, size int) error
+```
+CopyTensorBufferSync copies data from one tensor buffer to another synchronously
+This implements GPU-resident tensor copying with minimal CGO calls using the
+optimized buffer copy
 
 #### func  CreateCommandBuffer
 
@@ -602,6 +638,7 @@ func SetupMemoryBridgeWithConvert(setupFunc func(
 	func(unsafe.Pointer, []float32) error,
 	func(unsafe.Pointer, []int32) error,
 	func(unsafe.Pointer, unsafe.Pointer, []int, int, int) error,
+	func(unsafe.Pointer, unsafe.Pointer, int) error,
 ), getDeviceFunc func() unsafe.Pointer)
 ```
 SetupMemoryBridgeWithConvert sets up bridge functions including type conversion
@@ -612,6 +649,14 @@ SetupMemoryBridgeWithConvert sets up bridge functions including type conversion
 func WaitCommandBufferCompletion(commandBuffer unsafe.Pointer) error
 ```
 WaitCommandBufferCompletion waits for a command buffer to complete execution
+
+#### func  WaitForBufferCopyCompletion
+
+```go
+func WaitForBufferCopyCompletion(commandQueue unsafe.Pointer) error
+```
+WaitForBufferCopyCompletion waits for all pending buffer copy operations to
+complete
 
 #### func  ZeroMetalBuffer
 

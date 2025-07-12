@@ -308,6 +308,14 @@ func (mie *ModelInferenceEngine) GetParameterTensors() []*memory.Tensor
 ```
 GetParameterTensors returns the GPU-resident parameter tensors
 
+#### func (*ModelInferenceEngine) ListBatchNormLayers
+
+```go
+func (mie *ModelInferenceEngine) ListBatchNormLayers() []string
+```
+ListBatchNormLayers returns the names of all BatchNorm layers in the model This
+helps users identify which layers can have custom normalization
+
 #### func (*ModelInferenceEngine) LoadWeights
 
 ```go
@@ -325,6 +333,25 @@ func (mie *ModelInferenceEngine) Predict(
 ```
 Predict performs single forward pass for inference Optimized for single-image or
 small batch inference
+
+#### func (*ModelInferenceEngine) SetCustomNormalization
+
+```go
+func (mie *ModelInferenceEngine) SetCustomNormalization(layerName string, mean, variance []float32) error
+```
+SetCustomNormalization allows setting custom normalization values for any model
+This enables the library to work with ANY model architecture and normalization
+scheme layerName: name of the BatchNorm layer to update mean, variance: custom
+normalization values (must match layer's num_features)
+
+#### func (*ModelInferenceEngine) SetStandardNormalization
+
+```go
+func (mie *ModelInferenceEngine) SetStandardNormalization(layerName string) error
+```
+SetStandardNormalization sets standard normalization (mean=0, var=1) for a
+BatchNorm layer This is equivalent to the old hardcoded behavior but now
+configurable
 
 #### type ModelTrainingEngine
 
@@ -512,6 +539,14 @@ func (mte *ModelTrainingEngine) SetOptimizerState(state *optimizer.OptimizerStat
 ```
 SetOptimizerState restores optimizer state from a checkpoint This method bridges
 between the Go optimizer interface and the CGO-level optimizer
+
+#### func (*ModelTrainingEngine) UpdateLearningRate
+
+```go
+func (mte *ModelTrainingEngine) UpdateLearningRate(newLR float32) error
+```
+UpdateLearningRate updates the learning rate for the current optimizer This
+method bridges between the model trainer and the optimizer implementations
 
 #### type TrainingStep
 

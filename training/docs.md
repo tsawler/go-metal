@@ -1238,7 +1238,7 @@ GPU-resident principles by only updating LR between epochs
 ```go
 func (mt *ModelTrainer) SetLearningRate(lr float32)
 ```
-SetLearningRate sets the learning rate
+SetLearningRate sets the learning rate manually (user-initiated)
 
 #### func (*ModelTrainer) SetOptimizerState
 

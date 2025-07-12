@@ -248,7 +248,7 @@ NewStagingBufferPool creates a new staging buffer pool
 ```go
 func (sbp *StagingBufferPool) Cleanup()
 ```
-Cleanup releases all staging buffers
+Cleanup releases all staging buffers and command queue
 
 #### func (*StagingBufferPool) GetBuffer
 
@@ -278,6 +278,21 @@ Stats returns statistics about the staging buffer pool
 func (sbp *StagingBufferPool) TransferToGPU(data interface{}, gpuTensor *memory.Tensor) error
 ```
 TransferToGPU transfers data from CPU slice to GPU tensor using staging buffers
+
+#### func (*StagingBufferPool) TransferToGPUSync
+
+```go
+func (sbp *StagingBufferPool) TransferToGPUSync(data interface{}, gpuTensor *memory.Tensor) error
+```
+TransferToGPUSync transfers data from CPU slice to GPU tensor and waits for
+completion
+
+#### func (*StagingBufferPool) WaitForTransferCompletion
+
+```go
+func (sbp *StagingBufferPool) WaitForTransferCompletion() error
+```
+WaitForTransferCompletion waits for all pending transfers to complete
 
 #### type StagingPoolStats
 

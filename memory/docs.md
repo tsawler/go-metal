@@ -18,6 +18,10 @@ var CopyInt32DataFunc func(buffer unsafe.Pointer, data []int32) error
 ```
 
 ```go
+var CopyTensorFunc func(srcBuffer, dstBuffer unsafe.Pointer, size int) error
+```
+
+```go
 var ToFloat32SliceFunc func(buffer unsafe.Pointer, numElements int) ([]float32, error)
 ```
 Bridge functions for data transfer - set up during cgo_bridge initialization
@@ -69,6 +73,7 @@ func SetupBridgeWithConvert(
 	copyFloat32DataFunc func(unsafe.Pointer, []float32) error,
 	copyInt32DataFunc func(unsafe.Pointer, []int32) error,
 	convertTensorTypeFunc func(unsafe.Pointer, unsafe.Pointer, []int, int, int) error,
+	copyTensorFunc func(unsafe.Pointer, unsafe.Pointer, int) error,
 )
 ```
 SetupBridgeWithConvert allows external packages to set up bridge functions
@@ -250,6 +255,14 @@ conversion on GPU
 func (t *Tensor) CopyFloat32Data(data []float32) error
 ```
 CopyFloat32Data copies float32 data to the tensor's Metal buffer
+
+#### func (*Tensor) CopyFrom
+
+```go
+func (t *Tensor) CopyFrom(src *Tensor) error
+```
+CopyFrom copies data from another tensor using GPU-resident buffer operations
+This performs a direct GPU-to-GPU memory transfer without CPU involvement
 
 #### func (*Tensor) CopyInt32Data
 
