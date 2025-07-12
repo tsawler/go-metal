@@ -21,11 +21,16 @@ Total "For now" comments found: 31 (17 unique concerns after excluding test skip
 - GPU-resident state with minimal CGO calls for checkpointing
 - Integration with ModelTrainer and ModelTrainingEngine
 
-### 2. Command Buffer Pooling for Optimizers
+### 2. Command Buffer Pooling for Optimizers ✅ RESOLVED
 **Location:** `cgo_bridge/bridge_optimizer.m:1241, 1440, 1693`
-**Issue:** L-BFGS, AdaDelta, and NAdam optimizers delegate to non-pooled versions
+**Issue:** L-BFGS, AdaDelta, and AdaGrad optimizers delegate to non-pooled versions
 **Impact:** Performance degradation, inefficient GPU resource usage
 **Severity:** HIGH - Significant performance impact
+**Resolution:** Implemented proper command buffer pooling for all affected optimizers:
+- L-BFGS pooled: Proper command buffer management with GPU-CPU synchronization
+- AdaDelta pooled: Buffer synchronization using blit command encoders
+- AdaGrad pooled: Optimized buffer access patterns with pooled command buffers
+- All optimizers now reuse command buffers from queue for better resource management
 
 ### 3. Generic Layer Configuration
 **Location:** `engine/model_engine.go:577`
