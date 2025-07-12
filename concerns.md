@@ -6,7 +6,10 @@ This document analyzes all "For now" comments found in the go-metal library code
 
 Total "For now" comments found: 31 (17 unique concerns after excluding test skips)
 
-**Legitimate concerns requiring attention: 5 remaining (7 resolved)**
+**Legitimate concerns requiring attention: 4 remaining (8 resolved + 1 identified)**
+
+**New optimization opportunity identified:**
+- L-BFGS optimizer uses CPU operations for vector calculations that could be moved to GPU
 
 ## Critical Concerns (High Priority)
 
@@ -106,11 +109,19 @@ Total "For now" comments found: 31 (17 unique concerns after excluding test skip
 
 ## Low Priority Concerns
 
-### 8. Simple MPS Implementation
+### 8. Simple MPS Implementation ✅ RESOLVED
 **Location:** `cgo_bridge/bridge_optimizer.m:456`
 **Issue:** Using simple version with Metal Performance Shaders
 **Impact:** May not be fully optimized
 **Severity:** LOW - Works but could be improved
+**Resolution:** Removed legacy CPU-based Adam implementation that violated GPU-resident principles:
+- Eliminated execute_adam_step() function that performed calculations on CPU (lines 426-549)
+- All optimizers now use proper MPSGraph-based implementations for GPU-resident operations
+- Adam, RMSProp, AdaGrad, AdaDelta, and NAdam optimizers use MPSGraph with minimal CPU access (only for result copying)
+- SGD uses integrated training step approach with proper GPU-resident operations
+- L-BFGS implementation identified for future optimization (contains some CPU operations)
+- Maintains all architectural requirements: GPU-resident everything, minimal CGO calls, MPSGraph-centric
+- All tests pass, confirming no regression in functionality
 
 ### 9. Command Pool as Queue
 **Location:** `cgo_bridge/bridge_training.m:98`

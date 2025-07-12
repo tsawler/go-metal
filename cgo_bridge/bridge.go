@@ -101,21 +101,6 @@ void deallocate_metal_buffer(uintptr_t buffer);
 void destroy_training_engine(uintptr_t engine);
 
 // Adam optimizer functions
-int execute_adam_step(
-    uintptr_t device,
-    uintptr_t* weight_buffers,
-    uintptr_t* gradient_buffers,
-    uintptr_t* momentum_buffers,
-    uintptr_t* variance_buffers,
-    int num_weights,
-    int* buffer_sizes,
-    float learning_rate,
-    float beta1,
-    float beta2,
-    float epsilon,
-    float weight_decay,
-    int step_count
-);
 
 // MPSGraph-based Adam optimizer for optimal GPU performance
 int execute_adam_step_mpsgraph(
@@ -971,67 +956,6 @@ func ExecuteAdamStepMPSGraph(
 	return nil
 }
 
-// ExecuteAdamStep executes a single Adam optimization step on GPU (legacy CPU-based implementation)
-func ExecuteAdamStep(
-	device unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	gradientBuffers []unsafe.Pointer,
-	momentumBuffers []unsafe.Pointer,
-	varianceBuffers []unsafe.Pointer,
-	bufferSizes []int,
-	learningRate float32,
-	beta1 float32,
-	beta2 float32,
-	epsilon float32,
-	weightDecay float32,
-	stepCount int,
-) error {
-	if len(weightBuffers) != len(gradientBuffers) ||
-		len(weightBuffers) != len(momentumBuffers) ||
-		len(weightBuffers) != len(varianceBuffers) ||
-		len(weightBuffers) != len(bufferSizes) {
-		return fmt.Errorf("all buffer arrays must have the same length")
-	}
-
-	numWeights := len(weightBuffers)
-
-	// Convert Go slices to C arrays
-	cWeightBuffers := make([]C.uintptr_t, numWeights)
-	cGradientBuffers := make([]C.uintptr_t, numWeights)
-	cMomentumBuffers := make([]C.uintptr_t, numWeights)
-	cVarianceBuffers := make([]C.uintptr_t, numWeights)
-	cBufferSizes := make([]C.int, numWeights)
-
-	for i := 0; i < numWeights; i++ {
-		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
-		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
-		cMomentumBuffers[i] = C.uintptr_t(uintptr(momentumBuffers[i]))
-		cVarianceBuffers[i] = C.uintptr_t(uintptr(varianceBuffers[i]))
-		cBufferSizes[i] = C.int(bufferSizes[i])
-	}
-
-	result := C.execute_adam_step(
-		C.uintptr_t(uintptr(device)),
-		&cWeightBuffers[0],
-		&cGradientBuffers[0],
-		&cMomentumBuffers[0],
-		&cVarianceBuffers[0],
-		C.int(numWeights),
-		&cBufferSizes[0],
-		C.float(learningRate),
-		C.float(beta1),
-		C.float(beta2),
-		C.float(epsilon),
-		C.float(weightDecay),
-		C.int(stepCount),
-	)
-
-	if result != 0 {
-		return fmt.Errorf("Adam step failed with error code: %d", result)
-	}
-
-	return nil
-}
 
 // ExecuteTrainingStepHybridWithGradients executes forward+backward pass and returns gradients
 func ExecuteTrainingStepHybridWithGradients(
