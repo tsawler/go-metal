@@ -9,9 +9,11 @@ import (
 
 	"github.com/tsawler/go-metal/async"
 	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/checkpoints"
 	"github.com/tsawler/go-metal/engine"
 	"github.com/tsawler/go-metal/layers"
 	"github.com/tsawler/go-metal/memory"
+	"github.com/tsawler/go-metal/optimizer"
 )
 
 // ModelTrainer provides layer-based training while maintaining the proven single-CGO-call architecture
@@ -1535,16 +1537,57 @@ func (mt *ModelTrainer) SetLearningRate(lr float32) {
 
 // GetOptimizerState returns the optimizer state for checkpoint saving
 func (mt *ModelTrainer) GetOptimizerState() *OptimizerStateData {
-	// For now, return nil as we don't have optimizer state extraction implemented
-	// This would need to be implemented based on the specific optimizer being used
-	return nil
+	// Get optimizer state from the engine
+	state, err := mt.modelEngine.GetOptimizerState()
+	if err != nil {
+		// Log error but return nil to maintain backward compatibility
+		fmt.Printf("Warning: Failed to get optimizer state: %v\n", err)
+		return nil
+	}
+	
+	// Convert from optimizer.OptimizerState to OptimizerStateData
+	if state == nil {
+		return nil
+	}
+	
+	return &OptimizerStateData{
+		Type:       state.Type,
+		Parameters: state.Parameters,
+		StateData:  state.StateData,
+	}
 }
 
 // SetOptimizerState restores optimizer state from checkpoint
 func (mt *ModelTrainer) SetOptimizerState(state interface{}) error {
-	// For now, return an error as optimizer state restoration is not implemented
-	// This would need to be implemented based on the specific optimizer being used
-	return fmt.Errorf("optimizer state restoration not yet implemented")
+	if state == nil {
+		return fmt.Errorf("optimizer state is nil")
+	}
+	
+	// Convert from interface{} to OptimizerStateData
+	stateData, ok := state.(*OptimizerStateData)
+	if !ok {
+		// Try to convert from checkpoint format
+		checkpointState, ok := state.(*checkpoints.OptimizerState)
+		if !ok {
+			return fmt.Errorf("invalid optimizer state type: expected *OptimizerStateData or *checkpoints.OptimizerState")
+		}
+		// Convert checkpoint format to internal format
+		stateData = &OptimizerStateData{
+			Type:       checkpointState.Type,
+			Parameters: checkpointState.Parameters,
+			StateData:  checkpointState.StateData,
+		}
+	}
+	
+	// Convert to optimizer.OptimizerState
+	optimizerState := &optimizer.OptimizerState{
+		Type:       stateData.Type,
+		Parameters: stateData.Parameters,
+		StateData:  stateData.StateData,
+	}
+	
+	// Pass to engine for restoration
+	return mt.modelEngine.SetOptimizerState(optimizerState)
 }
 
 // Predict provides a lightweight inference method for backward compatibility

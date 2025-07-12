@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/checkpoints"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -319,4 +320,131 @@ func (adam *AdamOptimizerState) Cleanup() {
 	adam.VarianceBuffers = nil
 	adam.WeightBuffers = nil
 	adam.bufferSizes = nil
+}
+
+// GetState extracts optimizer state for checkpointing
+// Transfers GPU state to CPU in a single batched operation per buffer type
+func (adam *AdamOptimizerState) GetState() (*OptimizerState, error) {
+	stateData := make([]checkpoints.OptimizerTensor, 0, len(adam.MomentumBuffers)*2)
+	
+	// Extract momentum buffers
+	for i, buffer := range adam.MomentumBuffers {
+		if buffer != nil {
+			// Calculate number of elements (buffer size / 4 bytes per float32)
+			numElements := adam.bufferSizes[i] / 4
+			
+			// Read GPU buffer to CPU
+			data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read momentum buffer %d: %v", i, err)
+			}
+			
+			stateData = append(stateData, checkpoints.OptimizerTensor{
+				Name:      fmt.Sprintf("momentum_%d", i),
+				Shape:     []int{len(data)},
+				Data:      data,
+				StateType: "momentum",
+			})
+		}
+	}
+	
+	// Extract variance buffers  
+	for i, buffer := range adam.VarianceBuffers {
+		if buffer != nil {
+			// Calculate number of elements
+			numElements := adam.bufferSizes[i] / 4
+			
+			// Read GPU buffer to CPU
+			data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read variance buffer %d: %v", i, err)
+			}
+			
+			stateData = append(stateData, checkpoints.OptimizerTensor{
+				Name:      fmt.Sprintf("variance_%d", i),
+				Shape:     []int{len(data)},
+				Data:      data,
+				StateType: "variance",
+			})
+		}
+	}
+	
+	return &OptimizerState{
+		Type: "Adam",
+		Parameters: map[string]interface{}{
+			"learning_rate": adam.LearningRate,
+			"beta1":         adam.Beta1,
+			"beta2":         adam.Beta2,
+			"epsilon":       adam.Epsilon,
+			"weight_decay":  adam.WeightDecay,
+			"step_count":    adam.StepCount,
+		},
+		StateData: stateData,
+	}, nil
+}
+
+// LoadState restores optimizer state from checkpoint
+// Transfers CPU state back to GPU in batched operations
+func (adam *AdamOptimizerState) LoadState(state *OptimizerState) error {
+	// Validate state type
+	if err := validateStateType("Adam", state); err != nil {
+		return err
+	}
+	
+	// Restore hyperparameters
+	if lr, ok := state.Parameters["learning_rate"].(float64); ok {
+		adam.LearningRate = float32(lr)
+	}
+	if b1, ok := state.Parameters["beta1"].(float64); ok {
+		adam.Beta1 = float32(b1)
+	}
+	if b2, ok := state.Parameters["beta2"].(float64); ok {
+		adam.Beta2 = float32(b2)
+	}
+	if eps, ok := state.Parameters["epsilon"].(float64); ok {
+		adam.Epsilon = float32(eps)
+	}
+	if wd, ok := state.Parameters["weight_decay"].(float64); ok {
+		adam.WeightDecay = float32(wd)
+	}
+	if sc, ok := state.Parameters["step_count"].(float64); ok {
+		adam.StepCount = uint64(sc)
+	}
+	
+	// Restore GPU buffers
+	for _, tensor := range state.StateData {
+		idx := extractBufferIndex(tensor.Name)
+		if idx < 0 || idx >= len(adam.bufferSizes) {
+			return fmt.Errorf("invalid buffer index in tensor name: %s", tensor.Name)
+		}
+		
+		// Validate data size matches buffer size
+		expectedElements := adam.bufferSizes[idx] / 4
+		if len(tensor.Data) != expectedElements {
+			return fmt.Errorf("data size mismatch for %s: expected %d elements, got %d",
+				tensor.Name, expectedElements, len(tensor.Data))
+		}
+		
+		// Write data back to GPU buffer
+		switch tensor.StateType {
+		case "momentum":
+			if adam.MomentumBuffers[idx] == nil {
+				return fmt.Errorf("momentum buffer %d is nil", idx)
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(adam.MomentumBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore momentum buffer %d: %v", idx, err)
+			}
+		case "variance":
+			if adam.VarianceBuffers[idx] == nil {
+				return fmt.Errorf("variance buffer %d is nil", idx) 
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(adam.VarianceBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore variance buffer %d: %v", idx, err)
+			}
+		default:
+			return fmt.Errorf("unknown state type: %s", tensor.StateType)
+		}
+	}
+	
+	return nil
 }

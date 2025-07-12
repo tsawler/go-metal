@@ -483,6 +483,14 @@ func (mte *ModelTrainingEngine) GetModelSummary() string
 ```
 GetModelSummary returns a human-readable model summary
 
+#### func (*ModelTrainingEngine) GetOptimizerState
+
+```go
+func (mte *ModelTrainingEngine) GetOptimizerState() (*optimizer.OptimizerState, error)
+```
+GetOptimizerState extracts the current optimizer state for checkpointing This
+method bridges between the CGO-level optimizer and the Go optimizer interface
+
 #### func (*ModelTrainingEngine) GetParameterTensors
 
 ```go
@@ -496,6 +504,14 @@ GetParameterTensors returns all model parameter tensors
 func (mte *ModelTrainingEngine) IsDynamicEngine() bool
 ```
 IsDynamicEngine returns whether this is a dynamic engine
+
+#### func (*ModelTrainingEngine) SetOptimizerState
+
+```go
+func (mte *ModelTrainingEngine) SetOptimizerState(state *optimizer.OptimizerState) error
+```
+SetOptimizerState restores optimizer state from a checkpoint This method bridges
+between the Go optimizer interface and the CGO-level optimizer
 
 #### type TrainingStep
 

@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/checkpoints"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -327,4 +328,157 @@ func (rmsprop *RMSPropOptimizerState) Cleanup() {
 	rmsprop.GradientAvgBuffers = nil
 	rmsprop.WeightBuffers = nil
 	rmsprop.bufferSizes = nil
+}
+
+// GetState extracts optimizer state for checkpointing
+// Transfers GPU state to CPU in batched operations
+func (rmsprop *RMSPropOptimizerState) GetState() (*OptimizerState, error) {
+	stateData := make([]checkpoints.OptimizerTensor, 0)
+	
+	// Extract squared gradient average buffers
+	for i, buffer := range rmsprop.SquaredGradAvgBuffers {
+		if buffer != nil {
+			numElements := rmsprop.bufferSizes[i] / 4
+			data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read squared grad avg buffer %d: %v", i, err)
+			}
+			
+			stateData = append(stateData, checkpoints.OptimizerTensor{
+				Name:      fmt.Sprintf("squared_grad_avg_%d", i),
+				Shape:     []int{len(data)},
+				Data:      data,
+				StateType: "squared_grad_avg",
+			})
+		}
+	}
+	
+	// Extract momentum buffers if momentum is used
+	if rmsprop.Momentum > 0 {
+		for i, buffer := range rmsprop.MomentumBuffers {
+			if buffer != nil {
+				numElements := rmsprop.bufferSizes[i] / 4
+				data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read momentum buffer %d: %v", i, err)
+				}
+				
+				stateData = append(stateData, checkpoints.OptimizerTensor{
+					Name:      fmt.Sprintf("momentum_%d", i),
+					Shape:     []int{len(data)},
+					Data:      data,
+					StateType: "momentum",
+				})
+			}
+		}
+	}
+	
+	// Extract gradient average buffers if centered
+	if rmsprop.Centered {
+		for i, buffer := range rmsprop.GradientAvgBuffers {
+			if buffer != nil {
+				numElements := rmsprop.bufferSizes[i] / 4
+				data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read gradient avg buffer %d: %v", i, err)
+				}
+				
+				stateData = append(stateData, checkpoints.OptimizerTensor{
+					Name:      fmt.Sprintf("gradient_avg_%d", i),
+					Shape:     []int{len(data)},
+					Data:      data,
+					StateType: "gradient_avg",
+				})
+			}
+		}
+	}
+	
+	return &OptimizerState{
+		Type: "RMSProp",
+		Parameters: map[string]interface{}{
+			"learning_rate": rmsprop.LearningRate,
+			"alpha":         rmsprop.Alpha,
+			"epsilon":       rmsprop.Epsilon,
+			"weight_decay":  rmsprop.WeightDecay,
+			"momentum":      rmsprop.Momentum,
+			"centered":      rmsprop.Centered,
+			"step_count":    rmsprop.StepCount,
+		},
+		StateData: stateData,
+	}, nil
+}
+
+// LoadState restores optimizer state from checkpoint
+func (rmsprop *RMSPropOptimizerState) LoadState(state *OptimizerState) error {
+	// Validate state type
+	if err := validateStateType("RMSProp", state); err != nil {
+		return err
+	}
+	
+	// Restore hyperparameters
+	if lr, ok := state.Parameters["learning_rate"].(float64); ok {
+		rmsprop.LearningRate = float32(lr)
+	}
+	if alpha, ok := state.Parameters["alpha"].(float64); ok {
+		rmsprop.Alpha = float32(alpha)
+	}
+	if eps, ok := state.Parameters["epsilon"].(float64); ok {
+		rmsprop.Epsilon = float32(eps)
+	}
+	if wd, ok := state.Parameters["weight_decay"].(float64); ok {
+		rmsprop.WeightDecay = float32(wd)
+	}
+	if mom, ok := state.Parameters["momentum"].(float64); ok {
+		rmsprop.Momentum = float32(mom)
+	}
+	if centered, ok := state.Parameters["centered"].(bool); ok {
+		rmsprop.Centered = centered
+	}
+	if sc, ok := state.Parameters["step_count"].(float64); ok {
+		rmsprop.StepCount = uint64(sc)
+	}
+	
+	// Restore GPU buffers
+	for _, tensor := range state.StateData {
+		idx := extractBufferIndex(tensor.Name)
+		if idx < 0 || idx >= len(rmsprop.bufferSizes) {
+			return fmt.Errorf("invalid buffer index in tensor name: %s", tensor.Name)
+		}
+		
+		// Validate data size
+		expectedElements := rmsprop.bufferSizes[idx] / 4
+		if len(tensor.Data) != expectedElements {
+			return fmt.Errorf("data size mismatch for %s: expected %d elements, got %d",
+				tensor.Name, expectedElements, len(tensor.Data))
+		}
+		
+		// Write data back to GPU buffer
+		switch tensor.StateType {
+		case "squared_grad_avg":
+			if rmsprop.SquaredGradAvgBuffers[idx] == nil {
+				return fmt.Errorf("squared grad avg buffer %d is nil", idx)
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(rmsprop.SquaredGradAvgBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore squared grad avg buffer %d: %v", idx, err)
+			}
+		case "momentum":
+			if rmsprop.MomentumBuffers[idx] == nil {
+				return fmt.Errorf("momentum buffer %d is nil", idx)
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(rmsprop.MomentumBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore momentum buffer %d: %v", idx, err)
+			}
+		case "gradient_avg":
+			if rmsprop.GradientAvgBuffers[idx] == nil {
+				return fmt.Errorf("gradient avg buffer %d is nil", idx)
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(rmsprop.GradientAvgBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore gradient avg buffer %d: %v", idx, err)
+			}
+		default:
+			return fmt.Errorf("unknown state type: %s", tensor.StateType)
+		}
+	}
+	
+	return nil
 }

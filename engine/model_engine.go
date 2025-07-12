@@ -1637,3 +1637,96 @@ func findLayerIndex(modelSpec *layers.ModelSpec, layerType layers.LayerType, occ
 	}
 	return -1 // Not found
 }
+
+// GetOptimizerState extracts the current optimizer state for checkpointing
+// This method bridges between the CGO-level optimizer and the Go optimizer interface
+func (mte *ModelTrainingEngine) GetOptimizerState() (*optimizer.OptimizerState, error) {
+	// Check if we have an optimizer
+	if mte.MPSTrainingEngine == nil {
+		return nil, fmt.Errorf("training engine not initialized")
+	}
+	
+	// Currently, the optimizer is managed at the CGO level
+	// We need to extract the state based on the optimizer type
+	config := mte.MPSTrainingEngine.GetConfig()
+	
+	switch config.OptimizerType {
+	case cgo_bridge.Adam:
+		if mte.MPSTrainingEngine.adamOptimizer != nil {
+			return mte.MPSTrainingEngine.adamOptimizer.GetState()
+		}
+		return nil, fmt.Errorf("Adam optimizer not initialized")
+		
+	case cgo_bridge.RMSProp:
+		if mte.MPSTrainingEngine.rmspropOptimizer != nil {
+			return mte.MPSTrainingEngine.rmspropOptimizer.GetState()
+		}
+		return nil, fmt.Errorf("RMSProp optimizer not initialized")
+		
+	case cgo_bridge.SGD:
+		if mte.MPSTrainingEngine.sgdOptimizer != nil {
+			return mte.MPSTrainingEngine.sgdOptimizer.GetState()
+		}
+		return nil, fmt.Errorf("SGD optimizer not initialized")
+		
+	default:
+		return nil, fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
+	}
+}
+
+// SetOptimizerState restores optimizer state from a checkpoint
+// This method bridges between the Go optimizer interface and the CGO-level optimizer
+func (mte *ModelTrainingEngine) SetOptimizerState(state *optimizer.OptimizerState) error {
+	if state == nil {
+		return fmt.Errorf("optimizer state is nil")
+	}
+	
+	// Check if we have an optimizer
+	if mte.MPSTrainingEngine == nil {
+		return fmt.Errorf("training engine not initialized")
+	}
+	
+	// Restore state based on the optimizer type
+	config := mte.MPSTrainingEngine.GetConfig()
+	
+	// Validate state type matches current optimizer
+	expectedType := ""
+	switch config.OptimizerType {
+	case cgo_bridge.Adam:
+		expectedType = "Adam"
+	case cgo_bridge.RMSProp:
+		expectedType = "RMSProp"
+	case cgo_bridge.SGD:
+		expectedType = "SGD"
+	default:
+		return fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
+	}
+	
+	if state.Type != expectedType {
+		return fmt.Errorf("optimizer type mismatch: expected %s, got %s", expectedType, state.Type)
+	}
+	
+	// Restore state to the appropriate optimizer
+	switch config.OptimizerType {
+	case cgo_bridge.Adam:
+		if mte.MPSTrainingEngine.adamOptimizer != nil {
+			return mte.MPSTrainingEngine.adamOptimizer.LoadState(state)
+		}
+		return fmt.Errorf("Adam optimizer not initialized")
+		
+	case cgo_bridge.RMSProp:
+		if mte.MPSTrainingEngine.rmspropOptimizer != nil {
+			return mte.MPSTrainingEngine.rmspropOptimizer.LoadState(state)
+		}
+		return fmt.Errorf("RMSProp optimizer not initialized")
+		
+	case cgo_bridge.SGD:
+		if mte.MPSTrainingEngine.sgdOptimizer != nil {
+			return mte.MPSTrainingEngine.sgdOptimizer.LoadState(state)
+		}
+		return fmt.Errorf("SGD optimizer not initialized")
+		
+	default:
+		return fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
+	}
+}

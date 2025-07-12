@@ -248,6 +248,14 @@ func (adam *AdamOptimizerState) Cleanup()
 ```
 Cleanup releases all GPU buffers
 
+#### func (*AdamOptimizerState) GetState
+
+```go
+func (adam *AdamOptimizerState) GetState() (*OptimizerState, error)
+```
+GetState extracts optimizer state for checkpointing Transfers GPU state to CPU
+in a single batched operation per buffer type
+
 #### func (*AdamOptimizerState) GetStats
 
 ```go
@@ -261,6 +269,14 @@ GetStats returns optimizer statistics
 func (adam *AdamOptimizerState) GetStep() uint64
 ```
 GetStep returns the current step count
+
+#### func (*AdamOptimizerState) LoadState
+
+```go
+func (adam *AdamOptimizerState) LoadState(state *OptimizerState) error
+```
+LoadState restores optimizer state from checkpoint Transfers CPU state back to
+GPU in batched operations
 
 #### func (*AdamOptimizerState) SetCommandPool
 
@@ -500,6 +516,59 @@ func (nadam *NadamOptimizerState) UpdateLearningRate(newLR float32) error
 UpdateLearningRate updates the learning rate (useful for learning rate
 scheduling)
 
+#### type Optimizer
+
+```go
+type Optimizer interface {
+	// Step performs a single optimization step
+	// gradientBuffers must match the number of weight buffers
+	Step(gradientBuffers []unsafe.Pointer) error
+
+	// GetState extracts optimizer state for checkpointing
+	// This transfers GPU state to CPU only when needed for saving
+	// The implementation should batch reads to minimize CGO calls
+	GetState() (*OptimizerState, error)
+
+	// LoadState restores optimizer state from checkpoint
+	// This transfers CPU state back to GPU buffers
+	// The implementation should batch writes to minimize CGO calls
+	LoadState(state *OptimizerState) error
+
+	// GetStepCount returns the current optimization step number
+	GetStepCount() uint64
+
+	// UpdateLearningRate updates the learning rate
+	UpdateLearningRate(lr float32)
+
+	// SetWeightBuffers sets the current weight buffer pointers
+	// Must be called before each optimization step
+	SetWeightBuffers(weightBuffers []unsafe.Pointer) error
+
+	// SetCommandPool enables command buffer pooling for Metal operations
+	SetCommandPool(commandPool unsafe.Pointer)
+
+	// Cleanup releases all GPU resources
+	Cleanup()
+}
+```
+
+Optimizer defines the common interface for all optimizers This interface enables
+state save/restore for checkpoint functionality while maintaining GPU-resident
+state and minimizing CGO calls
+
+#### type OptimizerState
+
+```go
+type OptimizerState struct {
+	Type       string                        `json:"type"`       // "Adam", "SGD", etc.
+	Parameters map[string]interface{}        `json:"parameters"` // Hyperparameters
+	StateData  []checkpoints.OptimizerTensor `json:"state_data"` // GPU state tensors
+}
+```
+
+OptimizerState represents the complete state of an optimizer Compatible with
+checkpoints.OptimizerState for serialization
+
 #### type RMSPropConfig
 
 ```go
@@ -566,6 +635,14 @@ func (rmsprop *RMSPropOptimizerState) Cleanup()
 ```
 Cleanup releases all GPU buffers
 
+#### func (*RMSPropOptimizerState) GetState
+
+```go
+func (rmsprop *RMSPropOptimizerState) GetState() (*OptimizerState, error)
+```
+GetState extracts optimizer state for checkpointing Transfers GPU state to CPU
+in batched operations
+
 #### func (*RMSPropOptimizerState) GetStats
 
 ```go
@@ -579,6 +656,13 @@ GetStats returns optimizer statistics
 func (rmsprop *RMSPropOptimizerState) GetStep() uint64
 ```
 GetStep returns the current step count
+
+#### func (*RMSPropOptimizerState) LoadState
+
+```go
+func (rmsprop *RMSPropOptimizerState) LoadState(state *OptimizerState) error
+```
+LoadState restores optimizer state from checkpoint
 
 #### func (*RMSPropOptimizerState) SetCommandPool
 
@@ -627,3 +711,112 @@ type RMSPropStats struct {
 ```
 
 RMSPropStats provides statistics about the RMSProp optimizer
+
+#### type SGDConfig
+
+```go
+type SGDConfig struct {
+	LearningRate float32
+	Momentum     float32
+	WeightDecay  float32
+	Nesterov     bool
+}
+```
+
+SGDConfig holds configuration for SGD optimizer
+
+#### func  DefaultSGDConfig
+
+```go
+func DefaultSGDConfig() SGDConfig
+```
+DefaultSGDConfig returns default SGD optimizer configuration
+
+#### type SGDOptimizerState
+
+```go
+type SGDOptimizerState struct {
+	// Hyperparameters
+	LearningRate float32
+	Momentum     float32 // Momentum coefficient (0 for vanilla SGD)
+	WeightDecay  float32 // L2 regularization coefficient
+	Nesterov     bool    // Whether to use Nesterov momentum
+
+	// GPU-resident state buffers
+	MomentumBuffers []unsafe.Pointer // Momentum buffers (only if momentum > 0)
+	WeightBuffers   []unsafe.Pointer // Current weight tensors
+
+	// Step tracking
+	StepCount uint64
+}
+```
+
+SGDOptimizerState represents GPU-resident SGD optimizer state
+
+#### func  NewSGDOptimizer
+
+```go
+func NewSGDOptimizer(
+	config SGDConfig,
+	weightShapes [][]int,
+	memoryManager *memory.MemoryManager,
+	device unsafe.Pointer,
+) (*SGDOptimizerState, error)
+```
+NewSGDOptimizer creates a new GPU-resident SGD optimizer
+
+#### func (*SGDOptimizerState) Cleanup
+
+```go
+func (sgd *SGDOptimizerState) Cleanup()
+```
+Cleanup releases all GPU buffers
+
+#### func (*SGDOptimizerState) GetState
+
+```go
+func (sgd *SGDOptimizerState) GetState() (*OptimizerState, error)
+```
+GetState extracts optimizer state for checkpointing
+
+#### func (*SGDOptimizerState) GetStepCount
+
+```go
+func (sgd *SGDOptimizerState) GetStepCount() uint64
+```
+GetStepCount returns the current step count
+
+#### func (*SGDOptimizerState) LoadState
+
+```go
+func (sgd *SGDOptimizerState) LoadState(state *OptimizerState) error
+```
+LoadState restores optimizer state from checkpoint
+
+#### func (*SGDOptimizerState) SetCommandPool
+
+```go
+func (sgd *SGDOptimizerState) SetCommandPool(commandPool unsafe.Pointer)
+```
+SetCommandPool enables command buffer pooling
+
+#### func (*SGDOptimizerState) SetWeightBuffers
+
+```go
+func (sgd *SGDOptimizerState) SetWeightBuffers(weightBuffers []unsafe.Pointer) error
+```
+SetWeightBuffers sets the current weight buffer pointers
+
+#### func (*SGDOptimizerState) Step
+
+```go
+func (sgd *SGDOptimizerState) Step(gradientBuffers []unsafe.Pointer) error
+```
+Step performs a single SGD optimization step
+
+#### func (*SGDOptimizerState) UpdateLearningRate
+
+```go
+func (sgd *SGDOptimizerState) UpdateLearningRate(newLR float32)
+```
+UpdateLearningRate updates the learning rate

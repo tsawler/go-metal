@@ -17,8 +17,10 @@ type MPSTrainingEngine struct {
 	config       cgo_bridge.TrainingConfig
 	initialized  bool
 	isDynamic    bool                     // True if using dynamic engine, false for hybrid
-	adamOptimizer  *optimizer.AdamOptimizerState  // Optional Adam optimizer
-	lbfgsOptimizer *optimizer.LBFGSOptimizerState // Optional L-BFGS optimizer
+	adamOptimizer     *optimizer.AdamOptimizerState     // Optional Adam optimizer
+	rmspropOptimizer  *optimizer.RMSPropOptimizerState  // Optional RMSProp optimizer
+	sgdOptimizer      *optimizer.SGDOptimizerState      // Optional SGD optimizer
+	lbfgsOptimizer    *optimizer.LBFGSOptimizerState    // Optional L-BFGS optimizer
 	
 	// RESOURCE LEAK FIX: Command buffer pooling support
 	commandQueue unsafe.Pointer           // MTLCommandQueue for command buffer creation

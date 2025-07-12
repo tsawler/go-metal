@@ -1,0 +1,118 @@
+# "For Now" Concerns Analysis
+
+This document analyzes all "For now" comments found in the go-metal library codebase to identify legitimate concerns that need to be addressed.
+
+## Summary
+
+Total "For now" comments found: 31 (17 unique concerns after excluding test skips)
+
+**Legitimate concerns requiring attention: 12**
+
+## Critical Concerns (High Priority)
+
+### 1. Optimizer State Management ✅ RESOLVED
+**Location:** `training/model_trainer.go:1538, 1545`
+**Issue:** Optimizer state extraction and restoration not implemented
+**Impact:** Cannot save/restore training checkpoints properly
+**Severity:** HIGH - Breaks training resumption functionality
+**Resolution:** Implemented complete optimizer state save/restore functionality with:
+- Common Optimizer interface (`optimizer/interface.go`)
+- State management for Adam, RMSProp, and SGD optimizers
+- GPU-resident state with minimal CGO calls for checkpointing
+- Integration with ModelTrainer and ModelTrainingEngine
+
+### 2. Command Buffer Pooling for Optimizers
+**Location:** `cgo_bridge/bridge_optimizer.m:1241, 1440, 1693`
+**Issue:** L-BFGS, AdaDelta, and NAdam optimizers delegate to non-pooled versions
+**Impact:** Performance degradation, inefficient GPU resource usage
+**Severity:** HIGH - Significant performance impact
+
+### 3. Generic Layer Configuration
+**Location:** `engine/model_engine.go:577`
+**Issue:** Engine hardcoded to hybrid CNN architecture only
+**Impact:** Cannot use arbitrary model architectures
+**Severity:** HIGH - Major limitation on model flexibility
+
+## Medium Priority Concerns
+
+### 4. Inference Engine Defaults
+**Location:** `engine/inference_engine.go:225`
+**Issue:** Uses hardcoded normalization values (mean=0, var=1)
+**Impact:** May produce incorrect results for models expecting different normalization
+**Severity:** MEDIUM - Affects accuracy but workaround exists
+
+### 5. Memory Transfer Implementation
+**Location:** `async/staging_pool.go:179`
+**Issue:** Relies on memory manager for actual transfer implementation
+**Impact:** Potential inefficiencies in GPU memory management
+**Severity:** MEDIUM - Works but may not be optimal
+
+### 6. Tensor Copy Function
+**Location:** `training/model_trainer.go:343`
+**Issue:** Missing implementation for tensor copying
+**Impact:** May affect certain training operations
+**Severity:** MEDIUM - Functionality gap
+
+### 7. Learning Rate Scheduler
+**Location:** `training/model_trainer.go:1532`
+**Issue:** Dynamic LR changes only update config, not actual scheduler
+**Impact:** Learning rate scheduling may not work as expected
+**Severity:** MEDIUM - Affects training dynamics
+
+## Low Priority Concerns
+
+### 8. Simple MPS Implementation
+**Location:** `cgo_bridge/bridge_optimizer.m:456`
+**Issue:** Using simple version with Metal Performance Shaders
+**Impact:** May not be fully optimized
+**Severity:** LOW - Works but could be improved
+
+### 9. Command Pool as Queue
+**Location:** `cgo_bridge/bridge_training.m:98`
+**Issue:** Treating command_pool as command queue (simple implementation)
+**Impact:** May not leverage full command buffer pooling benefits
+**Severity:** LOW - Functional but suboptimal
+
+### 10. Batch Size Limitations
+**Location:** `cgo_bridge/bridge_graph.m:193`
+**Issue:** Fixed batch size for labels placeholder
+**Impact:** Less flexible batch processing
+**Severity:** LOW - Can work around with fixed batches
+
+### 11. Input Shape Handling
+**Location:** `cgo_bridge/bridge_graph.m:19`
+**Issue:** Using original shape as-is without transformation
+**Impact:** May limit shape flexibility
+**Severity:** LOW - Works for current use cases
+
+### 12. Generic Return Type
+**Location:** `layers/layer.go:1349`
+**Issue:** Returns interface{} requiring engine-side conversion
+**Impact:** Type safety concerns, potential runtime errors
+**Severity:** LOW - Design choice with tradeoffs
+
+## Non-Issues (Working as Intended)
+
+The following "For now" comments are not concerns:
+- Test skips (6 instances) - Intentional for Metal device requirements
+- Inference reusing prediction method - Appropriate design choice
+- Engine reuse for inference - Efficient implementation
+- Graph assumption in engine creation - Valid architectural decision
+- CPU usage with GPU commit - Necessary for hybrid execution
+
+## Recommendations
+
+1. **Immediate Action Required:**
+   - Implement optimizer state save/restore for checkpoint functionality
+   - Add command buffer pooling for all optimizers
+   - Extend CGO bridge for generic layer configurations
+
+2. **Near-term Improvements:**
+   - Add configurable normalization parameters for inference
+   - Implement proper tensor copy operations
+   - Fix learning rate scheduler integration
+
+3. **Long-term Optimization:**
+   - Optimize Metal Performance Shaders usage
+   - Improve command buffer pooling architecture
+   - Consider type-safe alternatives to interface{} returns
