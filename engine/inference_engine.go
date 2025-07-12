@@ -114,6 +114,11 @@ func NewModelInferenceEngine(
 			ParamFloatCount: spec.ParamFloatCount,
 			ParamInt:        spec.ParamInt,
 			ParamIntCount:   spec.ParamIntCount,
+			// ARCHITECTURAL FIX: Copy running statistics for flexible normalization
+			RunningMean:     spec.RunningMean,
+			RunningVar:      spec.RunningVar,
+			RunningStatsSize: int32(len(spec.RunningMean)),
+			HasRunningStats:  spec.HasRunningStats,
 		}
 	}
 	
@@ -221,8 +226,15 @@ func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor)
 		}
 	}
 	
-	// TODO: Store running statistics for later use by BatchNorm inference
-	// For now, the inference execution uses default values (mean=0, var=1)
+	// FLEXIBLE NORMALIZATION: Handle running statistics as separate from learnable parameters
+	// Running statistics (mean/var) are stored in layer specifications for inference
+	// This allows ANY model to specify custom normalization values rather than hardcoded defaults
+	if len(runningStatsWeights) > 0 {
+		fmt.Printf("Loading %d running statistics into layer specifications...\n", len(runningStatsWeights))
+		if err := mie.loadRunningStatistics(runningStatsWeights); err != nil {
+			return fmt.Errorf("failed to load running statistics: %v", err)
+		}
+	}
 	
 	return nil
 }
@@ -393,4 +405,126 @@ func (mie *ModelInferenceEngine) GetParameterTensors() []*memory.Tensor {
 // GetModelSpec returns the model specification
 func (mie *ModelInferenceEngine) GetModelSpec() *layers.ModelSpec {
 	return mie.modelSpec
+}
+
+// loadRunningStatistics loads BatchNorm running statistics for flexible normalization
+// This resolves the hardcoded mean=0, var=1 limitation
+func (mie *ModelInferenceEngine) loadRunningStatistics(runningStatsWeights []checkpoints.WeightTensor) error {
+	// Create a map of layer name to running statistics for fast lookup
+	runningStatsMap := make(map[string]map[string][]float32)
+	
+	for _, weight := range runningStatsWeights {
+		layerName := weight.LayerName
+		statType := weight.Type // "running_mean" or "running_var"
+		
+		if runningStatsMap[layerName] == nil {
+			runningStatsMap[layerName] = make(map[string][]float32)
+		}
+		runningStatsMap[layerName][statType] = weight.Data
+		
+		fmt.Printf("Loaded %s for layer %s: %d values\n", statType, layerName, len(weight.Data))
+	}
+	
+	// Update model spec layers with running statistics
+	// This ensures the values are available for subsequent conversion to inference specs
+	for i := range mie.modelSpec.Layers {
+		layer := &mie.modelSpec.Layers[i]
+		
+		// Only process BatchNorm layers
+		if layer.Type == layers.BatchNorm {
+			layerStats, exists := runningStatsMap[layer.Name]
+			if exists {
+				// Initialize RunningStatistics map if needed
+				if layer.RunningStatistics == nil {
+					layer.RunningStatistics = make(map[string][]float32)
+				}
+				
+				// Copy running mean if available
+				if runningMean, hasMean := layerStats["running_mean"]; hasMean {
+					layer.RunningStatistics["running_mean"] = make([]float32, len(runningMean))
+					copy(layer.RunningStatistics["running_mean"], runningMean)
+					fmt.Printf("Updated layer %s with running_mean: %v\n", layer.Name, runningMean[:min(5, len(runningMean))])
+				}
+				
+				// Copy running variance if available
+				if runningVar, hasVar := layerStats["running_var"]; hasVar {
+					layer.RunningStatistics["running_var"] = make([]float32, len(runningVar))
+					copy(layer.RunningStatistics["running_var"], runningVar)
+					fmt.Printf("Updated layer %s with running_var: %v\n", layer.Name, runningVar[:min(5, len(runningVar))])
+				}
+			} else {
+				fmt.Printf("Warning: No running statistics found for BatchNorm layer %s, using defaults\n", layer.Name)
+			}
+		}
+	}
+	
+	// IMPORTANT: Recompile the model for inference with updated running statistics
+	// This ensures the new normalization values are used
+	return mie.recompileForInference()
+}
+
+// recompileForInference rebuilds the inference graph with updated running statistics
+func (mie *ModelInferenceEngine) recompileForInference() error {
+	// Convert model to inference specs with updated running statistics
+	inferenceSpecs, err := mie.modelSpec.ConvertToInferenceLayerSpecs()
+	if err != nil {
+		return fmt.Errorf("failed to convert model to inference specs: %v", err)
+	}
+	
+	// Convert to CGO-compatible format with running statistics
+	cgoLayerSpecs := make([]cgo_bridge.LayerSpecC, len(inferenceSpecs))
+	for i, spec := range inferenceSpecs {
+		cgoLayerSpecs[i] = cgo_bridge.LayerSpecC{
+			LayerType:       spec.LayerType,
+			Name:            spec.NameBytes,
+			InputShape:      spec.InputShape,
+			InputShapeLen:   spec.InputShapeLen,
+			OutputShape:     spec.OutputShape,
+			OutputShapeLen:  spec.OutputShapeLen,
+			ParamFloat:      spec.ParamFloat,
+			ParamFloatCount: spec.ParamFloatCount,
+			ParamInt:        spec.ParamInt,
+			ParamIntCount:   spec.ParamIntCount,
+			// Include updated running statistics
+			RunningMean:     spec.RunningMean,
+			RunningVar:      spec.RunningVar,
+			RunningStatsSize: int32(len(spec.RunningMean)),
+			HasRunningStats:  spec.HasRunningStats,
+		}
+		
+		// Log running statistics for debugging
+		if spec.HasRunningStats == 1 {
+			fmt.Printf("Layer %d (%s): RunningMean=%v, RunningVar=%v\n", 
+				i, string(spec.NameBytes[:]), 
+				spec.RunningMean[:min(3, len(spec.RunningMean))], 
+				spec.RunningVar[:min(3, len(spec.RunningVar))])
+		}
+	}
+	
+	// Update inference configuration with new layer specs
+	config := mie.MPSInferenceEngine.config
+	config.LayerSpecs = cgoLayerSpecs
+	config.LayerSpecsLen = int32(len(cgoLayerSpecs))
+	
+	// Rebuild inference graph with updated specifications
+	err = cgo_bridge.BuildInferenceGraph(
+		mie.MPSInferenceEngine.engine,
+		mie.modelSpec.InputShape,
+		int32(len(mie.modelSpec.InputShape)),
+		mie.batchNormInferenceMode,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to rebuild inference graph: %v", err)
+	}
+	
+	fmt.Println("Successfully recompiled inference engine with custom normalization values")
+	return nil
+}
+
+// min helper function
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

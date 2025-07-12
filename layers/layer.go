@@ -965,6 +965,38 @@ func (ms *ModelSpec) ConvertToInferenceLayerSpecs() ([]DynamicLayerSpec, error) 
 				spec.ParamInt[3] = 0 // training = false for inference
 				spec.ParamIntCount++
 				
+				// ARCHITECTURAL FIX: Copy running statistics for inference (mean=0, var=1 → actual values)
+				// This resolves the hardcoded normalization limitation
+				if layer.RunningStatistics != nil {
+					// Extract running statistics if available from trained model
+					if runningMean, exists := layer.RunningStatistics["running_mean"]; exists {
+						spec.RunningMean = make([]float32, len(runningMean))
+						copy(spec.RunningMean, runningMean)
+						spec.HasRunningStats = boolToInt32(true)
+					}
+					if runningVar, exists := layer.RunningStatistics["running_var"]; exists {
+						spec.RunningVar = make([]float32, len(runningVar))
+						copy(spec.RunningVar, runningVar)
+						spec.HasRunningStats = boolToInt32(true)
+					}
+				}
+				
+				// If no running statistics are available, initialize with proper defaults
+				// Use num_features to determine size
+				if spec.HasRunningStats == 0 && spec.ParamIntCount > 0 {
+					numFeatures := int(spec.ParamInt[0]) // num_features is ParamInt[0]
+					if numFeatures > 0 {
+						// Initialize with standard defaults: mean=0, var=1
+						spec.RunningMean = make([]float32, numFeatures)
+						spec.RunningVar = make([]float32, numFeatures)
+						for i := 0; i < numFeatures; i++ {
+							spec.RunningMean[i] = 0.0 // Default mean
+							spec.RunningVar[i] = 1.0  // Default variance
+						}
+						spec.HasRunningStats = boolToInt32(true)
+					}
+				}
+				
 			case LeakyReLU:
 				if negativeSlope, ok := layer.Parameters["negative_slope"].(float64); ok {
 					spec.ParamFloat[0] = float32(negativeSlope)
