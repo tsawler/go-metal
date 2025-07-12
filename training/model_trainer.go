@@ -422,12 +422,26 @@ func (mt *ModelTrainer) TrainBatch(
 		return nil, fmt.Errorf("failed to copy input data to GPU: %v", err)
 	}
 	
-	// Create label tensor (one-hot encoded for loss computation)
+	// CONDITIONAL LABEL PROCESSING: Handle different label formats based on loss function
+	// ALL loss functions now use one-hot vectors [batch_size, num_classes] for consistency
+	// SparseCrossEntropy will convert integer indices to one-hot on the Go side
+	var labelTensor *memory.Tensor
+	
+	// Create one-hot encoded labels for ALL loss functions
 	oneHotShape := []int{labelShape[0], mt.getOutputSize()}
-	labelTensor, err := memory.NewTensor(oneHotShape, memory.Float32, memory.GPU)
+	labelTensor, err = memory.NewTensor(oneHotShape, memory.Float32, memory.GPU)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create label tensor: %v", err)
+		return nil, fmt.Errorf("failed to create one-hot label tensor: %v", err)
 	}
+	
+	// Convert labels to one-hot format
+	oneHotData := mt.labelsToOneHot(labelData, oneHotShape)
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), oneHotData)
+	if err != nil {
+		labelTensor.Release()
+		return nil, fmt.Errorf("failed to copy one-hot label data to GPU: %v", err)
+	}
+	
 	defer func() {
 		labelTensor.Release()
 		// DEBUG: Log tensor lifecycle
@@ -435,13 +449,6 @@ func (mt *ModelTrainer) TrainBatch(
 			// Released label tensor
 		}
 	}()
-	
-	// Convert labels to one-hot format
-	oneHotData := mt.labelsToOneHot(labelData, oneHotShape)
-	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), oneHotData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to copy label data to GPU: %v", err)
-	}
 	
 	// Memory pool stats available if needed
 	if mt.currentStep%100 == 0 { // Reduced frequency

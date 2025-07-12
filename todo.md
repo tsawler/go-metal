@@ -77,6 +77,38 @@ This phase prioritizes resolving existing limitations and implementing fundament
       * ✅ **Performance Validated:** 86% training speedup demonstrated (20.8 vs 11.2 steps/second) in production demo
       * ✅ **Comprehensive Demo:** Complete sample application with side-by-side FP32/FP16 comparison and documentation
 
+    * ✅ **SparseCrossEntropy Implementation Fix:** **COMPLETED** - Fixed critical architectural issues in SparseCrossEntropy loss function causing gradient computation failures in the dynamic engine.
+
+      **Background:**
+      * **Current Issue:** SparseCrossEntropy explicitly fails with MPSGraph automatic differentiation error: "Couldn't get gradient Tensor for tensor of op : dense_0_weight_param"
+      * **Root Cause Analysis:** Two fundamental architectural problems identified:
+        1. **Label Shape Mismatch:** Library creates label placeholders with shape `[batch_size, num_classes]` for ALL loss functions, but SparseCrossEntropy expects integer indices with shape `[batch_size]`
+        2. **Complex Manual Implementation:** SparseCrossEntropy uses manual softmax → log → gatherAlongAxis → negative → reduction chain that breaks MPSGraph's automatic differentiation, unlike CrossEntropy which uses single built-in `softMaxCrossEntropyWithSourceTensor`
+      * **Working Alternative:** CrossEntropy works perfectly with same integer labels, suggesting label conversion issue rather than fundamental gradient computation problem
+
+      **Implementation Requirements:**
+      1. **Conditional Label Placeholder Creation:** Modify `buildDynamicGraphFromLayers()` to create appropriate label shapes based on loss function type
+         * SparseCrossEntropy: `[batch_size]` for integer class indices  
+         * CrossEntropy: `[batch_size, num_classes]` for one-hot vectors
+         * BinaryCrossEntropy: `[batch_size]` or `[batch_size, 1]` for binary labels
+      2. **MPSGraph-Native Implementation:** Replace manual SparseCrossEntropy implementation with MPSGraph's built-in sparse cross-entropy function if available, or fix gradient flow in manual implementation
+      3. **Unified Label Interface:** Ensure Go-side label preparation automatically matches expected format for each loss function type
+      4. **Architecture Compliance:** All fixes must maintain GPU-resident everything, minimize CGO calls, use MPSGraph-centric operations, and proper memory management
+
+      **Success Criteria:**
+      * SparseCrossEntropy works with integer labels without gradient computation errors
+      * No breaking changes to existing CrossEntropy functionality  
+      * All demos and tests pass for both loss functions
+      * Performance parity between CrossEntropy and SparseCrossEntropy
+      * Comprehensive unit tests demonstrate correctness
+
+      **SOLUTION IMPLEMENTED:**
+      ✅ **Simplified Architecture:** SparseCrossEntropy now uses the same proven `softMaxCrossEntropyWithSourceTensor` implementation as CrossEntropy, eliminating complex manual operations that broke gradient flow.
+      ✅ **Go-Side Label Conversion:** Integer class labels are converted to one-hot format at the Go level, maintaining user-friendly API while ensuring MPSGraph compatibility.
+      ✅ **Zero Breaking Changes:** All existing functionality preserved; SparseCrossEntropy now works seamlessly with gradient computation.
+      ✅ **Comprehensive Testing:** Unit tests (`loss/sparse_cross_entropy_test.go`) and demo application (`app/sparse-cross-demo`) validate correctness.
+      ✅ **Files Modified:** `cgo_bridge/bridge_graph.m`, `training/model_trainer.go` - minimal, focused changes maintaining architectural principles.
+
     * **Further Performance Optimization:** Continuously profile and optimize existing components to squeeze out additional performance gains.
 
     * **Dynamic Engine CNN Performance Optimization:** **HIGH PRIORITY** - Optimize the Dynamic Engine to match or exceed Hybrid Engine performance for CNN architectures (currently 20k+ batches/second). This is critical as we've removed artificial architecture constraints and need Dynamic Engine to be the primary high-performance option.

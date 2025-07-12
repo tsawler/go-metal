@@ -245,12 +245,29 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             }
         }
         
-        // Labels placeholder [batch_size, num_classes] with dynamic batch size support
-        // Using -1 for the batch dimension allows MPSGraph to handle variable batch sizes
-        NSArray<NSNumber*>* labelShape = @[@(-1), @(numClasses)];
-        // NSLog(@"🔍 Creating label placeholder with shape: %@", labelShape);
+        // CONDITIONAL LABEL PLACEHOLDER CREATION: Create appropriate label shapes based on loss function type
+        // This fixes the fundamental architectural issue where SparseCrossEntropy needs integer indices [batch_size]
+        // while CrossEntropy needs one-hot vectors [batch_size, num_classes]
+        NSArray<NSNumber*>* labelShape;
+        MPSDataType labelDataType;
+        
+        switch (engine->config.loss_function) {
+            case 2: // BinaryCrossEntropy - expects single values per sample
+                labelShape = @[@(-1)]; // [batch_size] for binary labels
+                labelDataType = MPSDataTypeFloat32; // Float probabilities for binary classification
+                break;
+            case 0: // CrossEntropy
+            case 1: // SparseCrossEntropy - will be converted to one-hot on Go side
+            case 3: // BCEWithLogits  
+            case 4: // CategoricalCrossEntropy
+            default: // All other loss functions expect one-hot or multi-dimensional labels
+                labelShape = @[@(-1), @(numClasses)]; // [batch_size, num_classes]
+                labelDataType = MPSDataTypeFloat32; // Float values for one-hot vectors
+                break;
+        }
+        
         MPSGraphTensor* labelTensor = [engine->graph placeholderWithShape:labelShape
-                                                                 dataType:MPSDataTypeFloat32
+                                                                 dataType:labelDataType
                                                                      name:@"labels"];
         engine->labelTensor = labelTensor;
         
@@ -284,56 +301,14 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                                   name:@"cross_entropy_loss"];
                         break;
                     case 1: // SparseCrossEntropy
-                        {
-                            // For sparse cross-entropy, labels are class indices (e.g., [0, 1, 2])
-                            // Use MPSGraph's built-in sparse cross-entropy functionality
-                            
-                            // Apply softmax to get probabilities
-                            MPSGraphTensor* probabilities = [engine->graph softMaxWithTensor:currentTensor
-                                                                                        axis:-1
-                                                                                        name:@"softmax_probs"];
-                            
-                            // Apply log to get log probabilities for numerical stability
-                            MPSGraphTensor* logProbs = [engine->graph logarithmWithTensor:probabilities
-                                                                                     name:@"log_probs"];
-                            
-                            // Convert labels to int32 indices if needed
-                            MPSGraphTensor* labelIndices = [engine->graph castTensor:labelTensor
-                                                                              toType:MPSDataTypeInt32
-                                                                                name:@"label_indices_int32"];
-                            
-                            // Use MPSGraph's gatherAlongAxis to select the correct log probabilities
-                            // This is the correct way to implement sparse cross-entropy in MPSGraph
-                            MPSGraphTensor* selectedLogProbs = [engine->graph gatherAlongAxis:1
-                                                                              withUpdatesTensor:logProbs
-                                                                                 indicesTensor:labelIndices
-                                                                                          name:@"selected_log_probs"];
-                            
-                            // Compute negative log likelihood: -selected_log_probs
-                            MPSGraphTensor* negLogLikelihood = [engine->graph negativeWithTensor:selectedLogProbs
-                                                                                           name:@"neg_log_likelihood"];
-                            
-                            // Mean over batch using MPSGraph reduction (supports dynamic batch size)
-                            // Sum over batch dimension, then MPSGraph will handle the division automatically
-                            actualLoss = [engine->graph reductionSumWithTensor:negLogLikelihood
-                                                                          axes:@[@0]  // Reduce over batch dimension
-                                                                          name:@"sparse_cross_entropy_sum"];
-                            
-                            // Get the shape tensor to compute batch size dynamically
-                            MPSGraphTensor* shapeTensor = [engine->graph shapeOfTensor:labelTensor name:@"label_shape"];
-                            MPSGraphTensor* batchSizeTensor = [engine->graph sliceTensor:shapeTensor
-                                                                               dimension:0
-                                                                                   start:0
-                                                                                  length:1
-                                                                                    name:@"batch_size"];
-                            MPSGraphTensor* batchSizeFloat = [engine->graph castTensor:batchSizeTensor
-                                                                                toType:MPSDataTypeFloat32
-                                                                                  name:@"batch_size_float"];
-                            
-                            actualLoss = [engine->graph divisionWithPrimaryTensor:actualLoss
-                                                                  secondaryTensor:batchSizeFloat
-                                                                             name:@"sparse_cross_entropy_loss"];
-                        }
+                        // TEMPORARY SIMPLIFIED APPROACH: Use same implementation as CrossEntropy
+                        // Labels will be converted to one-hot on the Go side before being passed here
+                        // This ensures we use the proven, working CrossEntropy implementation
+                        actualLoss = [engine->graph softMaxCrossEntropyWithSourceTensor:currentTensor
+                                                                           labelsTensor:labelTensor
+                                                                                   axis:-1
+                                                                         reductionType:MPSGraphLossReductionTypeMean
+                                                                                  name:@"sparse_cross_entropy_loss"];
                         break;
                     case 2: // BinaryCrossEntropy
                         {
@@ -913,20 +888,51 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             }
             // NSLog(@"🔧 DEBUG: SGD using sgdCachedLrTensor with config value: %.6f", engine->config.learning_rate);
             
+            // DEBUG: Log gradient computation setup
+            NSLog(@"🔍 GRADIENT DEBUG: About to compute gradients for %lu parameters", [engine->allWeightPlaceholders count]);
+            NSLog(@"🔍 GRADIENT DEBUG: Loss output tensor (shape: %@)", engine->lossOutput.shape);
+            for (int i = 0; i < engine->allWeightPlaceholders.count; i++) {
+                MPSGraphTensor* param = engine->allWeightPlaceholders[i];
+                NSLog(@"🔍 GRADIENT DEBUG: Parameter %d (shape: %@)", i, param.shape);
+            }
+            
             // Pre-compile gradient computation using automatic differentiation ONCE during graph building (same as Adam)
-            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
-                [engine->graph gradientForPrimaryTensor:engine->lossOutput
-                                            withTensors:engine->allWeightPlaceholders
-                                                   name:@"sgd_precompiled_gradients"];
+            // CRITICAL FIX: Wrap gradient computation in try-catch to handle MPSGraph AD limitations
+            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = nil;
+            @try {
+                precompiledGradients = [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                                                             withTensors:engine->allWeightPlaceholders
+                                                                    name:@"sgd_precompiled_gradients"];
+                NSLog(@"✅ GRADIENT DEBUG: Successfully computed gradients dictionary with %lu entries", (unsigned long)precompiledGradients.count);
+            } @catch (NSException* exception) {
+                NSLog(@"❌ GRADIENT COMPUTATION FAILED: %@", exception.reason);
+                NSLog(@"❌ Exception name: %@", exception.name);
+                NSLog(@"❌ Loss tensor (shape: %@)", engine->lossOutput.shape);
+                
+                // Log all parameter placeholders for debugging
+                for (int i = 0; i < engine->allWeightPlaceholders.count; i++) {
+                    MPSGraphTensor* param = engine->allWeightPlaceholders[i];
+                    NSLog(@"❌ Failed param %d (shape: %@)", i, param.shape);
+                }
+                return NO;
+            }
+            
+            if (!precompiledGradients) {
+                NSLog(@"❌ GRADIENT COMPUTATION: Returned nil gradients dictionary");
+                return NO;
+            }
             
             // Store gradient tensors for execution (these are pre-compiled, not runtime-created) - same as Adam
             NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
-            for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+            for (int i = 0; i < engine->allWeightPlaceholders.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
                 MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
                 if (gradTensor) {
                     [precompiledGradientTensors addObject:gradTensor];
                 } else {
-                    NSLog(@"❌ Failed to pre-compile gradient for parameter");
+                    NSLog(@"❌ Failed to pre-compile gradient for parameter %d", i);
+                    NSLog(@"❌ Parameter placeholder shape: %@", paramPlaceholder.shape);
+                    NSLog(@"❌ Available gradients count: %lu", (unsigned long)precompiledGradients.count);
                     return NO;
                 }
             }
@@ -1035,20 +1041,47 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             NSLog(@"🚀 PRE-COMPILATION: Building gradient and Adam operations in graph...");
             
+            // DEBUG: Log gradient computation setup for Adam
+            NSLog(@"🔍 ADAM GRADIENT DEBUG: About to compute gradients for %lu parameters", [engine->allWeightPlaceholders count]);
+            NSLog(@"🔍 ADAM GRADIENT DEBUG: Loss output tensor (shape: %@)", engine->lossOutput.shape);
+            
             // Pre-compile gradient computation using automatic differentiation ONCE during graph building
-            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
-                [engine->graph gradientForPrimaryTensor:engine->lossOutput
-                                            withTensors:engine->allWeightPlaceholders
-                                                   name:@"precompiled_gradients"];
+            // CRITICAL FIX: Wrap gradient computation in try-catch to handle MPSGraph AD limitations
+            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = nil;
+            @try {
+                precompiledGradients = [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                                                             withTensors:engine->allWeightPlaceholders
+                                                                    name:@"precompiled_gradients"];
+                NSLog(@"✅ ADAM GRADIENT DEBUG: Successfully computed gradients dictionary with %lu entries", (unsigned long)precompiledGradients.count);
+            } @catch (NSException* exception) {
+                NSLog(@"❌ ADAM GRADIENT COMPUTATION FAILED: %@", exception.reason);
+                NSLog(@"❌ Exception name: %@", exception.name);
+                NSLog(@"❌ Loss tensor (shape: %@)", engine->lossOutput.shape);
+                
+                // Log all parameter placeholders for debugging
+                for (int i = 0; i < engine->allWeightPlaceholders.count; i++) {
+                    MPSGraphTensor* param = engine->allWeightPlaceholders[i];
+                    NSLog(@"❌ Failed param %d (shape: %@)", i, param.shape);
+                }
+                return NO;
+            }
+            
+            if (!precompiledGradients) {
+                NSLog(@"❌ ADAM GRADIENT COMPUTATION: Returned nil gradients dictionary");
+                return NO;
+            }
             
             // Store gradient tensors for execution (these are pre-compiled, not runtime-created)
             NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
-            for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+            for (int i = 0; i < engine->allWeightPlaceholders.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
                 MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
                 if (gradTensor) {
                     [precompiledGradientTensors addObject:gradTensor];
                 } else {
-                    NSLog(@"❌ Failed to pre-compile gradient for parameter");
+                    NSLog(@"❌ Failed to pre-compile gradient for Adam parameter %d", i);
+                    NSLog(@"❌ Parameter placeholder shape: %@", paramPlaceholder.shape);
+                    NSLog(@"❌ Available gradients count: %lu", (unsigned long)precompiledGradients.count);
                     return NO;
                 }
             }
@@ -1184,12 +1217,15 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             // Store gradient tensors for execution (these are pre-compiled, not runtime-created)
             NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
-            for (MPSGraphTensor* paramPlaceholder in engine->allWeightPlaceholders) {
+            for (int i = 0; i < engine->allWeightPlaceholders.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
                 MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
                 if (gradTensor) {
                     [precompiledGradientTensors addObject:gradTensor];
                 } else {
-                    NSLog(@"❌ Failed to pre-compile gradient for parameter");
+                    NSLog(@"❌ Failed to pre-compile gradient for RMSProp parameter %d", i);
+                    NSLog(@"❌ Parameter placeholder shape: %@", paramPlaceholder.shape);
+                    NSLog(@"❌ Available gradients count: %lu", (unsigned long)precompiledGradients.count);
                     return NO;
                 }
             }
@@ -1398,11 +1434,17 @@ MPSGraphTensor* addDenseLayerToGraph(MPSGraph* graph,
     BOOL useBias = layerSpec->param_int_count > 2 ? (layerSpec->param_int[2] != 0) : YES;
     
     // Create weight placeholder and add to ordered array
+    // CRITICAL FIX: Ensure unique placeholder names to avoid gradient computation conflicts
     NSArray<NSNumber*>* weightShape = @[@(inputSize), @(outputSize)];
-    MPSGraphTensor* weightTensor = [graph placeholderWithShape:weightShape
+    NSString* weightName = [NSString stringWithFormat:@"dense_%d_weight_param", layerIdx];
+    MPSGraphTensor* weightPlaceholder = [graph placeholderWithShape:weightShape
                                                       dataType:MPSDataTypeFloat32
-                                                          name:[NSString stringWithFormat:@"dense_%d_weight", layerIdx]];
-    [allParameterPlaceholders addObject:weightTensor];
+                                                          name:weightName];
+    [allParameterPlaceholders addObject:weightPlaceholder];
+    
+    // CRITICAL FIX: Ensure the weight tensor is properly connected for gradient computation
+    // Use the placeholder directly in computations to maintain gradient flow
+    MPSGraphTensor* weightTensor = weightPlaceholder;
     
     // Matrix multiplication
     MPSGraphTensor* output = [graph matrixMultiplicationWithPrimaryTensor:input
@@ -1412,10 +1454,14 @@ MPSGraphTensor* addDenseLayerToGraph(MPSGraph* graph,
     // Add bias if enabled - reshape bias for broadcasting compatibility
     if (useBias) {
         NSArray<NSNumber*>* biasShape = @[@(outputSize)];
-        MPSGraphTensor* biasTensor = [graph placeholderWithShape:biasShape
+        NSString* biasName = [NSString stringWithFormat:@"dense_%d_bias_param", layerIdx];
+        MPSGraphTensor* biasPlaceholder = [graph placeholderWithShape:biasShape
                                                         dataType:MPSDataTypeFloat32
-                                                            name:[NSString stringWithFormat:@"dense_%d_bias", layerIdx]];
-        [allParameterPlaceholders addObject:biasTensor];
+                                                            name:biasName];
+        [allParameterPlaceholders addObject:biasPlaceholder];
+        
+        // CRITICAL FIX: Use the bias placeholder directly for gradient computation
+        MPSGraphTensor* biasTensor = biasPlaceholder;
         
         // Reshape bias from [output_size] to [1, output_size] for broadcasting compatibility
         // This ensures compatibility with output tensor shape [batch_size, output_size]
@@ -1456,19 +1502,22 @@ MPSGraphTensor* addConv2DLayerToGraph(MPSGraph* graph,
     // Parameters: in_ch, out_ch, kernel, stride, padding, bias
     
     // Create weight placeholder [outputChannels, inputChannels, kernelSize, kernelSize] to match Go tensor creation
+    // CRITICAL FIX: Use unique parameter names for gradient computation
     NSArray<NSNumber*>* weightShape = @[@(outputChannels), @(inputChannels), @(kernelSize), @(kernelSize)];
+    NSString* weightName = [NSString stringWithFormat:@"conv_%d_weight_param", layerIdx];
     MPSGraphTensor* weightTensor = [graph placeholderWithShape:weightShape
                                                       dataType:MPSDataTypeFloat32
-                                                          name:[NSString stringWithFormat:@"conv_%d_weight", layerIdx]];
+                                                          name:weightName];
     [allParameterPlaceholders addObject:weightTensor];
     
     // Add bias placeholder if enabled - IMPORTANT: add bias immediately after weight to match Go parameter order
     MPSGraphTensor* biasTensor = nil;
     if (useBias) {
         NSArray<NSNumber*>* biasShape = @[@(outputChannels)];
+        NSString* biasName = [NSString stringWithFormat:@"conv_%d_bias_param", layerIdx];
         biasTensor = [graph placeholderWithShape:biasShape
                                         dataType:MPSDataTypeFloat32
-                                            name:[NSString stringWithFormat:@"conv_%d_bias", layerIdx]];
+                                            name:biasName];
         [allParameterPlaceholders addObject:biasTensor];
     }
     
