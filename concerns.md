@@ -6,7 +6,7 @@ This document analyzes all "For now" comments found in the go-metal library code
 
 Total "For now" comments found: 31 (17 unique concerns after excluding test skips)
 
-**Legitimate concerns requiring attention: 3 remaining (9 resolved + 1 identified)**
+**Legitimate concerns requiring attention: 2 remaining (10 resolved + 1 identified)**
 
 **New optimization opportunity identified:**
 - L-BFGS optimizer uses CPU operations for vector calculations that could be moved to GPU
@@ -137,11 +137,19 @@ Total "For now" comments found: 31 (17 unique concerns after excluding test skip
 - Updated function signatures across bridge.go, bridge_training.h, and bridge_training.m
 - All compilation tests pass, confirming proper integration
 
-### 10. Batch Size Limitations
+### 10. Batch Size Limitations ✅ RESOLVED
 **Location:** `cgo_bridge/bridge_graph.m:193`
 **Issue:** Fixed batch size for labels placeholder
 **Impact:** Less flexible batch processing
 **Severity:** LOW - Can work around with fixed batches
+**Resolution:** Implemented complete dynamic batch size support:
+- Updated label placeholder to use -1 for dynamic batch dimension instead of fixed batch size
+- Modified all loss computation functions to use MPSGraph shape operations for dynamic batch size handling
+- Fixed tensor flattening operations to preserve dynamic batch dimension (-1)
+- Replaced manual batch size extraction with dynamic shape tensor operations using shapeOfTensor, sliceTensor, and castTensor
+- All loss functions (SparseCrossEntropy, BinaryCrossEntropy, BCEWithLogits, CategoricalCrossEntropy) now support variable batch sizes
+- Maintains GPU-resident architecture and MPSGraph-centric operations
+- All tests pass, confirming flexible batch processing capabilities
 
 ### 11. Input Shape Handling
 **Location:** `cgo_bridge/bridge_graph.m:19`

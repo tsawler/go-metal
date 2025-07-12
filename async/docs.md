@@ -105,6 +105,27 @@ type CommandBuffer struct {
 
 CommandBuffer represents a Metal command buffer wrapper
 
+#### func (*CommandBuffer) GetBuffer
+
+```go
+func (cb *CommandBuffer) GetBuffer() unsafe.Pointer
+```
+GetBuffer returns the underlying Metal command buffer pointer
+
+#### func (*CommandBuffer) GetID
+
+```go
+func (cb *CommandBuffer) GetID() int
+```
+GetID returns the unique identifier for debugging
+
+#### func (*CommandBuffer) IsInUse
+
+```go
+func (cb *CommandBuffer) IsInUse() bool
+```
+IsInUse returns whether the buffer is currently in use
+
 #### type CommandBufferPool
 
 ```go

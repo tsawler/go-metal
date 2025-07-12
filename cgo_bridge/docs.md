@@ -291,27 +291,6 @@ func ExecuteAdaGradStepMPSGraphPooled(
 ExecuteAdaGradStepMPSGraphPooled executes a single AdaGrad optimization step
 using MPSGraph with command buffer pooling
 
-#### func  ExecuteAdamStep
-
-```go
-func ExecuteAdamStep(
-	device unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	gradientBuffers []unsafe.Pointer,
-	momentumBuffers []unsafe.Pointer,
-	varianceBuffers []unsafe.Pointer,
-	bufferSizes []int,
-	learningRate float32,
-	beta1 float32,
-	beta2 float32,
-	epsilon float32,
-	weightDecay float32,
-	stepCount int,
-) error
-```
-ExecuteAdamStep executes a single Adam optimization step on GPU (legacy
-CPU-based implementation)
-
 #### func  ExecuteAdamStepMPSGraph
 
 ```go
@@ -527,7 +506,7 @@ func ExecuteTrainingStepHybridFullPooled(
 	labelBuffer unsafe.Pointer,
 	weightBuffers []unsafe.Pointer,
 	learningRate float32,
-	commandPool unsafe.Pointer,
+	commandBuffer unsafe.Pointer,
 ) (float32, error)
 ```
 ExecuteTrainingStepHybridFullPooled executes a hybrid training step using
@@ -605,7 +584,7 @@ ReleaseCommandQueue releases a Metal command queue
 #### func  ReturnCommandBufferToPool
 
 ```go
-func ReturnCommandBufferToPool(commandPool unsafe.Pointer, commandBuffer unsafe.Pointer)
+func ReturnCommandBufferToPool(commandBuffer unsafe.Pointer)
 ```
 ReturnCommandBufferToPool returns a command buffer to the pool (Metal level
 interface)

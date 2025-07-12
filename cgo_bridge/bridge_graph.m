@@ -13,10 +13,16 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
     }
     
     @try {
-        // Create input placeholder with fixed batch size (temporarily to debug the channel mismatch)
+        // Create input placeholder with dynamic batch size support
         NSMutableArray<NSNumber*>* inputShapeNS = [[NSMutableArray alloc] init];
         for (int i = 0; i < inputShapeLen; i++) {
-            [inputShapeNS addObject:@(inputShape[i])]; // Use the original shape as-is for now
+            if (i == 0) {
+                // Use -1 for batch dimension to support dynamic batch sizes
+                [inputShapeNS addObject:@(-1)];
+            } else {
+                // Keep other dimensions fixed (channels, height, width)
+                [inputShapeNS addObject:@(inputShape[i])];
+            }
         }
         
         MPSGraphTensor* currentTensor = [engine->graph placeholderWithShape:inputShapeNS
@@ -37,14 +43,15 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     // Check if we need to flatten the input (from 4D conv output to 2D dense input)
                     if (currentTensor.shape.count == 4) {
                         // Flatten [batch, channels, height, width] to [batch, channels*height*width]
+                        // Support dynamic batch size by preserving the batch dimension
                         NSArray<NSNumber*>* currentShape = currentTensor.shape;
-                        int batchSize = [currentShape[0] intValue];
                         int channels = [currentShape[1] intValue];
                         int height = [currentShape[2] intValue];
                         int width = [currentShape[3] intValue];
                         int flattenedSize = channels * height * width;
                         
-                        NSArray<NSNumber*>* flattenShape = @[@(batchSize), @(flattenedSize)];
+                        // Use -1 for batch dimension to support dynamic batch sizes
+                        NSArray<NSNumber*>* flattenShape = @[@(-1), @(flattenedSize)];
                         currentTensor = [engine->graph reshapeTensor:currentTensor
                                                            withShape:flattenShape
                                                                 name:[NSString stringWithFormat:@"flatten_before_dense_%d", layerIdx]];
@@ -190,8 +197,9 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             }
         }
         
-        // Labels placeholder [batch_size, num_classes] with fixed batch size for now
-        NSArray<NSNumber*>* labelShape = @[@(inputShape[0]), @(numClasses)];
+        // Labels placeholder [batch_size, num_classes] with dynamic batch size support
+        // Using -1 for the batch dimension allows MPSGraph to handle variable batch sizes
+        NSArray<NSNumber*>* labelShape = @[@(-1), @(numClasses)];
         // NSLog(@"🔍 Creating label placeholder with shape: %@", labelShape);
         MPSGraphTensor* labelTensor = [engine->graph placeholderWithShape:labelShape
                                                                  dataType:MPSDataTypeFloat32
@@ -257,19 +265,25 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                             MPSGraphTensor* negLogLikelihood = [engine->graph negativeWithTensor:selectedLogProbs
                                                                                            name:@"neg_log_likelihood"];
                             
-                            // Mean over batch
-                            MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:negLogLikelihood
-                                                                                       axes:nil
-                                                                                       name:@"sparse_ce_sum"];
+                            // Mean over batch using MPSGraph reduction (supports dynamic batch size)
+                            // Sum over batch dimension, then MPSGraph will handle the division automatically
+                            actualLoss = [engine->graph reductionSumWithTensor:negLogLikelihood
+                                                                          axes:@[@0]  // Reduce over batch dimension
+                                                                          name:@"sparse_cross_entropy_sum"];
                             
-                            // Get batch size from tensor shape
-                            NSArray<NSNumber*>* labelShape = labelTensor.shape;
-                            int batchSize = [labelShape[0] intValue];
-                            MPSGraphTensor* batchSizeTensor = [engine->graph constantWithScalar:(float)batchSize
-                                                                                      dataType:MPSDataTypeFloat32];
+                            // Get the shape tensor to compute batch size dynamically
+                            MPSGraphTensor* shapeTensor = [engine->graph shapeOfTensor:labelTensor name:@"label_shape"];
+                            MPSGraphTensor* batchSizeTensor = [engine->graph sliceTensor:shapeTensor
+                                                                               dimension:0
+                                                                                   start:0
+                                                                                  length:1
+                                                                                    name:@"batch_size"];
+                            MPSGraphTensor* batchSizeFloat = [engine->graph castTensor:batchSizeTensor
+                                                                                toType:MPSDataTypeFloat32
+                                                                                  name:@"batch_size_float"];
                             
-                            actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
-                                                                  secondaryTensor:batchSizeTensor
+                            actualLoss = [engine->graph divisionWithPrimaryTensor:actualLoss
+                                                                  secondaryTensor:batchSizeFloat
                                                                              name:@"sparse_cross_entropy_loss"];
                         }
                         break;
@@ -322,18 +336,25 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                             MPSGraphTensor* bceNegative = [engine->graph negativeWithTensor:bceSum
                                                                                        name:@"bce_negative"];
                             
-                            // Mean over batch
+                            // Mean over batch using MPSGraph reduction (supports dynamic batch size)
+                            // Sum over batch dimension, then divide by dynamic batch size
                             MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:bceNegative
-                                                                                       axes:nil
-                                                                                       name:@"bce_total_sum"];
+                                                                                       axes:@[@0]  // Reduce over batch dimension
+                                                                                       name:@"bce_sum"];
                             
-                            NSArray<NSNumber*>* labelShape = labelTensor.shape;
-                            int batchSize = [labelShape[0] intValue];
-                            MPSGraphTensor* batchSizeTensor = [engine->graph constantWithScalar:(float)batchSize
-                                                                                      dataType:MPSDataTypeFloat32];
+                            // Get the shape tensor to compute batch size dynamically
+                            MPSGraphTensor* shapeTensor = [engine->graph shapeOfTensor:labelTensor name:@"label_shape_bce"];
+                            MPSGraphTensor* batchSizeTensor = [engine->graph sliceTensor:shapeTensor
+                                                                               dimension:0
+                                                                                   start:0
+                                                                                  length:1
+                                                                                    name:@"batch_size_bce"];
+                            MPSGraphTensor* batchSizeFloat = [engine->graph castTensor:batchSizeTensor
+                                                                                toType:MPSDataTypeFloat32
+                                                                                  name:@"batch_size_float_bce"];
                             
                             actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
-                                                                  secondaryTensor:batchSizeTensor
+                                                                  secondaryTensor:batchSizeFloat
                                                                              name:@"binary_cross_entropy_loss"];
                         }
                         break;
@@ -391,17 +412,25 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                                            name:@"bce_logits"];
                             
                             // Mean over batch
+                            // Mean over batch using MPSGraph reduction (supports dynamic batch size)
+                            // Sum over batch dimension, then divide by dynamic batch size
                             MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:bceLogits
-                                                                                       axes:nil
+                                                                                       axes:@[@0]  // Reduce over batch dimension
                                                                                        name:@"bce_logits_sum"];
                             
-                            NSArray<NSNumber*>* labelShape = labelTensor.shape;
-                            int batchSize = [labelShape[0] intValue];
-                            MPSGraphTensor* batchSizeTensor = [engine->graph constantWithScalar:(float)batchSize
-                                                                                      dataType:MPSDataTypeFloat32];
+                            // Get the shape tensor to compute batch size dynamically
+                            MPSGraphTensor* shapeTensor = [engine->graph shapeOfTensor:labelTensor name:@"label_shape_bce_logits"];
+                            MPSGraphTensor* batchSizeTensor = [engine->graph sliceTensor:shapeTensor
+                                                                               dimension:0
+                                                                                   start:0
+                                                                                  length:1
+                                                                                    name:@"batch_size_bce_logits"];
+                            MPSGraphTensor* batchSizeFloat = [engine->graph castTensor:batchSizeTensor
+                                                                                toType:MPSDataTypeFloat32
+                                                                                  name:@"batch_size_float_bce_logits"];
                             
                             actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
-                                                                  secondaryTensor:batchSizeTensor
+                                                                  secondaryTensor:batchSizeFloat
                                                                              name:@"bce_with_logits_loss"];
                         }
                         break;
@@ -441,18 +470,25 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                             MPSGraphTensor* negativeSum = [engine->graph negativeWithTensor:sumOverClasses
                                                                                        name:@"negative_sum"];
                             
-                            // Mean over batch
+                            // Mean over batch using MPSGraph reduction (supports dynamic batch size)
+                            // Sum over batch dimension, then divide by dynamic batch size
                             MPSGraphTensor* sumLoss = [engine->graph reductionSumWithTensor:negativeSum
-                                                                                       axes:nil
+                                                                                       axes:@[@0]  // Reduce over batch dimension
                                                                                        name:@"categorical_ce_sum"];
                             
-                            NSArray<NSNumber*>* labelShape = labelTensor.shape;
-                            int batchSize = [labelShape[0] intValue];
-                            MPSGraphTensor* batchSizeTensor = [engine->graph constantWithScalar:(float)batchSize
-                                                                                      dataType:MPSDataTypeFloat32];
+                            // Get the shape tensor to compute batch size dynamically
+                            MPSGraphTensor* shapeTensor = [engine->graph shapeOfTensor:labelTensor name:@"label_shape_cat_ce"];
+                            MPSGraphTensor* batchSizeTensor = [engine->graph sliceTensor:shapeTensor
+                                                                               dimension:0
+                                                                                   start:0
+                                                                                  length:1
+                                                                                    name:@"batch_size_cat_ce"];
+                            MPSGraphTensor* batchSizeFloat = [engine->graph castTensor:batchSizeTensor
+                                                                                toType:MPSDataTypeFloat32
+                                                                                  name:@"batch_size_float_cat_ce"];
                             
                             actualLoss = [engine->graph divisionWithPrimaryTensor:sumLoss
-                                                                  secondaryTensor:batchSizeTensor
+                                                                  secondaryTensor:batchSizeFloat
                                                                              name:@"categorical_cross_entropy_loss"];
                         }
                         break;
