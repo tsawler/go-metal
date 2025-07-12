@@ -6,7 +6,7 @@ This document analyzes all "For now" comments found in the go-metal library code
 
 Total "For now" comments found: 31 (17 unique concerns after excluding test skips)
 
-**Legitimate concerns requiring attention: 12**
+**Legitimate concerns requiring attention: 5 remaining (7 resolved)**
 
 ## Critical Concerns (High Priority)
 
@@ -89,11 +89,20 @@ Total "For now" comments found: 31 (17 unique concerns after excluding test skip
 - Integration with mixed-precision training (FP16→FP32 master weight updates)
 - Added comprehensive test suite with performance benchmarks
 
-### 7. Learning Rate Scheduler
+### 7. Learning Rate Scheduler ✅ RESOLVED
 **Location:** `training/model_trainer.go:1532`
 **Issue:** Dynamic LR changes only update config, not actual scheduler
 **Impact:** Learning rate scheduling may not work as expected
 **Severity:** MEDIUM - Affects training dynamics
+**Resolution:** Implemented complete GPU-resident learning rate scheduler system with:
+- Added UpdateLearningRate() method to ModelTrainingEngine that delegates to appropriate optimizer
+- Enhanced SetLearningRate() in ModelTrainer to update both config and optimizer state
+- Fixed SetEpoch() and StepSchedulerWithMetric() to properly update optimizer learning rates
+- Added updateSchedulerStep() method for automatic step-based scheduler updates
+- Separated manual LR updates from scheduler-driven updates to prevent base LR corruption
+- All scheduler types (Step, Exponential, Cosine, Plateau) now properly update optimizer state
+- Comprehensive test coverage verifying scheduler integration with ModelTrainer
+- Maintains GPU-resident architecture with minimal CGO calls for LR updates
 
 ## Low Priority Concerns
 

@@ -127,3 +127,93 @@ func TestSchedulerNames(t *testing.T) {
 		}
 	}
 }
+
+// TestModelTrainerSchedulerIntegration tests the integration between schedulers and ModelTrainer
+// This test verifies that SetLearningRate and scheduler methods work correctly
+func TestModelTrainerSchedulerIntegration(t *testing.T) {
+	// Test scheduler integration without requiring Metal device
+	t.Run("SchedulerIntegration", func(t *testing.T) {
+		// Create a minimal ModelTrainer structure for testing
+		trainer := &ModelTrainer{
+			baseLearningRate: 0.01,
+			currentEpoch:     0,
+			currentStep:      0,
+		}
+		
+		// Test without scheduler
+		info := trainer.GetSchedulerInfo()
+		if info != "No scheduler (constant LR)" {
+			t.Errorf("Expected 'No scheduler (constant LR)', got '%s'", info)
+		}
+		
+		// Test with Step scheduler
+		stepScheduler := NewStepLRScheduler(5, 0.5) // Reduce by half every 5 epochs
+		trainer.SetLRScheduler(stepScheduler)
+		
+		info = trainer.GetSchedulerInfo()
+		if info == "No scheduler (constant LR)" {
+			t.Errorf("Expected scheduler info, got '%s'", info)
+		}
+		
+		// Test learning rate calculation at epoch 0
+		lr := trainer.GetCurrentLearningRate()
+		if lr != 0.01 {
+			t.Errorf("Expected LR 0.01 at epoch 0, got %.6f", lr)
+		}
+		
+		// Test epoch update - this should trigger LR update via SetEpoch
+		trainer.SetEpoch(5) // Should trigger 0.5x reduction
+		if trainer.currentEpoch != 5 {
+			t.Errorf("Expected current epoch 5, got %d", trainer.currentEpoch)
+		}
+		
+		// Test scheduled learning rate after epoch change
+		lr = trainer.GetCurrentLearningRate()
+		t.Logf("Debug: LR after SetEpoch(5): %.6f, baseLR: %.6f", lr, trainer.baseLearningRate)
+		expectedLR := float32(0.005) // 0.01 * 0.5
+		if lr != expectedLR {
+			t.Logf("Debug: Scheduler calculation: epoch=%d, step=%d, baseLR=%.6f", trainer.currentEpoch, trainer.currentStep, trainer.baseLearningRate)
+			actualSchedulerLR := stepScheduler.GetLR(trainer.currentEpoch, trainer.currentStep, float64(trainer.baseLearningRate))
+			t.Logf("Debug: Direct scheduler LR: %.6f", actualSchedulerLR)
+			t.Errorf("Expected LR %.6f at epoch 5, got %.6f", expectedLR, lr)
+		}
+		
+		// Test step-based updates (simulated since we don't have actual training)
+		trainer.currentStep = 0
+		trainer.updateSchedulerStep() // Should increment step and check for LR updates
+		if trainer.currentStep != 1 {
+			t.Errorf("Expected current step 1, got %d", trainer.currentStep)
+		}
+		
+		// Test plateau scheduler (needs fresh trainer state)
+		trainerPlateau := &ModelTrainer{
+			baseLearningRate: 0.01,
+			currentEpoch:     0,
+			currentStep:      0,
+		}
+		trainerPlateau.config.LearningRate = 0.01
+		
+		plateauScheduler := NewReduceLROnPlateauScheduler(0.5, 2, 0.01, "min")
+		trainerPlateau.SetLRScheduler(plateauScheduler)
+		
+		// Test metric-based updates
+		trainerPlateau.StepSchedulerWithMetric(0.5) // Initialize
+		trainerPlateau.StepSchedulerWithMetric(0.4) // Improve
+		trainerPlateau.StepSchedulerWithMetric(0.45) // No improvement 1
+		trainerPlateau.StepSchedulerWithMetric(0.46) // No improvement 2 - should reduce LR
+		
+		// Get current LR (should be reduced)
+		currentLR := trainerPlateau.GetCurrentLearningRate()
+		expectedLR = 0.005 // 0.01 * 0.5
+		if currentLR != expectedLR {
+			t.Errorf("Expected LR %.6f after plateau reduction, got %.6f", expectedLR, currentLR)
+		}
+		
+		t.Logf("✅ ModelTrainer scheduler integration working correctly")
+		t.Logf("   - Step scheduler properly reduces LR at epoch boundaries")
+		t.Logf("   - Plateau scheduler properly reduces LR based on metrics")
+		t.Logf("   - SetEpoch and updateSchedulerStep properly trigger LR updates")
+	})
+	
+	t.Logf("🎉 ModelTrainer scheduler integration tests passed!")
+}

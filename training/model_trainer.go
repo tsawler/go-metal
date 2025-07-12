@@ -463,7 +463,7 @@ func (mt *ModelTrainer) TrainBatch(
 	}
 	
 	// Update statistics
-	mt.currentStep++
+	mt.updateSchedulerStep()
 	mt.totalSteps++
 	mt.totalLoss += float64(loss)
 	mt.averageLoss = float32(mt.totalLoss / float64(mt.totalSteps))
@@ -558,7 +558,7 @@ func (mt *ModelTrainer) TrainBatchOptimized(
 	}
 	
 	// Update statistics
-	mt.currentStep++
+	mt.updateSchedulerStep()
 	mt.totalSteps++
 	mt.totalLoss += float64(result.Loss)
 	mt.averageLoss = float32(mt.totalLoss / float64(mt.totalSteps))
@@ -766,7 +766,7 @@ func (mt *ModelTrainer) TrainBatchPersistent(
 	}
 	
 	// Update statistics
-	mt.currentStep++
+	mt.updateSchedulerStep()
 	mt.totalSteps++
 	mt.totalLoss += float64(result.Loss)
 	mt.averageLoss = float32(mt.totalLoss / float64(mt.totalSteps))
@@ -907,7 +907,7 @@ func (mt *ModelTrainer) TrainBatchWithCommandPool(
 	}
 	
 	// Update statistics
-	mt.currentStep++
+	mt.updateSchedulerStep()
 	mt.totalSteps++
 	mt.totalLoss += float64(loss)
 	mt.averageLoss = float32(mt.totalLoss / float64(mt.totalSteps))
@@ -1117,7 +1117,7 @@ func (mt *ModelTrainer) trainBatchPersistentWithCommandPoolInternal(
 	}
 	
 	// Update statistics
-	mt.currentStep++
+	mt.updateSchedulerStep()
 	mt.totalSteps++
 	mt.totalLoss += float64(loss)
 	mt.averageLoss = float32(mt.totalLoss / float64(mt.totalSteps))
@@ -1486,8 +1486,9 @@ func (mt *ModelTrainer) GetCurrentLearningRate() float32 {
 func (mt *ModelTrainer) SetEpoch(epoch int) {
 	mt.currentEpoch = epoch
 	
-	// Update the learning rate in the config for next training steps
-	mt.config.LearningRate = mt.GetCurrentLearningRate()
+	// Update the learning rate based on scheduler
+	newLR := mt.GetCurrentLearningRate()
+	mt.setLearningRateInternal(newLR, false) // Don't update base LR for scheduler changes
 }
 
 // StepSchedulerWithMetric updates schedulers that depend on validation metrics
@@ -1496,7 +1497,25 @@ func (mt *ModelTrainer) StepSchedulerWithMetric(metric float64) {
 	if scheduler, ok := mt.lrScheduler.(*ReduceLROnPlateauScheduler); ok {
 		// Update the scheduler's internal state
 		newLR := scheduler.Step(metric, float64(mt.config.LearningRate))
-		mt.config.LearningRate = float32(newLR)
+		mt.setLearningRateInternal(float32(newLR), false) // Don't update base LR for scheduler changes
+	}
+}
+
+// updateSchedulerStep increments the training step and updates learning rate if needed
+// This method ensures step-based schedulers update the optimizer properly
+func (mt *ModelTrainer) updateSchedulerStep() {
+	mt.currentStep++ // Direct increment to avoid recursion
+	
+	// For step-based schedulers, check if LR should be updated
+	if mt.lrScheduler != nil {
+		// Check if this is a step-based scheduler (not plateau-based)
+		if _, isPlateauScheduler := mt.lrScheduler.(*ReduceLROnPlateauScheduler); !isPlateauScheduler {
+			// Update learning rate based on current epoch and step
+			newLR := mt.GetCurrentLearningRate()
+			if newLR != mt.config.LearningRate {
+				mt.setLearningRateInternal(newLR, false) // Don't update base LR for scheduler changes
+			}
+		}
 	}
 }
 
@@ -1528,12 +1547,27 @@ func (mt *ModelTrainer) GetLRScheduler() interface{} {
 	return mt.lrScheduler
 }
 
-// SetLearningRate sets the learning rate
+// SetLearningRate sets the learning rate manually (user-initiated)
 func (mt *ModelTrainer) SetLearningRate(lr float32) {
+	mt.setLearningRateInternal(lr, true)
+}
+
+// setLearningRateInternal sets the learning rate with optional base LR update
+func (mt *ModelTrainer) setLearningRateInternal(lr float32, updateBaseLR bool) {
 	mt.config.LearningRate = lr
-	if mt.lrScheduler != nil {
-		// For dynamic LR changes, we'd need to implement this in the scheduler
-		// For now, just update the config
+	
+	// Update the actual optimizer learning rate (GPU-resident)
+	if mt.modelEngine != nil {
+		err := mt.modelEngine.UpdateLearningRate(lr)
+		if err != nil {
+			// Log error but continue - this maintains backward compatibility
+			fmt.Printf("Warning: Failed to update optimizer learning rate: %v\n", err)
+		}
+	}
+	
+	// Update base learning rate only for manual changes, not scheduler-driven changes
+	if updateBaseLR {
+		mt.baseLearningRate = lr
 	}
 }
 

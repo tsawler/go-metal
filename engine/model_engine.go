@@ -1766,3 +1766,50 @@ func (mte *ModelTrainingEngine) SetOptimizerState(state *optimizer.OptimizerStat
 		return fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
 	}
 }
+
+// UpdateLearningRate updates the learning rate for the current optimizer
+// This method bridges between the model trainer and the optimizer implementations
+func (mte *ModelTrainingEngine) UpdateLearningRate(newLR float32) error {
+	if mte.MPSTrainingEngine == nil {
+		return fmt.Errorf("training engine not initialized")
+	}
+	
+	// Update the config first
+	mte.MPSTrainingEngine.config.LearningRate = newLR
+	
+	// Get the optimizer type and update the appropriate optimizer
+	config := mte.MPSTrainingEngine.GetConfig()
+	
+	switch config.OptimizerType {
+	case cgo_bridge.Adam:
+		if mte.MPSTrainingEngine.adamOptimizer != nil {
+			mte.MPSTrainingEngine.adamOptimizer.UpdateLearningRate(newLR)
+			return nil
+		}
+		return fmt.Errorf("Adam optimizer not initialized")
+		
+	case cgo_bridge.RMSProp:
+		if mte.MPSTrainingEngine.rmspropOptimizer != nil {
+			mte.MPSTrainingEngine.rmspropOptimizer.UpdateLearningRate(newLR)
+			return nil
+		}
+		return fmt.Errorf("RMSProp optimizer not initialized")
+		
+	case cgo_bridge.SGD:
+		if mte.MPSTrainingEngine.sgdOptimizer != nil {
+			mte.MPSTrainingEngine.sgdOptimizer.UpdateLearningRate(newLR)
+			return nil
+		}
+		return fmt.Errorf("SGD optimizer not initialized")
+		
+	case cgo_bridge.LBFGS:
+		if mte.MPSTrainingEngine.lbfgsOptimizer != nil {
+			mte.MPSTrainingEngine.lbfgsOptimizer.UpdateLearningRate(newLR)
+			return nil
+		}
+		return fmt.Errorf("L-BFGS optimizer not initialized")
+		
+	default:
+		return fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
+	}
+}
