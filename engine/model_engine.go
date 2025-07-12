@@ -572,18 +572,54 @@ func (mte *ModelTrainingEngine) initializeNormal(tensor *memory.Tensor, mean, st
 }
 
 // compileForExecution configures the TrainingEngine for this specific model
-// This is where we bridge the layer specification with the existing high-performance engine
+// This method adapts to any model architecture using dynamic or hybrid engines
 func (mte *ModelTrainingEngine) compileForExecution() error {
-	// For now, we use the existing hybrid CNN architecture
-	// TODO: Extend CGO bridge to accept generic layer configurations
-	// TODO: Use model specification to configure the engine
+	// Use dynamic architecture-aware compilation based on engine type
+	if mte.isDynamicEngine {
+		// Dynamic Engine: Supports any model architecture
+		// The engine is already configured with the model specification
+		// through the dynamic layer specs in the constructor
+		return mte.compileForDynamicEngine()
+	} else {
+		// Hybrid Engine: Optimized for CNN patterns but with validation
+		// Validate compatibility and configure for hybrid execution
+		return mte.compileForHybridEngine()
+	}
+}
+
+// compileForDynamicEngine configures the engine for any model architecture
+// Dynamic engines are pre-configured during creation and support arbitrary architectures
+func (mte *ModelTrainingEngine) compileForDynamicEngine() error {
+	// Dynamic engines are already configured with model specifications during creation
+	// We just need to validate that the model parameters match the engine setup
 	
-	// Validate that our model matches the expected hybrid CNN structure
-	// (This ensures compatibility with the existing 20k+ batch/s engine)
+	if len(mte.parameterTensors) == 0 {
+		return fmt.Errorf("no parameter tensors available for dynamic engine")
+	}
+	
+	// Validate parameter count matches model specification
+	expectedParams := len(mte.modelSpec.ParameterShapes)
+	actualParams := len(mte.parameterTensors)
+	
+	if expectedParams != actualParams {
+		return fmt.Errorf("parameter count mismatch: expected %d, got %d", expectedParams, actualParams)
+	}
+	
+	// Dynamic engine supports any architecture - no additional validation needed
+	mte.compiledForModel = true
+	return nil
+}
+
+// compileForHybridEngine configures the engine for optimized CNN architectures
+// Hybrid engines require specific patterns for optimal performance
+func (mte *ModelTrainingEngine) compileForHybridEngine() error {
+	// Validate that the model is compatible with hybrid CNN optimizations
 	if err := mte.validateHybridCNNCompatibility(); err != nil {
 		return fmt.Errorf("model not compatible with hybrid CNN engine: %v", err)
 	}
 	
+	// Additional hybrid engine setup could go here
+	// For now, the validation is sufficient
 	mte.compiledForModel = true
 	return nil
 }

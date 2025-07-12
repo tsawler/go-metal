@@ -681,17 +681,21 @@ func (ms *ModelSpec) ValidateModelForHybridEngine() error {
 // ValidateModelForDynamicEngine checks if model is compatible with Dynamic TrainingEngine
 // Supports any architecture with flexible input dimensions (2D, 4D, etc.)
 func (ms *ModelSpec) ValidateModelForDynamicEngine() error {
-	if !ms.Compiled {
-		return fmt.Errorf("model not compiled")
-	}
-
+	// Remove compiled requirement - allow validation before compilation
 	if len(ms.Layers) == 0 {
 		return fmt.Errorf("empty model")
 	}
 
-	// Dynamic engine supports flexible input dimensions
-	if len(ms.InputShape) < 2 {
-		return fmt.Errorf("Dynamic TrainingEngine requires at least 2D input [batch, features]")
+	// Dynamic engine supports flexible input dimensions - even 1D is allowed
+	if len(ms.InputShape) == 0 {
+		return fmt.Errorf("model must specify input shape")
+	}
+
+	// Validate each layer has required parameters for dynamic processing
+	for i, layer := range ms.Layers {
+		if err := ms.validateLayerForDynamicEngine(layer, i); err != nil {
+			return fmt.Errorf("layer %d (%s): %v", i, layer.Name, err)
+		}
 	}
 
 	// Check that we have at least one trainable layer
@@ -708,6 +712,55 @@ func (ms *ModelSpec) ValidateModelForDynamicEngine() error {
 		return fmt.Errorf("Dynamic TrainingEngine requires at least one trainable layer (Dense or Conv2D)")
 	}
 
+	return nil
+}
+
+// validateLayerForDynamicEngine validates individual layers for dynamic engine compatibility
+func (ms *ModelSpec) validateLayerForDynamicEngine(layer LayerSpec, index int) error {
+	switch layer.Type {
+	case Dense:
+		// Dense layers need input_size and output_size
+		if _, ok := layer.Parameters["input_size"]; !ok {
+			return fmt.Errorf("Dense layer missing input_size parameter")
+		}
+		if _, ok := layer.Parameters["output_size"]; !ok {
+			return fmt.Errorf("Dense layer missing output_size parameter")
+		}
+		
+	case Conv2D:
+		// Conv2D layers need kernel_size, input_channels, output_channels
+		requiredParams := []string{"kernel_size", "input_channels", "output_channels"}
+		for _, param := range requiredParams {
+			if _, ok := layer.Parameters[param]; !ok {
+				return fmt.Errorf("Conv2D layer missing %s parameter", param)
+			}
+		}
+		
+	case ReLU, Softmax, LeakyReLU, ELU:
+		// Activation layers don't require specific parameters
+		
+	case MaxPool2D:
+		// MaxPool2D needs pool_size
+		if _, ok := layer.Parameters["pool_size"]; !ok {
+			return fmt.Errorf("MaxPool2D layer missing pool_size parameter")
+		}
+		
+	case BatchNorm:
+		// BatchNorm needs num_features
+		if _, ok := layer.Parameters["num_features"]; !ok {
+			return fmt.Errorf("BatchNorm layer missing num_features parameter")
+		}
+		
+	case Dropout:
+		// Dropout needs rate parameter
+		if _, ok := layer.Parameters["rate"]; !ok {
+			return fmt.Errorf("Dropout layer missing rate parameter")
+		}
+		
+	default:
+		return fmt.Errorf("unsupported layer type: %v", layer.Type)
+	}
+	
 	return nil
 }
 
@@ -1271,15 +1324,26 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamFloatCount = 2
 			spec.ParamIntCount = 4
 			
-			// ARCHITECTURAL FIX: Extract running statistics from LayerSpec for graph construction
-			if layer.RunningStatistics != nil {
-				if runningMean, exists := layer.RunningStatistics["running_mean"]; exists {
-					spec.RunningMean = runningMean
-				}
-				if runningVar, exists := layer.RunningStatistics["running_var"]; exists {
-					spec.RunningVar = runningVar
+			// ARCHITECTURAL FIX: Initialize running statistics for BatchNorm layers
+			if trackRunningStats {
+				// Initialize running statistics (will be properly set by training engine)
+				spec.RunningMean = make([]float32, numFeatures)
+				spec.RunningVar = make([]float32, numFeatures)
+				// Initialize running_var to 1.0 (standard initialization)
+				for i := range spec.RunningVar {
+					spec.RunningVar[i] = 1.0
 				}
 				spec.HasRunningStats = true
+				
+				// Extract from existing running statistics if available
+				if layer.RunningStatistics != nil {
+					if runningMean, exists := layer.RunningStatistics["running_mean"]; exists {
+						copy(spec.RunningMean, runningMean)
+					}
+					if runningVar, exists := layer.RunningStatistics["running_var"]; exists {
+						copy(spec.RunningVar, runningVar)
+					}
+				}
 			}
 			// Shape unchanged for BatchNorm
 
