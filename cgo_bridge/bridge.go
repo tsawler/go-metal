@@ -177,6 +177,16 @@ int copy_metal_buffer_to_float32_array(uintptr_t buffer, float* data, int num_el
 int copy_metal_buffer_to_int32_array(uintptr_t buffer, int* data, int num_elements);
 int convert_tensor_type(uintptr_t src_buffer, uintptr_t dst_buffer, int* shape, int num_dims, int src_type, int dst_type, uintptr_t device);
 
+// MEMORY TRANSFER OPTIMIZATION: Direct Metal buffer operations for staging pool
+int copy_buffer_to_buffer_async(uintptr_t src_buffer, uintptr_t dst_buffer, 
+                                int src_offset, int dst_offset, int size,
+                                uintptr_t command_queue);
+int copy_data_to_staging_buffer(uintptr_t staging_buffer, void* data, int size);
+int copy_staging_to_gpu_buffer_async(uintptr_t staging_buffer, uintptr_t gpu_buffer,
+                                     int staging_offset, int gpu_offset, int size,
+                                     uintptr_t command_queue);
+int wait_for_buffer_copy_completion(uintptr_t command_queue);
+
 // Forward+backward pass that returns gradients for Adam optimizer
 int execute_training_step_hybrid_with_gradients(
     uintptr_t engine,
@@ -2431,5 +2441,103 @@ func ExecuteNadamStepMPSGraph(
 		return fmt.Errorf("Nadam MPSGraph step failed with error code: %d", result)
 	}
 
+	return nil
+}
+
+// MEMORY TRANSFER OPTIMIZATION: Go wrapper functions for direct Metal buffer operations
+
+// CopyBufferToBufferAsync performs asynchronous buffer-to-buffer copy using Metal blit encoder
+func CopyBufferToBufferAsync(srcBuffer, dstBuffer unsafe.Pointer, 
+                            srcOffset, dstOffset, size int, 
+                            commandQueue unsafe.Pointer) error {
+	if srcBuffer == nil || dstBuffer == nil || commandQueue == nil {
+		return fmt.Errorf("invalid buffer or command queue pointers")
+	}
+	
+	if size <= 0 || srcOffset < 0 || dstOffset < 0 {
+		return fmt.Errorf("invalid size or offset parameters")
+	}
+	
+	result := C.copy_buffer_to_buffer_async(
+		C.uintptr_t(uintptr(srcBuffer)),
+		C.uintptr_t(uintptr(dstBuffer)),
+		C.int(srcOffset),
+		C.int(dstOffset),
+		C.int(size),
+		C.uintptr_t(uintptr(commandQueue)),
+	)
+	
+	if result != 0 {
+		return fmt.Errorf("buffer copy failed with error code: %d", result)
+	}
+	
+	return nil
+}
+
+// CopyDataToStagingBuffer copies data from CPU memory to staging buffer
+func CopyDataToStagingBuffer(stagingBuffer unsafe.Pointer, data []byte) error {
+	if stagingBuffer == nil {
+		return fmt.Errorf("staging buffer is nil")
+	}
+	
+	if len(data) == 0 {
+		return fmt.Errorf("data is empty")
+	}
+	
+	result := C.copy_data_to_staging_buffer(
+		C.uintptr_t(uintptr(stagingBuffer)),
+		unsafe.Pointer(&data[0]),
+		C.int(len(data)),
+	)
+	
+	if result != 0 {
+		return fmt.Errorf("data copy to staging buffer failed with error code: %d", result)
+	}
+	
+	return nil
+}
+
+// CopyStagingToGPUBufferAsync copies from staging buffer to GPU buffer asynchronously
+func CopyStagingToGPUBufferAsync(stagingBuffer, gpuBuffer unsafe.Pointer,
+                                stagingOffset, gpuOffset, size int,
+                                commandQueue unsafe.Pointer) error {
+	if stagingBuffer == nil || gpuBuffer == nil || commandQueue == nil {
+		return fmt.Errorf("invalid buffer or command queue pointers")
+	}
+	
+	if size <= 0 || stagingOffset < 0 || gpuOffset < 0 {
+		return fmt.Errorf("invalid size or offset parameters")
+	}
+	
+	result := C.copy_staging_to_gpu_buffer_async(
+		C.uintptr_t(uintptr(stagingBuffer)),
+		C.uintptr_t(uintptr(gpuBuffer)),
+		C.int(stagingOffset),
+		C.int(gpuOffset),
+		C.int(size),
+		C.uintptr_t(uintptr(commandQueue)),
+	)
+	
+	if result != 0 {
+		return fmt.Errorf("staging to GPU copy failed with error code: %d", result)
+	}
+	
+	return nil
+}
+
+// WaitForBufferCopyCompletion waits for all pending buffer copy operations to complete
+func WaitForBufferCopyCompletion(commandQueue unsafe.Pointer) error {
+	if commandQueue == nil {
+		return fmt.Errorf("command queue is nil")
+	}
+	
+	result := C.wait_for_buffer_copy_completion(
+		C.uintptr_t(uintptr(commandQueue)),
+	)
+	
+	if result != 0 {
+		return fmt.Errorf("wait for buffer copy completion failed with error code: %d", result)
+	}
+	
 	return nil
 }

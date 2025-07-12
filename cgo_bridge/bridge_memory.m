@@ -421,3 +421,241 @@ int convert_tensor_type(uintptr_t src_buffer_ptr, uintptr_t dst_buffer_ptr,
         return 0;
     }
 }
+
+// MEMORY TRANSFER OPTIMIZATION: Direct Metal buffer operations for staging pool
+// These functions provide efficient GPU-GPU and staging buffer operations
+
+// Direct buffer-to-buffer copy using Metal blit command encoder
+int copy_buffer_to_buffer_async(uintptr_t src_buffer_ptr, uintptr_t dst_buffer_ptr, 
+                                int src_offset, int dst_offset, int size,
+                                uintptr_t command_queue_ptr) {
+    @autoreleasepool {
+        if (src_buffer_ptr == 0 || dst_buffer_ptr == 0 || command_queue_ptr == 0) {
+            NSLog(@"Invalid parameters for copy_buffer_to_buffer_async");
+            return -1;
+        }
+        
+        if (size <= 0 || src_offset < 0 || dst_offset < 0) {
+            NSLog(@"Invalid size or offset parameters: size=%d, src_offset=%d, dst_offset=%d", 
+                  size, src_offset, dst_offset);
+            return -2;
+        }
+        
+        id<MTLBuffer> srcBuffer = (__bridge id<MTLBuffer>)(void*)src_buffer_ptr;
+        id<MTLBuffer> dstBuffer = (__bridge id<MTLBuffer>)(void*)dst_buffer_ptr;
+        id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)(void*)command_queue_ptr;
+        
+        if (!srcBuffer || !dstBuffer || !commandQueue) {
+            NSLog(@"Nil buffers or command queue in copy_buffer_to_buffer_async");
+            return -3;
+        }
+        
+        // Validate offsets and size don't exceed buffer bounds
+        if ((NSUInteger)(src_offset + size) > srcBuffer.length) {
+            NSLog(@"Source copy would exceed buffer bounds: offset=%d + size=%d > length=%lu", 
+                  src_offset, size, (unsigned long)srcBuffer.length);
+            return -4;
+        }
+        
+        if ((NSUInteger)(dst_offset + size) > dstBuffer.length) {
+            NSLog(@"Destination copy would exceed buffer bounds: offset=%d + size=%d > length=%lu", 
+                  dst_offset, size, (unsigned long)dstBuffer.length);
+            return -5;
+        }
+        
+        @try {
+            // Create command buffer from the queue
+            id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+            if (!commandBuffer) {
+                NSLog(@"Failed to create command buffer");
+                return -6;
+            }
+            
+            // Create blit command encoder for efficient buffer copy
+            id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
+            if (!blitEncoder) {
+                NSLog(@"Failed to create blit command encoder");
+                return -7;
+            }
+            
+            // Perform the buffer copy operation
+            [blitEncoder copyFromBuffer:srcBuffer
+                           sourceOffset:src_offset
+                               toBuffer:dstBuffer
+                      destinationOffset:dst_offset
+                                   size:size];
+            
+            [blitEncoder endEncoding];
+            
+            // Commit the command buffer for async execution
+            [commandBuffer commit];
+            
+            return 0; // Success - operation is async
+            
+        } @catch (NSException* exception) {
+            NSLog(@"Exception in copy_buffer_to_buffer_async: %@", exception.reason);
+            return -8;
+        }
+    }
+}
+
+// Copy data from CPU to staging buffer (CPU-accessible)
+int copy_data_to_staging_buffer(uintptr_t staging_buffer_ptr, void* data, int size) {
+    @autoreleasepool {
+        if (staging_buffer_ptr == 0 || data == NULL || size <= 0) {
+            NSLog(@"Invalid parameters for copy_data_to_staging_buffer");
+            return -1;
+        }
+        
+        id<MTLBuffer> stagingBuffer = (__bridge id<MTLBuffer>)(void*)staging_buffer_ptr;
+        if (!stagingBuffer) {
+            NSLog(@"Staging buffer is nil in copy_data_to_staging_buffer");
+            return -2;
+        }
+        
+        // Validate size doesn't exceed buffer capacity
+        if ((NSUInteger)size > stagingBuffer.length) {
+            NSLog(@"Data size %d exceeds staging buffer capacity %lu", 
+                  size, (unsigned long)stagingBuffer.length);
+            return -3;
+        }
+        
+        @try {
+            // Staging buffers should be CPU-accessible (shared storage mode)
+            void* contents = [stagingBuffer contents];
+            if (!contents) {
+                NSLog(@"Staging buffer is not CPU-accessible");
+                return -4;
+            }
+            
+            // Direct memory copy - fastest for CPU-accessible buffers
+            memcpy(contents, data, size);
+            
+            // For managed buffers, synchronize with GPU
+            if (stagingBuffer.storageMode == MTLStorageModeManaged) {
+                [stagingBuffer didModifyRange:NSMakeRange(0, size)];
+            }
+            
+            return 0; // Success
+            
+        } @catch (NSException* exception) {
+            NSLog(@"Exception in copy_data_to_staging_buffer: %@", exception.reason);
+            return -5;
+        }
+    }
+}
+
+// Copy from staging buffer to GPU buffer asynchronously
+int copy_staging_to_gpu_buffer_async(uintptr_t staging_buffer_ptr, uintptr_t gpu_buffer_ptr,
+                                     int staging_offset, int gpu_offset, int size,
+                                     uintptr_t command_queue_ptr) {
+    @autoreleasepool {
+        if (staging_buffer_ptr == 0 || gpu_buffer_ptr == 0 || command_queue_ptr == 0) {
+            NSLog(@"Invalid parameters for copy_staging_to_gpu_buffer_async");
+            return -1;
+        }
+        
+        if (size <= 0 || staging_offset < 0 || gpu_offset < 0) {
+            NSLog(@"Invalid size or offset parameters: size=%d, staging_offset=%d, gpu_offset=%d", 
+                  size, staging_offset, gpu_offset);
+            return -2;
+        }
+        
+        id<MTLBuffer> stagingBuffer = (__bridge id<MTLBuffer>)(void*)staging_buffer_ptr;
+        id<MTLBuffer> gpuBuffer = (__bridge id<MTLBuffer>)(void*)gpu_buffer_ptr;
+        id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)(void*)command_queue_ptr;
+        
+        if (!stagingBuffer || !gpuBuffer || !commandQueue) {
+            NSLog(@"Nil buffers or command queue in copy_staging_to_gpu_buffer_async");
+            return -3;
+        }
+        
+        // Validate buffer bounds
+        if ((NSUInteger)(staging_offset + size) > stagingBuffer.length) {
+            NSLog(@"Staging copy would exceed buffer bounds: offset=%d + size=%d > length=%lu", 
+                  staging_offset, size, (unsigned long)stagingBuffer.length);
+            return -4;
+        }
+        
+        if ((NSUInteger)(gpu_offset + size) > gpuBuffer.length) {
+            NSLog(@"GPU copy would exceed buffer bounds: offset=%d + size=%d > length=%lu", 
+                  gpu_offset, size, (unsigned long)gpuBuffer.length);
+            return -5;
+        }
+        
+        @try {
+            // Create command buffer
+            id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+            if (!commandBuffer) {
+                NSLog(@"Failed to create command buffer for staging to GPU copy");
+                return -6;
+            }
+            
+            // Use blit encoder for optimal GPU transfer
+            id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
+            if (!blitEncoder) {
+                NSLog(@"Failed to create blit encoder for staging to GPU copy");
+                return -7;
+            }
+            
+            // Copy from staging (CPU-accessible) to GPU buffer
+            [blitEncoder copyFromBuffer:stagingBuffer
+                           sourceOffset:staging_offset
+                               toBuffer:gpuBuffer
+                      destinationOffset:gpu_offset
+                                   size:size];
+            
+            [blitEncoder endEncoding];
+            
+            // Commit for async execution
+            [commandBuffer commit];
+            
+            return 0; // Success - operation is async
+            
+        } @catch (NSException* exception) {
+            NSLog(@"Exception in copy_staging_to_gpu_buffer_async: %@", exception.reason);
+            return -8;
+        }
+    }
+}
+
+// Wait for buffer copy operations to complete
+int wait_for_buffer_copy_completion(uintptr_t command_queue_ptr) {
+    @autoreleasepool {
+        if (command_queue_ptr == 0) {
+            NSLog(@"Invalid command queue for wait_for_buffer_copy_completion");
+            return -1;
+        }
+        
+        id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)(void*)command_queue_ptr;
+        if (!commandQueue) {
+            NSLog(@"Command queue is nil in wait_for_buffer_copy_completion");
+            return -2;
+        }
+        
+        @try {
+            // Create a synchronization command buffer
+            id<MTLCommandBuffer> syncBuffer = [commandQueue commandBuffer];
+            if (!syncBuffer) {
+                NSLog(@"Failed to create sync command buffer");
+                return -3;
+            }
+            
+            // Commit and wait for completion
+            [syncBuffer commit];
+            [syncBuffer waitUntilCompleted];
+            
+            if (syncBuffer.error) {
+                NSLog(@"Command buffer error during synchronization: %@", 
+                      syncBuffer.error.localizedDescription);
+                return -4;
+            }
+            
+            return 0; // Success
+            
+        } @catch (NSException* exception) {
+            NSLog(@"Exception in wait_for_buffer_copy_completion: %@", exception.reason);
+            return -5;
+        }
+    }
+}

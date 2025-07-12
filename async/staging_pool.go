@@ -5,6 +5,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -21,6 +22,7 @@ type StagingBufferPool struct {
 	buffers       []*StagingBuffer
 	available     chan *StagingBuffer
 	memoryManager *memory.MemoryManager
+	commandQueue  unsafe.Pointer // MTLCommandQueue for async operations
 	maxBuffers    int
 	bufferSize    int // Fixed size for all buffers in this pool
 	mutex         sync.Mutex
@@ -40,10 +42,18 @@ func NewStagingBufferPool(memoryManager *memory.MemoryManager, maxBuffers int) (
 	// Use 4MB buffers - good for typical batch sizes
 	bufferSize := 4 * 1024 * 1024 // 4MB
 	
+	// Create command queue for async operations
+	device := memory.GetDevice()
+	commandQueue, err := cgo_bridge.CreateCommandQueue(device)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create command queue for staging pool: %v", err)
+	}
+	
 	pool := &StagingBufferPool{
 		buffers:       make([]*StagingBuffer, 0, maxBuffers),
 		available:     make(chan *StagingBuffer, maxBuffers),
 		memoryManager: memoryManager,
+		commandQueue:  commandQueue,
 		maxBuffers:    maxBuffers,
 		bufferSize:    bufferSize,
 		nextID:        1,
@@ -176,19 +186,51 @@ func (sbp *StagingBufferPool) TransferToGPU(data interface{}, gpuTensor *memory.
 	}
 	defer sbp.ReturnBuffer(stagingBuffer)
 	
-	// For now, we'll rely on the memory manager to handle the actual transfer
-	// In a complete implementation, this would:
-	// 1. Copy data to staging buffer (CPU-accessible)
-	// 2. Issue Metal blit command to copy from staging to GPU tensor
-	// 3. Wait for completion or handle async with callbacks
+	// MEMORY TRANSFER OPTIMIZATION: Use direct Metal buffer operations
+	// Step 1: Copy data to staging buffer (CPU-accessible, fast memory copy)
+	err = cgo_bridge.CopyDataToStagingBuffer(stagingBuffer.buffer, dataBytes)
+	if err != nil {
+		return fmt.Errorf("failed to copy data to staging buffer: %v", err)
+	}
 	
-	// TODO: Implement actual Metal buffer copy operations
-	// This is a placeholder that shows the structure
-	_ = dataBytes
-	_ = stagingBuffer
-	_ = gpuTensor
+	// Step 2: Async copy from staging buffer to GPU tensor using Metal blit encoder
+	err = cgo_bridge.CopyStagingToGPUBufferAsync(
+		stagingBuffer.buffer,           // Source: staging buffer (CPU-accessible)
+		gpuTensor.MetalBuffer(),       // Destination: GPU tensor buffer
+		0,                             // Staging offset
+		0,                             // GPU offset  
+		len(dataBytes),                // Copy size
+		sbp.commandQueue,              // Command queue for async operations
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initiate async transfer to GPU: %v", err)
+	}
+	
+	// Note: Transfer is asynchronous - GPU execution will wait for completion
+	// For synchronous completion, caller can use WaitForBufferCopyCompletion()
+	return nil
+}
+
+// TransferToGPUSync transfers data from CPU slice to GPU tensor and waits for completion
+func (sbp *StagingBufferPool) TransferToGPUSync(data interface{}, gpuTensor *memory.Tensor) error {
+	// Perform async transfer
+	err := sbp.TransferToGPU(data, gpuTensor)
+	if err != nil {
+		return err
+	}
+	
+	// Wait for completion
+	err = cgo_bridge.WaitForBufferCopyCompletion(sbp.commandQueue)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transfer completion: %v", err)
+	}
 	
 	return nil
+}
+
+// WaitForTransferCompletion waits for all pending transfers to complete
+func (sbp *StagingBufferPool) WaitForTransferCompletion() error {
+	return cgo_bridge.WaitForBufferCopyCompletion(sbp.commandQueue)
 }
 
 // Stats returns statistics about the staging buffer pool
@@ -221,7 +263,7 @@ type StagingPoolStats struct {
 	MaxBuffers       int
 }
 
-// Cleanup releases all staging buffers
+// Cleanup releases all staging buffers and command queue
 func (sbp *StagingBufferPool) Cleanup() {
 	sbp.mutex.Lock()
 	defer sbp.mutex.Unlock()
@@ -238,6 +280,12 @@ func (sbp *StagingBufferPool) Cleanup() {
 			sbp.memoryManager.ReleaseBuffer(buffer.buffer)
 			buffer.buffer = nil
 		}
+	}
+	
+	// Cleanup command queue
+	if sbp.commandQueue != nil {
+		cgo_bridge.DestroyCommandQueue(sbp.commandQueue)
+		sbp.commandQueue = nil
 	}
 	
 	sbp.buffers = nil
