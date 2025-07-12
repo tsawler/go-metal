@@ -972,12 +972,12 @@ func (ms *ModelSpec) ConvertToInferenceLayerSpecs() ([]DynamicLayerSpec, error) 
 					if runningMean, exists := layer.RunningStatistics["running_mean"]; exists {
 						spec.RunningMean = make([]float32, len(runningMean))
 						copy(spec.RunningMean, runningMean)
-						spec.HasRunningStats = boolToInt32(true)
+						spec.HasRunningStats = true
 					}
 					if runningVar, exists := layer.RunningStatistics["running_var"]; exists {
 						spec.RunningVar = make([]float32, len(runningVar))
 						copy(spec.RunningVar, runningVar)
-						spec.HasRunningStats = boolToInt32(true)
+						spec.HasRunningStats = true
 					}
 				}
 				

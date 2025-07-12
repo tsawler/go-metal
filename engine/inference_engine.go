@@ -521,6 +521,100 @@ func (mie *ModelInferenceEngine) recompileForInference() error {
 	return nil
 }
 
+// SetCustomNormalization allows setting custom normalization values for any model
+// This enables the library to work with ANY model architecture and normalization scheme
+// layerName: name of the BatchNorm layer to update
+// mean, variance: custom normalization values (must match layer's num_features)
+func (mie *ModelInferenceEngine) SetCustomNormalization(layerName string, mean, variance []float32) error {
+	if len(mean) != len(variance) {
+		return fmt.Errorf("mean and variance must have the same length")
+	}
+	
+	// Find the specified layer
+	var targetLayer *layers.LayerSpec
+	for i := range mie.modelSpec.Layers {
+		layer := &mie.modelSpec.Layers[i]
+		if layer.Name == layerName && layer.Type == layers.BatchNorm {
+			targetLayer = layer
+			break
+		}
+	}
+	
+	if targetLayer == nil {
+		return fmt.Errorf("BatchNorm layer '%s' not found", layerName)
+	}
+	
+	// Validate the length matches num_features
+	numFeatures, ok := targetLayer.Parameters["num_features"].(int)
+	if !ok {
+		return fmt.Errorf("invalid num_features parameter for layer %s", layerName)
+	}
+	
+	if len(mean) != numFeatures {
+		return fmt.Errorf("mean length %d doesn't match num_features %d for layer %s", 
+			len(mean), numFeatures, layerName)
+	}
+	
+	// Initialize RunningStatistics if needed
+	if targetLayer.RunningStatistics == nil {
+		targetLayer.RunningStatistics = make(map[string][]float32)
+	}
+	
+	// Set custom normalization values
+	targetLayer.RunningStatistics["running_mean"] = make([]float32, len(mean))
+	copy(targetLayer.RunningStatistics["running_mean"], mean)
+	
+	targetLayer.RunningStatistics["running_var"] = make([]float32, len(variance))
+	copy(targetLayer.RunningStatistics["running_var"], variance)
+	
+	fmt.Printf("Set custom normalization for layer %s: mean=%v, var=%v\n", 
+		layerName, mean[:min(3, len(mean))], variance[:min(3, len(variance))])
+	
+	// Recompile inference engine with new normalization values
+	return mie.recompileForInference()
+}
+
+// SetStandardNormalization sets standard normalization (mean=0, var=1) for a BatchNorm layer
+// This is equivalent to the old hardcoded behavior but now configurable
+func (mie *ModelInferenceEngine) SetStandardNormalization(layerName string) error {
+	// Find the layer to get num_features
+	for i := range mie.modelSpec.Layers {
+		layer := &mie.modelSpec.Layers[i]
+		if layer.Name == layerName && layer.Type == layers.BatchNorm {
+			numFeatures, ok := layer.Parameters["num_features"].(int)
+			if !ok {
+				return fmt.Errorf("invalid num_features parameter for layer %s", layerName)
+			}
+			
+			// Create standard normalization: mean=0, var=1
+			mean := make([]float32, numFeatures)
+			variance := make([]float32, numFeatures)
+			for i := 0; i < numFeatures; i++ {
+				mean[i] = 0.0
+				variance[i] = 1.0
+			}
+			
+			return mie.SetCustomNormalization(layerName, mean, variance)
+		}
+	}
+	
+	return fmt.Errorf("BatchNorm layer '%s' not found", layerName)
+}
+
+// ListBatchNormLayers returns the names of all BatchNorm layers in the model
+// This helps users identify which layers can have custom normalization
+func (mie *ModelInferenceEngine) ListBatchNormLayers() []string {
+	var batchNormLayers []string
+	
+	for _, layer := range mie.modelSpec.Layers {
+		if layer.Type == layers.BatchNorm {
+			batchNormLayers = append(batchNormLayers, layer.Name)
+		}
+	}
+	
+	return batchNormLayers
+}
+
 // min helper function
 func min(a, b int) int {
 	if a < b {
