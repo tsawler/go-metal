@@ -21,6 +21,7 @@ func init() {
 		mockCopyFloat32Data,
 		mockCopyInt32Data,
 		mockConvertTensorType,
+		mockCopyTensor,
 	)
 }
 
@@ -46,6 +47,11 @@ func mockCopyInt32Data(buffer unsafe.Pointer, data []int32) error {
 
 func mockConvertTensorType(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType int) error {
 	// Mock conversion operation - just return success
+	return nil
+}
+
+func mockCopyTensor(srcBuffer, dstBuffer unsafe.Pointer, size int) error {
+	// Mock tensor copy operation - just return success
 	return nil
 }
 

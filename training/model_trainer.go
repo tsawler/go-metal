@@ -340,10 +340,12 @@ func (mt *ModelTrainer) updateFP32WeightsFromFP16(fp32Weights []*memory.Tensor) 
 		}
 		defer updatedFP32.Release()
 		
-		// Copy the data to the original FP32 weight tensor
-		// This requires a memory copy operation
-		// For now, we'll need to implement a tensor copy function
-		// TODO: Implement tensor copy function in memory package
+		// GPU-RESIDENT TENSOR COPY: Direct buffer-to-buffer transfer without CPU involvement
+		// This uses the optimized Metal blit encoder for maximum performance
+		err = fp32Weights[i].CopyFrom(updatedFP32)
+		if err != nil {
+			return fmt.Errorf("failed to copy updated FP32 weight %d back to master weights: %v", i, err)
+		}
 	}
 	
 	return nil

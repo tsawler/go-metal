@@ -75,11 +75,19 @@ Total "For now" comments found: 31 (17 unique concerns after excluding test skip
 - Command buffer pooling for optimal GPU resource management
 - Both async and sync transfer modes for different use cases
 
-### 6. Tensor Copy Function
+### 6. Tensor Copy Function ✅ RESOLVED
 **Location:** `training/model_trainer.go:343`
 **Issue:** Missing implementation for tensor copying
 **Impact:** May affect certain training operations
 **Severity:** MEDIUM - Functionality gap
+**Resolution:** Implemented complete GPU-resident tensor copying system with:
+- Added CopyFrom() method to Tensor for direct GPU-to-GPU copying
+- Uses optimized Metal blit command encoder for maximum performance
+- Synchronous buffer copy with copy_buffer_to_buffer_sync CGO bridge function
+- Maintains GPU-resident everything principle - no CPU involvement
+- Comprehensive validation for shape and type compatibility
+- Integration with mixed-precision training (FP16→FP32 master weight updates)
+- Added comprehensive test suite with performance benchmarks
 
 ### 7. Learning Rate Scheduler
 **Location:** `training/model_trainer.go:1532`

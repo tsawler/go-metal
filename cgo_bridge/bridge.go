@@ -181,6 +181,8 @@ int convert_tensor_type(uintptr_t src_buffer, uintptr_t dst_buffer, int* shape, 
 int copy_buffer_to_buffer_async(uintptr_t src_buffer, uintptr_t dst_buffer, 
                                 int src_offset, int dst_offset, int size,
                                 uintptr_t command_queue);
+int copy_buffer_to_buffer_sync(uintptr_t src_buffer, uintptr_t dst_buffer,
+                               int src_offset, int dst_offset, int size);
 int copy_data_to_staging_buffer(uintptr_t staging_buffer, void* data, int size);
 int copy_staging_to_gpu_buffer_async(uintptr_t staging_buffer, uintptr_t gpu_buffer,
                                      int staging_offset, int gpu_offset, int size,
@@ -480,6 +482,7 @@ func SetupMemoryBridgeWithConvert(setupFunc func(
 	func(unsafe.Pointer, []float32) error,
 	func(unsafe.Pointer, []int32) error,
 	func(unsafe.Pointer, unsafe.Pointer, []int, int, int) error,
+	func(unsafe.Pointer, unsafe.Pointer, int) error,
 ), getDeviceFunc func() unsafe.Pointer) {
 	// Create wrapper for ConvertTensorType that matches the expected signature
 	convertWrapper := func(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType int) error {
@@ -495,6 +498,7 @@ func SetupMemoryBridgeWithConvert(setupFunc func(
 		CopyFloat32ArrayToMetalBuffer,
 		CopyInt32ArrayToMetalBuffer,
 		convertWrapper,
+		CopyTensorBufferSync, // GPU-resident tensor copying
 	)
 }
 
@@ -2441,6 +2445,34 @@ func ExecuteNadamStepMPSGraph(
 		return fmt.Errorf("Nadam MPSGraph step failed with error code: %d", result)
 	}
 
+	return nil
+}
+
+// CopyTensorBufferSync copies data from one tensor buffer to another synchronously
+// This implements GPU-resident tensor copying with minimal CGO calls using the optimized buffer copy
+func CopyTensorBufferSync(srcBuffer, dstBuffer unsafe.Pointer, size int) error {
+	if srcBuffer == nil || dstBuffer == nil {
+		return fmt.Errorf("source or destination buffer is nil")
+	}
+	
+	if size <= 0 {
+		return fmt.Errorf("invalid copy size: %d", size)
+	}
+	
+	// Use the synchronous buffer copy using existing C bridge function
+	// This is efficient and reuses the existing blit encoder implementation
+	result := C.copy_buffer_to_buffer_sync(
+		C.uintptr_t(uintptr(srcBuffer)),
+		C.uintptr_t(uintptr(dstBuffer)),
+		C.int(0),    // Source offset
+		C.int(0),    // Destination offset  
+		C.int(size), // Copy size
+	)
+	
+	if result != 0 {
+		return fmt.Errorf("tensor buffer copy failed with error code: %d", result)
+	}
+	
 	return nil
 }
 

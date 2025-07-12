@@ -243,11 +243,59 @@ func (t *Tensor) copyDataToBuffer(data interface{}) error {
 	}
 }
 
+// CopyFrom copies data from another tensor using GPU-resident buffer operations
+// This performs a direct GPU-to-GPU memory transfer without CPU involvement
+func (t *Tensor) CopyFrom(src *Tensor) error {
+	// Validate tensors are compatible
+	if src == nil {
+		return fmt.Errorf("source tensor is nil")
+	}
+	
+	if t.metalBuffer == nil {
+		return fmt.Errorf("destination tensor has nil metal buffer")
+	}
+	
+	if src.metalBuffer == nil {
+		return fmt.Errorf("source tensor has nil metal buffer")
+	}
+	
+	// Check that shapes are compatible
+	if len(t.shape) != len(src.shape) {
+		return fmt.Errorf("tensor shape dimensions don't match: dst %v vs src %v", t.shape, src.shape)
+	}
+	
+	for i, dim := range t.shape {
+		if dim != src.shape[i] {
+			return fmt.Errorf("tensor shapes don't match: dst %v vs src %v", t.shape, src.shape)
+		}
+	}
+	
+	// Check that data types are compatible
+	if t.dtype != src.dtype {
+		return fmt.Errorf("tensor data types don't match: dst %v vs src %v", t.dtype, src.dtype)
+	}
+	
+	// Calculate copy size
+	copySize := t.size
+	if src.size != copySize {
+		return fmt.Errorf("tensor sizes don't match: dst %d bytes vs src %d bytes", copySize, src.size)
+	}
+	
+	// Perform GPU-resident buffer copy using bridge function
+	if CopyTensorFunc == nil {
+		return fmt.Errorf("CopyTensor bridge function not initialized - import cgo_bridge package")
+	}
+	
+	// Direct GPU-to-GPU memory transfer (GPU-resident everything principle)
+	return CopyTensorFunc(src.metalBuffer, t.metalBuffer, copySize)
+}
+
 // Bridge functions for data transfer - set up during cgo_bridge initialization
 var ToFloat32SliceFunc func(buffer unsafe.Pointer, numElements int) ([]float32, error)
 var CopyFloat32DataFunc func(buffer unsafe.Pointer, data []float32) error
 var CopyInt32DataFunc func(buffer unsafe.Pointer, data []int32) error
 var ConvertTensorTypeFunc func(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType DataType) error
+var CopyTensorFunc func(srcBuffer, dstBuffer unsafe.Pointer, size int) error
 
 // convertTensorType performs GPU-side type conversion
 func convertTensorType(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType DataType) error {
@@ -279,10 +327,12 @@ func SetupBridgeWithConvert(
 	copyFloat32DataFunc func(unsafe.Pointer, []float32) error,
 	copyInt32DataFunc func(unsafe.Pointer, []int32) error,
 	convertTensorTypeFunc func(unsafe.Pointer, unsafe.Pointer, []int, int, int) error,
+	copyTensorFunc func(unsafe.Pointer, unsafe.Pointer, int) error,
 ) {
 	ToFloat32SliceFunc = toFloat32SliceFunc
 	CopyFloat32DataFunc = copyFloat32DataFunc
 	CopyInt32DataFunc = copyInt32DataFunc
+	CopyTensorFunc = copyTensorFunc
 	
 	// Create wrapper that converts int to DataType
 	ConvertTensorTypeFunc = func(srcBuffer, dstBuffer unsafe.Pointer, shape []int, srcType, dstType DataType) error {

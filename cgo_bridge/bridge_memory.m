@@ -499,6 +499,98 @@ int copy_buffer_to_buffer_async(uintptr_t src_buffer_ptr, uintptr_t dst_buffer_p
     }
 }
 
+// Synchronous buffer-to-buffer copy using Metal blit command encoder
+// This is optimized for tensor copying where immediate completion is needed
+int copy_buffer_to_buffer_sync(uintptr_t src_buffer_ptr, uintptr_t dst_buffer_ptr,
+                               int src_offset, int dst_offset, int size) {
+    @autoreleasepool {
+        if (src_buffer_ptr == 0 || dst_buffer_ptr == 0) {
+            NSLog(@"Invalid parameters for copy_buffer_to_buffer_sync");
+            return -1;
+        }
+        
+        if (size <= 0 || src_offset < 0 || dst_offset < 0) {
+            NSLog(@"Invalid size or offset parameters: size=%d, src_offset=%d, dst_offset=%d", 
+                  size, src_offset, dst_offset);
+            return -2;
+        }
+        
+        id<MTLBuffer> srcBuffer = (__bridge id<MTLBuffer>)(void*)src_buffer_ptr;
+        id<MTLBuffer> dstBuffer = (__bridge id<MTLBuffer>)(void*)dst_buffer_ptr;
+        
+        if (!srcBuffer || !dstBuffer) {
+            NSLog(@"Nil buffers in copy_buffer_to_buffer_sync");
+            return -3;
+        }
+        
+        // Validate buffer bounds
+        if ((NSUInteger)(src_offset + size) > srcBuffer.length) {
+            NSLog(@"Source copy would exceed buffer bounds: offset=%d + size=%d > length=%lu", 
+                  src_offset, size, (unsigned long)srcBuffer.length);
+            return -4;
+        }
+        
+        if ((NSUInteger)(dst_offset + size) > dstBuffer.length) {
+            NSLog(@"Destination copy would exceed buffer bounds: offset=%d + size=%d > length=%lu", 
+                  dst_offset, size, (unsigned long)dstBuffer.length);
+            return -5;
+        }
+        
+        // Get device from source buffer for command queue creation
+        id<MTLDevice> device = srcBuffer.device;
+        if (!device) {
+            NSLog(@"Unable to get device from source buffer");
+            return -6;
+        }
+        
+        @try {
+            // Create command queue and buffer for synchronous operation
+            id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+            if (!commandQueue) {
+                NSLog(@"Failed to create command queue for sync copy");
+                return -7;
+            }
+            
+            id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+            if (!commandBuffer) {
+                NSLog(@"Failed to create command buffer for sync copy");
+                return -8;
+            }
+            
+            // Create blit command encoder for efficient buffer copy
+            id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
+            if (!blitEncoder) {
+                NSLog(@"Failed to create blit command encoder for sync copy");
+                return -9;
+            }
+            
+            // Perform the buffer copy operation
+            [blitEncoder copyFromBuffer:srcBuffer
+                           sourceOffset:src_offset
+                               toBuffer:dstBuffer
+                      destinationOffset:dst_offset
+                                   size:size];
+            
+            [blitEncoder endEncoding];
+            
+            // Commit and wait for completion (synchronous)
+            [commandBuffer commit];
+            [commandBuffer waitUntilCompleted];
+            
+            if (commandBuffer.error) {
+                NSLog(@"Command buffer error during sync copy: %@", commandBuffer.error.localizedDescription);
+                return -10;
+            }
+            
+            return 0; // Success
+            
+        } @catch (NSException* exception) {
+            NSLog(@"Exception in copy_buffer_to_buffer_sync: %@", exception.reason);
+            return -11;
+        }
+    }
+}
+
 // Copy data from CPU to staging buffer (CPU-accessible)
 int copy_data_to_staging_buffer(uintptr_t staging_buffer_ptr, void* data, int size) {
     @autoreleasepool {
