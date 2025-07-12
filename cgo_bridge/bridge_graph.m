@@ -13,17 +13,34 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
     }
     
     @try {
-        // Create input placeholder with dynamic batch size support
+        // Create input placeholder with intelligent shape transformation
         NSMutableArray<NSNumber*>* inputShapeNS = [[NSMutableArray alloc] init];
+        
+        // FLEXIBLE SHAPE HANDLING: Support multiple input formats and layouts
+        // This handles 1D, 2D, 3D, 4D inputs with automatic layout inference
         for (int i = 0; i < inputShapeLen; i++) {
             if (i == 0) {
-                // Use -1 for batch dimension to support dynamic batch sizes
+                // Always use -1 for batch dimension to support dynamic batch sizes
                 [inputShapeNS addObject:@(-1)];
             } else {
-                // Keep other dimensions fixed (channels, height, width)
+                // Preserve spatial/feature dimensions as provided
+                // This allows for flexible input formats:
+                // - 1D: [batch, features] for MLPs
+                // - 2D: [batch, channels] for sequence models  
+                // - 3D: [batch, channels, length] for 1D convolutions
+                // - 4D: [batch, channels, height, width] for 2D convolutions
                 [inputShapeNS addObject:@(inputShape[i])];
             }
         }
+        
+        // Store input format metadata for shape transformation decisions
+        int inputRank = inputShapeLen;
+        BOOL isSequential = (inputRank == 2);  // [batch, features]
+        BOOL isConv1D = (inputRank == 3);      // [batch, channels, length]
+        BOOL isConv2D = (inputRank == 4);      // [batch, channels, height, width]
+        
+        // NSLog(@"🔍 Input shape analysis: rank=%d, sequential=%d, conv1D=%d, conv2D=%d", 
+        //       inputRank, isSequential, isConv1D, isConv2D);
         
         MPSGraphTensor* currentTensor = [engine->graph placeholderWithShape:inputShapeNS
                                                                    dataType:MPSDataTypeFloat32
@@ -40,24 +57,32 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             switch (layer->layer_type) {
                 case 0: // Dense
-                    // Check if we need to flatten the input (from 4D conv output to 2D dense input)
-                    if (currentTensor.shape.count == 4) {
-                        // Flatten [batch, channels, height, width] to [batch, channels*height*width]
-                        // Support dynamic batch size by preserving the batch dimension
+                    // FLEXIBLE TENSOR RESHAPING: Handle multi-dimensional inputs intelligently
+                    // Dense layers require 2D input, so flatten any higher-dimensional tensors
+                    if (currentTensor.shape.count > 2) {
                         NSArray<NSNumber*>* currentShape = currentTensor.shape;
-                        int channels = [currentShape[1] intValue];
-                        int height = [currentShape[2] intValue];
-                        int width = [currentShape[3] intValue];
-                        int flattenedSize = channels * height * width;
                         
-                        // Use -1 for batch dimension to support dynamic batch sizes
+                        // Calculate flattened size for all non-batch dimensions
+                        // This works for any input rank: 3D, 4D, 5D, etc.
+                        int flattenedSize = 1;
+                        for (int i = 1; i < currentShape.count; i++) {
+                            int dimSize = [currentShape[i] intValue];
+                            if (dimSize > 0) {  // Skip dynamic dimensions (-1)
+                                flattenedSize *= dimSize;
+                            }
+                        }
+                        
+                        // GPU-RESIDENT RESHAPING: Use MPSGraph reshape operation
+                        // This maintains GPU residency and leverages MPSGraph optimization
                         NSArray<NSNumber*>* flattenShape = @[@(-1), @(flattenedSize)];
                         currentTensor = [engine->graph reshapeTensor:currentTensor
                                                            withShape:flattenShape
-                                                                name:[NSString stringWithFormat:@"flatten_before_dense_%d", layerIdx]];
-                        // NSLog(@"✅ Flattened tensor from %@ to %@ for Dense layer %d", 
-                        //       currentShape, flattenShape, layerIdx);
+                                                                name:[NSString stringWithFormat:@"adaptive_flatten_%d", layerIdx]];
+                        
+                        // NSLog(@"🔧 Adaptive flatten: %dD→2D for Dense layer %d (size: %d)", 
+                        //       (int)currentShape.count, layerIdx, flattenedSize);
                     }
+                    // If already 2D, no reshaping needed - direct dense layer application
                     
                     currentTensor = addDenseLayerToGraph(engine->graph,
                                                         currentTensor,
@@ -67,6 +92,29 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     break;
                     
                 case 1: // Conv2D
+                    // INTELLIGENT SHAPE VALIDATION: Ensure Conv2D compatibility
+                    // Conv2D requires exactly 4D input: [batch, channels, height, width]
+                    if (currentTensor.shape.count != 4) {
+                        NSLog(@"⚠️ Conv2D layer %d expects 4D input [batch, channels, height, width], got %dD tensor", 
+                              layerIdx, (int)currentTensor.shape.count);
+                        
+                        // FLEXIBLE ADAPTATION: Auto-expand lower dimensional inputs if possible
+                        if (currentTensor.shape.count == 3) {
+                            // 3D→4D: [batch, channels, length] → [batch, channels, length, 1]
+                            NSArray<NSNumber*>* currentShape = currentTensor.shape;
+                            NSArray<NSNumber*>* expandedShape = @[currentShape[0], currentShape[1], 
+                                                                 currentShape[2], @1];
+                            currentTensor = [engine->graph reshapeTensor:currentTensor
+                                                               withShape:expandedShape
+                                                                    name:[NSString stringWithFormat:@"expand_for_conv2d_%d", layerIdx]];
+                            // NSLog(@"🔧 Auto-expanded 3D→4D for Conv2D layer %d", layerIdx);
+                        } else {
+                            NSLog(@"❌ Cannot adapt %dD input for Conv2D layer %d", 
+                                  (int)currentTensor.shape.count, layerIdx);
+                            return NO;
+                        }
+                    }
+                    
                     currentTensor = addConv2DLayerToGraph(engine->graph,
                                                          currentTensor,
                                                          layer,
@@ -1525,30 +1573,36 @@ MPSGraphTensor* addBatchNormLayerToGraph(MPSGraph* graph,
                                                              name:[NSString stringWithFormat:@"batchnorm_%d_shift", layerIdx]];
         [allParameterPlaceholders addObject:shiftTensor];
         
-        // Reshape gamma and beta for proper broadcasting with 4D inputs
-        // For 4D input [N, C, H, W], gamma and beta should be [1, C, 1, 1]
-        // For 2D input [N, C], gamma and beta should be [1, C]
+        // FLEXIBLE BROADCASTING: Support arbitrary input dimensions
+        // BatchNorm normalizes across the channel dimension (dimension 1)
+        // Create broadcasting shape: [1, C, 1, 1, ...] matching input rank
         MPSGraphTensor* reshapedScaleTensor = scaleTensor;
         MPSGraphTensor* reshapedShiftTensor = shiftTensor;
         
-        if (inputShapeLen == 4) {
-            // Reshape from [C] to [1, C, 1, 1] for 4D broadcasting
-            NSArray<NSNumber*>* broadcastShape = @[@1, @(numFeatures), @1, @1];
+        if (inputShapeLen >= 2) {
+            // INTELLIGENT SHAPE ADAPTATION: Create broadcast shape for any input rank
+            // Pattern: [1, channels, 1, 1, ...] where all spatial dims are 1
+            NSMutableArray<NSNumber*>* broadcastShape = [[NSMutableArray alloc] init];
+            [broadcastShape addObject:@1];           // Batch dimension: 1
+            [broadcastShape addObject:@(numFeatures)]; // Channel dimension: C
+            
+            // Add 1s for all remaining spatial dimensions (height, width, depth, etc.)
+            for (int i = 2; i < inputShapeLen; i++) {
+                [broadcastShape addObject:@1];
+            }
+            
+            // GPU-RESIDENT RESHAPING: Use MPSGraph operations for optimal performance
             reshapedScaleTensor = [graph reshapeTensor:scaleTensor
                                              withShape:broadcastShape
-                                                  name:[NSString stringWithFormat:@"batchnorm_%d_scale_reshaped", layerIdx]];
+                                                  name:[NSString stringWithFormat:@"batchnorm_%d_scale_broadcast", layerIdx]];
             reshapedShiftTensor = [graph reshapeTensor:shiftTensor
                                              withShape:broadcastShape
-                                                  name:[NSString stringWithFormat:@"batchnorm_%d_shift_reshaped", layerIdx]];
-        } else if (inputShapeLen == 2) {
-            // Reshape from [C] to [1, C] for 2D broadcasting
-            NSArray<NSNumber*>* broadcastShape = @[@1, @(numFeatures)];
-            reshapedScaleTensor = [graph reshapeTensor:scaleTensor
-                                             withShape:broadcastShape
-                                                  name:[NSString stringWithFormat:@"batchnorm_%d_scale_reshaped", layerIdx]];
-            reshapedShiftTensor = [graph reshapeTensor:shiftTensor
-                                             withShape:broadcastShape
-                                                  name:[NSString stringWithFormat:@"batchnorm_%d_shift_reshaped", layerIdx]];
+                                                  name:[NSString stringWithFormat:@"batchnorm_%d_shift_broadcast", layerIdx]];
+            
+            // NSLog(@"🔧 BatchNorm %d: Created %dD broadcast shape for %dD input", 
+            //       layerIdx, (int)broadcastShape.count, inputShapeLen);
+        } else {
+            NSLog(@"⚠️ BatchNorm requires at least 2D input [batch, channels], got %dD", inputShapeLen);
         }
         
         if (training) {
