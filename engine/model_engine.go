@@ -172,6 +172,66 @@ func NewModelTrainingEngineDynamic(
 		}
 	}
 	
+	// For SGD optimizer, initialize the external optimizer state  
+	if config.OptimizerType == cgo_bridge.SGD {
+		sgdConfig := optimizer.SGDConfig{
+			LearningRate: config.LearningRate,
+			Momentum:     config.Beta1, // Beta1 is used as momentum for SGD
+			WeightDecay:  config.WeightDecay,
+			Nesterov:     false, // Standard SGD momentum, not Nesterov
+		}
+		
+		// Get all parameter shapes for SGD initialization (dynamic engine uses all parameters)
+		paramShapes := modelSpec.ParameterShapes
+		sgdOptimizer, err := optimizer.NewSGDOptimizer(
+			sgdConfig,
+			paramShapes,
+			memory.GetGlobalMemoryManager(),
+			baseEngine.device,
+		)
+		if err != nil {
+			baseEngine.Cleanup()
+			return nil, fmt.Errorf("failed to create SGD optimizer for dynamic engine: %v", err)
+		}
+		baseEngine.sgdOptimizer = sgdOptimizer
+		
+		// RESOURCE LEAK FIX: Enable command buffer pooling in SGD optimizer
+		if baseEngine.useCommandPooling && baseEngine.commandQueue != nil {
+			sgdOptimizer.SetCommandPool(baseEngine.commandQueue)
+		}
+	}
+	
+	// For RMSProp optimizer, initialize the external optimizer state  
+	if config.OptimizerType == cgo_bridge.RMSProp {
+		rmspropConfig := optimizer.RMSPropConfig{
+			LearningRate: config.LearningRate,
+			Alpha:        config.Alpha,     // Alpha is the smoothing constant
+			Epsilon:      config.Epsilon,   // Epsilon for numerical stability
+			WeightDecay:  config.WeightDecay,
+			Momentum:     config.Momentum,  // Momentum coefficient
+			Centered:     config.Centered,  // Centered variant flag
+		}
+		
+		// Get all parameter shapes for RMSProp initialization (dynamic engine uses all parameters)
+		paramShapes := modelSpec.ParameterShapes
+		rmspropOptimizer, err := optimizer.NewRMSPropOptimizer(
+			rmspropConfig,
+			paramShapes,
+			memory.GetGlobalMemoryManager(),
+			baseEngine.device,
+		)
+		if err != nil {
+			baseEngine.Cleanup()
+			return nil, fmt.Errorf("failed to create RMSProp optimizer for dynamic engine: %v", err)
+		}
+		baseEngine.rmspropOptimizer = rmspropOptimizer
+		
+		// RESOURCE LEAK FIX: Enable command buffer pooling in RMSProp optimizer
+		if baseEngine.useCommandPooling && baseEngine.commandQueue != nil {
+			rmspropOptimizer.SetCommandPool(baseEngine.commandQueue)
+		}
+	}
+	
 	// Create parameter tensors for the model
 	paramTensors, err := modelSpec.CreateParameterTensors()
 	if err != nil {

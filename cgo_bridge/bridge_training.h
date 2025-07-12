@@ -6,8 +6,8 @@
 // Implementations are in bridge_training.m
 
 // Helper functions
-uintptr_t get_command_buffer_from_pool(uintptr_t command_pool);
-void return_command_buffer_to_pool(uintptr_t command_pool, uintptr_t command_buffer);
+uintptr_t get_command_buffer_from_pool(uintptr_t command_buffer);
+void return_command_buffer_to_pool(uintptr_t command_buffer);
 
 // Basic training step functions
 int execute_training_step(
@@ -46,7 +46,7 @@ int execute_training_step_hybrid_full_pooled(
     uintptr_t* weight_buffers,
     int num_weights,
     float learning_rate,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* loss_out
 );
 
@@ -71,7 +71,7 @@ int execute_training_step_dynamic_with_gradients_pooled(
     uintptr_t* gradient_buffers,
     int num_weights,
     int batch_size,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* loss_out
 );
 
@@ -93,7 +93,7 @@ int execute_training_step_hybrid_with_gradients_pooled(
     uintptr_t* weight_buffers,
     uintptr_t* gradient_buffers,
     int num_weights,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* loss_out
 );
 
@@ -107,7 +107,7 @@ int execute_training_step_sgd_pooled(
     int num_weights,
     float learning_rate,
     int batch_size,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* loss_out
 );
 

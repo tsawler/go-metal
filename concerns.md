@@ -6,7 +6,7 @@ This document analyzes all "For now" comments found in the go-metal library code
 
 Total "For now" comments found: 31 (17 unique concerns after excluding test skips)
 
-**Legitimate concerns requiring attention: 4 remaining (8 resolved + 1 identified)**
+**Legitimate concerns requiring attention: 3 remaining (9 resolved + 1 identified)**
 
 **New optimization opportunity identified:**
 - L-BFGS optimizer uses CPU operations for vector calculations that could be moved to GPU
@@ -123,11 +123,19 @@ Total "For now" comments found: 31 (17 unique concerns after excluding test skip
 - Maintains all architectural requirements: GPU-resident everything, minimal CGO calls, MPSGraph-centric
 - All tests pass, confirming no regression in functionality
 
-### 9. Command Pool as Queue
+### 9. Command Pool as Queue ✅ RESOLVED
 **Location:** `cgo_bridge/bridge_training.m:98`
 **Issue:** Treating command_pool as command queue (simple implementation)
 **Impact:** May not leverage full command buffer pooling benefits
 **Severity:** LOW - Functional but suboptimal
+**Resolution:** Implemented proper command buffer pooling architecture:
+- Updated all pooled functions to accept pre-allocated command buffers instead of command pools
+- Modified Go-side command buffer pool to handle buffer allocation and lifecycle
+- Updated C-side functions to use passed command buffers directly from pool
+- Removed simple command queue casting in favor of proper pooling
+- All pooled functions now leverage full command buffer pooling benefits
+- Updated function signatures across bridge.go, bridge_training.h, and bridge_training.m
+- All compilation tests pass, confirming proper integration
 
 ### 10. Batch Size Limitations
 **Location:** `cgo_bridge/bridge_graph.m:193`

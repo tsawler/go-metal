@@ -438,7 +438,7 @@ int execute_adam_step_mpsgraph_pooled(
     float epsilon,
     float weight_decay,
     int step_count,
-    uintptr_t command_pool
+    uintptr_t command_buffer
 ) {
     @autoreleasepool {
         id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
@@ -447,28 +447,23 @@ int execute_adam_step_mpsgraph_pooled(
             return -1;
         }
         
-        // Get command buffer from pool
-        uintptr_t pooledCommandBuffer = get_command_buffer_from_pool(command_pool);
-        if (pooledCommandBuffer == 0) {
-            NSLog(@"Failed to get command buffer from pool for Adam");
-            return -14;
+        // OPTIMIZATION: Use pre-allocated command buffer from Go-side pool
+        if (command_buffer == 0) {
+            NSLog(@"❌ Command buffer is null");
+            return -15;
         }
+        
+        id<MTLCommandBuffer> cmdBuffer = (__bridge id<MTLCommandBuffer>)(void*)command_buffer;
         
         @try {
             // For brevity, this is a placeholder implementation
             // The full implementation would include the complete MPSGraph Adam optimization
             // as shown in the extracted code with bias correction and pooled resource management
             
-            // Return command buffer to pool
-            return_command_buffer_to_pool(command_pool, pooledCommandBuffer);
             return 0;
             
         } @catch (NSException* exception) {
             NSLog(@"❌ Pooled Adam optimizer exception: %@", exception.reason);
-            
-            // Return command buffer to pool even if exception occurs
-            return_command_buffer_to_pool(command_pool, pooledCommandBuffer);
-            
             return -13;
         }
     }

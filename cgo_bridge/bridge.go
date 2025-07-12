@@ -93,7 +93,7 @@ int execute_training_step_hybrid_full_pooled(
     uintptr_t* weight_buffers,
     int num_weights,
     float learning_rate,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* loss_out
 );
 uintptr_t allocate_metal_buffer(uintptr_t device, int size, int device_type);
@@ -133,7 +133,7 @@ int execute_adam_step_mpsgraph_pooled(
     float epsilon,
     float weight_decay,
     int step_count,
-    uintptr_t command_pool
+    uintptr_t command_buffer
 );
 
 // RESOURCE LEAK FIX: Pooled version for Adam gradient computation
@@ -144,7 +144,7 @@ int execute_training_step_hybrid_with_gradients_pooled(
     uintptr_t* weight_buffers,
     uintptr_t* gradient_buffers,
     int num_weights,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* loss_out
 );
 
@@ -270,7 +270,7 @@ int execute_training_step_dynamic_with_gradients_pooled(
     uintptr_t* gradient_buffers,
     int num_weights,
     int batch_size,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* loss_out
 );
 
@@ -284,7 +284,7 @@ int execute_training_step_sgd_pooled(
     int num_weights,
     float learning_rate,
     int batch_size,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* loss_out
 );
 
@@ -299,8 +299,8 @@ void setup_autorelease_pool();
 void drain_autorelease_pool();
 
 // RESOURCE LEAK FIX: Command buffer pool management functions for Metal level
-uintptr_t get_command_buffer_from_pool(uintptr_t command_pool);
-void return_command_buffer_to_pool(uintptr_t command_pool, uintptr_t command_buffer);
+uintptr_t get_command_buffer_from_pool(uintptr_t command_buffer);
+void return_command_buffer_to_pool(uintptr_t command_buffer);
 
 // RMSProp optimizer functions
 int execute_rmsprop_step_mpsgraph(
@@ -367,7 +367,7 @@ int execute_lbfgs_step_mpsgraph_pooled(
     int max_line_search,
     float current_loss,
     float prev_loss,
-    uintptr_t command_pool,
+    uintptr_t command_buffer,
     float* step_size
 );
 
@@ -394,7 +394,7 @@ int execute_adagrad_step_mpsgraph_pooled(
     float learning_rate,
     float epsilon,
     float weight_decay,
-    uintptr_t command_pool
+    uintptr_t command_buffer
 );
 
 // AdaDelta optimizer forward declarations
@@ -422,7 +422,7 @@ int execute_adadelta_step_mpsgraph_pooled(
     float rho,
     float epsilon,
     float weight_decay,
-    uintptr_t command_pool
+    uintptr_t command_buffer
 );
 
 int execute_nadam_step_mpsgraph(
@@ -1680,7 +1680,7 @@ func ExecuteTrainingStepHybridFullPooled(
 	labelBuffer unsafe.Pointer,
 	weightBuffers []unsafe.Pointer,
 	learningRate float32,
-	commandPool unsafe.Pointer,
+	commandBuffer unsafe.Pointer,
 ) (float32, error) {
 	if engine == nil {
 		return 0, fmt.Errorf("engine cannot be nil")
@@ -1690,8 +1690,8 @@ func ExecuteTrainingStepHybridFullPooled(
 		return 0, fmt.Errorf("input or label buffer cannot be nil")
 	}
 	
-	if commandPool == nil {
-		return 0, fmt.Errorf("command pool cannot be nil")
+	if commandBuffer == nil {
+		return 0, fmt.Errorf("command buffer cannot be nil")
 	}
 	
 	if len(weightBuffers) == 0 {
@@ -1712,7 +1712,7 @@ func ExecuteTrainingStepHybridFullPooled(
 		&weightPtrs[0],
 		C.int(len(weightBuffers)),
 		C.float(learningRate),
-		C.uintptr_t(uintptr(commandPool)),
+		C.uintptr_t(uintptr(commandBuffer)),
 		(*C.float)(unsafe.Pointer(&loss)),
 	)
 	
@@ -1738,13 +1738,12 @@ func GetCommandBufferFromPool(commandPool unsafe.Pointer) (unsafe.Pointer, error
 }
 
 // ReturnCommandBufferToPool returns a command buffer to the pool (Metal level interface)
-func ReturnCommandBufferToPool(commandPool unsafe.Pointer, commandBuffer unsafe.Pointer) {
-	if commandPool == nil || commandBuffer == nil {
+func ReturnCommandBufferToPool(commandBuffer unsafe.Pointer) {
+	if commandBuffer == nil {
 		return
 	}
 	
 	C.return_command_buffer_to_pool(
-		C.uintptr_t(uintptr(commandPool)),
 		C.uintptr_t(uintptr(commandBuffer)),
 	)
 }

@@ -15,6 +15,21 @@ type CommandBuffer struct {
 	id     int            // Unique identifier for debugging
 }
 
+// GetBuffer returns the underlying Metal command buffer pointer
+func (cb *CommandBuffer) GetBuffer() unsafe.Pointer {
+	return cb.buffer
+}
+
+// GetID returns the unique identifier for debugging
+func (cb *CommandBuffer) GetID() int {
+	return cb.id
+}
+
+// IsInUse returns whether the buffer is currently in use
+func (cb *CommandBuffer) IsInUse() bool {
+	return cb.inUse
+}
+
 // CommandBufferPool manages a pool of Metal command buffers for reuse
 type CommandBufferPool struct {
 	commandQueue  unsafe.Pointer       // MTLCommandQueue
