@@ -108,6 +108,10 @@ func (oe *ONNXExporter) buildONNXGraph(checkpoint *Checkpoint) (*GraphProto, err
 			nodes, currentTensorName, err = oe.createSoftmaxNode(layerSpec, currentTensorName, layerIdx)
 		case layers.Sigmoid:
 			nodes, currentTensorName, err = oe.createSigmoidNode(layerSpec, currentTensorName, layerIdx)
+		case layers.Tanh:
+			nodes, currentTensorName, err = oe.createTanhNode(layerSpec, currentTensorName, layerIdx)
+		case layers.Swish:
+			nodes, currentTensorName, err = oe.createSwishNode(layerSpec, currentTensorName, layerIdx)
 		default:
 			return nil, fmt.Errorf("unsupported layer type for ONNX export: %s", layerSpec.Type.String())
 		}
@@ -285,6 +289,46 @@ func (oe *ONNXExporter) createSigmoidNode(layerSpec layers.LayerSpec, inputTenso
 	}
 	
 	return []*NodeProto{sigmoidNode}, outputTensor, nil
+}
+
+// createTanhNode creates ONNX Tanh node
+func (oe *ONNXExporter) createTanhNode(layerSpec layers.LayerSpec, inputTensor string, layerIdx int) ([]*NodeProto, string, error) {
+	layerName := layerSpec.Name
+	outputTensor := fmt.Sprintf("%s_output", layerName)
+	
+	tanhNode := &NodeProto{
+		OpType: "Tanh",
+		Name:   layerName,
+		Input:  []string{inputTensor},
+		Output: []string{outputTensor},
+	}
+	
+	return []*NodeProto{tanhNode}, outputTensor, nil
+}
+
+// createSwishNode creates ONNX Swish node (implemented as x * Sigmoid(x))
+func (oe *ONNXExporter) createSwishNode(layerSpec layers.LayerSpec, inputTensor string, layerIdx int) ([]*NodeProto, string, error) {
+	layerName := layerSpec.Name
+	sigmoidOutput := fmt.Sprintf("%s_sigmoid", layerName)
+	outputTensor := fmt.Sprintf("%s_output", layerName)
+	
+	// Create Sigmoid node: Sigmoid(x)
+	sigmoidNode := &NodeProto{
+		OpType: "Sigmoid",
+		Name:   fmt.Sprintf("%s_sigmoid_op", layerName),
+		Input:  []string{inputTensor},
+		Output: []string{sigmoidOutput},
+	}
+	
+	// Create Multiply node: x * Sigmoid(x)
+	multiplyNode := &NodeProto{
+		OpType: "Mul",
+		Name:   layerName,
+		Input:  []string{inputTensor, sigmoidOutput},
+		Output: []string{outputTensor},
+	}
+	
+	return []*NodeProto{sigmoidNode, multiplyNode}, outputTensor, nil
 }
 
 // createBatchNormNode creates ONNX BatchNormalization node
@@ -587,6 +631,8 @@ func (oi *ONNXImporter) convertONNXNodeToLayer(node *NodeProto, weightMap map[st
 		return oi.convertLeakyReluNode(node), weights, nil
 	case "Sigmoid":
 		return oi.convertSigmoidNode(node), weights, nil
+	case "Tanh":
+		return oi.convertTanhNode(node), weights, nil
 	case "BatchNormalization":
 		return oi.convertBatchNormNode(node, weightMap, shapeMap, &weights)
 	case "Dropout":
@@ -863,6 +909,14 @@ func (oi *ONNXImporter) convertLeakyReluNode(node *NodeProto) *layers.LayerSpec 
 func (oi *ONNXImporter) convertSigmoidNode(node *NodeProto) *layers.LayerSpec {
 	return &layers.LayerSpec{
 		Type:       layers.Sigmoid,
+		Name:       node.Name,
+		Parameters: map[string]interface{}{},
+	}
+}
+
+func (oi *ONNXImporter) convertTanhNode(node *NodeProto) *layers.LayerSpec {
+	return &layers.LayerSpec{
+		Type:       layers.Tanh,
 		Name:       node.Name,
 		Parameters: map[string]interface{}{},
 	}

@@ -10,7 +10,7 @@ import (
 func main() {
 	fmt.Println("=== Go-Metal Tanh Activation Function Demo ===")
 	fmt.Println("Demonstrating Tanh activation: tanh(x) = (e^x - e^(-x))/(e^x + e^(-x))")
-	fmt.Println("Output range: (-1, 1) - zero-centered outputs\n")
+	fmt.Println("Output range: (-1, 1) - zero-centered outputs")
 
 	// Test 1: Simple MLP with Tanh activation for zero-centered outputs
 	fmt.Println("📋 Creating zero-centered neural network with Tanh...")

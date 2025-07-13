@@ -20,6 +20,8 @@ const (
 	LeakyReLU
 	ELU
 	Sigmoid
+	Tanh
+	Swish
 )
 
 func (lt LayerType) String() string {
@@ -44,6 +46,10 @@ func (lt LayerType) String() string {
 		return "ELU"
 	case Sigmoid:
 		return "Sigmoid"
+	case Tanh:
+		return "Tanh"
+	case Swish:
+		return "Swish"
 	default:
 		return "Unknown"
 	}
@@ -168,6 +174,24 @@ func (lf *LayerFactory) CreateELUSpec(alpha float32, name string) LayerSpec {
 func (lf *LayerFactory) CreateSigmoidSpec(name string) LayerSpec {
 	return LayerSpec{
 		Type:       Sigmoid,
+		Name:       name,
+		Parameters: map[string]interface{}{},
+	}
+}
+
+// CreateTanhSpec creates a Tanh activation specification
+func (lf *LayerFactory) CreateTanhSpec(name string) LayerSpec {
+	return LayerSpec{
+		Type:       Tanh,
+		Name:       name,
+		Parameters: map[string]interface{}{},
+	}
+}
+
+// CreateSwishSpec creates a Swish activation specification
+func (lf *LayerFactory) CreateSwishSpec(name string) LayerSpec {
+	return LayerSpec{
+		Type:       Swish,
 		Name:       name,
 		Parameters: map[string]interface{}{},
 	}
@@ -353,6 +377,28 @@ func (mb *ModelBuilder) AddSigmoid(name string) *ModelBuilder {
 	return mb.AddLayer(layer)
 }
 
+// AddTanh adds a Tanh activation to the model
+// Tanh(x) = (e^x - e^(-x))/(e^x + e^(-x)) - outputs values between -1 and 1
+func (mb *ModelBuilder) AddTanh(name string) *ModelBuilder {
+	layer := LayerSpec{
+		Type:       Tanh,
+		Name:       name,
+		Parameters: map[string]interface{}{},
+	}
+	return mb.AddLayer(layer)
+}
+
+// AddSwish adds a Swish activation to the model
+// Swish(x) = x * Sigmoid(x) - smooth activation with improved gradient flow
+func (mb *ModelBuilder) AddSwish(name string) *ModelBuilder {
+	layer := LayerSpec{
+		Type:       Swish,
+		Name:       name,
+		Parameters: map[string]interface{}{},
+	}
+	return mb.AddLayer(layer)
+}
+
 // Compile compiles the model and computes shapes and parameter counts
 func (mb *ModelBuilder) Compile() (*ModelSpec, error) {
 	if len(mb.layers) == 0 {
@@ -415,7 +461,7 @@ func (mb *ModelBuilder) computeLayerInfo(layer *LayerSpec, inputShape []int) ([]
 		return mb.computeConv2DInfo(layer, inputShape)
 	case BatchNorm:
 		return mb.computeBatchNormInfo(layer, inputShape)
-	case ReLU, Softmax, Dropout, LeakyReLU, ELU, Sigmoid:
+	case ReLU, Softmax, Dropout, LeakyReLU, ELU, Sigmoid, Tanh, Swish:
 		return mb.computeActivationInfo(layer, inputShape)
 	default:
 		return nil, nil, 0, fmt.Errorf("unsupported layer type: %s", layer.Type.String())
@@ -759,7 +805,7 @@ func (ms *ModelSpec) validateLayerForDynamicEngine(layer LayerSpec, index int) e
 			}
 		}
 		
-	case ReLU, Softmax, LeakyReLU, ELU, Sigmoid:
+	case ReLU, Softmax, LeakyReLU, ELU, Sigmoid, Tanh, Swish:
 		// Activation layers don't require specific parameters
 		
 	case MaxPool2D:
@@ -1161,6 +1207,14 @@ func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
 			// Sigmoid has no parameters
 			break
 			
+		case Tanh:
+			// Tanh has no parameters
+			break
+			
+		case Swish:
+			// Swish has no parameters
+			break
+			
 		case LeakyReLU:
 			// Leaky ReLU parameters: negative_slope
 			negativeSlope := getFloatParam(layer.Parameters, "negative_slope", 0.01)
@@ -1348,6 +1402,18 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamIntCount = 0
 			spec.ParamFloatCount = 0
 			// Shape unchanged for Sigmoid
+
+		case Tanh:
+			spec.LayerType = 10 // Tanh = 10 in Go enum (next available after Sigmoid=9)
+			spec.ParamIntCount = 0
+			spec.ParamFloatCount = 0
+			// Shape unchanged for Tanh
+
+		case Swish:
+			spec.LayerType = 11 // Swish = 11 in Go enum (next available after Tanh=10)
+			spec.ParamIntCount = 0
+			spec.ParamFloatCount = 0
+			// Shape unchanged for Swish
 
 		case Softmax:
 			spec.LayerType = 3 // Softmax = 3 in C

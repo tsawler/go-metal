@@ -14,7 +14,7 @@ import (
 func main() {
 	fmt.Println("=== Dynamic Batch Size Demo ===")
 	fmt.Println("This demo showcases the dynamic batch size functionality")
-	fmt.Println("where the same model can process different batch sizes without recompilation.\n")
+	fmt.Println("where the same model can process different batch sizes without recompilation.")
 
 	// Initialize random seed for reproducible results
 	rand.Seed(42)
@@ -66,13 +66,13 @@ func main() {
 	}
 	defer engine.Cleanup()
 
-	fmt.Println("✅ Dynamic training engine created successfully\n")
+	fmt.Println("✅ Dynamic training engine created successfully")
 
 	// Test different batch sizes
 	testBatchSizes := []int{4, 8, 16, 24, 32}
 	
 	fmt.Println("🚀 Testing dynamic batch size functionality...")
-	fmt.Println("Testing the same model with different batch sizes without recompilation:\n")
+	fmt.Println("Testing the same model with different batch sizes without recompilation:")
 
 	for i, batchSize := range testBatchSizes {
 		fmt.Printf("--- Test %d: Batch Size %d ---\n", i+1, batchSize)
@@ -119,7 +119,7 @@ func main() {
 
 	// Demonstrate mixed batch size training
 	fmt.Println("🔄 Demonstrating mixed batch size training in a single session...")
-	fmt.Println("Training with varying batch sizes to show true dynamic capability:\n")
+	fmt.Println("Training with varying batch sizes to show true dynamic capability:")
 
 	for epoch := 1; epoch <= 3; epoch++ {
 		fmt.Printf("Epoch %d:\n", epoch)

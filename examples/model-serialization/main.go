@@ -12,7 +12,7 @@ import (
 func main() {
 	fmt.Println("=== Go-Metal Checkpoint Demo ===")
 	fmt.Println("Demonstrating checkpoint saving & loading functionality")
-	fmt.Println("Supports both JSON and ONNX formats for PyTorch interoperability\n")
+	fmt.Println("Supports both JSON and ONNX formats for PyTorch interoperability")
 
 	// Create a simple neural network for demonstration
 	inputShape := []int{32, 1, 28, 28} // Batch=32, MNIST-like input

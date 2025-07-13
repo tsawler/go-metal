@@ -229,6 +229,27 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     }
                     break;
                     
+                case 10: // Tanh
+                    {
+                        // Tanh(x) = (e^x - e^(-x)) / (e^x + e^(-x))
+                        // Using MPSGraph's built-in tanh operation for optimal performance
+                        currentTensor = [engine->graph tanhWithTensor:currentTensor
+                                                                 name:[NSString stringWithFormat:@"tanh_%d", layerIdx]];
+                    }
+                    break;
+                    
+                case 11: // Swish
+                    {
+                        // Swish(x) = x * Sigmoid(x)
+                        // Using MPSGraph operations for optimal performance and automatic differentiation
+                        MPSGraphTensor* sigmoidTensor = [engine->graph sigmoidWithTensor:currentTensor
+                                                                                    name:[NSString stringWithFormat:@"swish_sigmoid_%d", layerIdx]];
+                        currentTensor = [engine->graph multiplicationWithPrimaryTensor:currentTensor
+                                                                       secondaryTensor:sigmoidTensor
+                                                                                  name:[NSString stringWithFormat:@"swish_%d", layerIdx]];
+                    }
+                    break;
+                    
                 default:
                     NSLog(@"Unsupported layer type: %d", layer->layer_type);
                     return NO;

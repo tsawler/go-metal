@@ -119,8 +119,22 @@ This phase prioritizes resolving existing limitations and implementing fundament
         * ✅ **Architecture Compliance:** Maintains all four core requirements (GPU-resident, minimal CGO, MPSGraph-centric, memory management)
         * ✅ **Comprehensive Demo:** Complete sample application with binary classification examples and architecture verification
         * **Use Cases:** Binary classification probability outputs, legacy neural networks, LSTM gating mechanisms, probability mapping
-      * **Tanh:** Implement tanh(x) = (e^x - e^(-x))/(e^x + e^(-x)) activation function with MPSGraph integration for zero-centered outputs
-      * **Swish:** Implement Swish(x) = x * σ(x) activation function with MPSGraph integration for improved gradient flow in deep networks
+      * ✅ **Tanh:** **COMPLETED** - Implemented tanh(x) = (e^x - e^(-x))/(e^x + e^(-x)) activation function with complete MPSGraph integration for zero-centered outputs
+        * ✅ **MPSGraph Integration:** Uses native `tanhWithTensor` operation for optimal performance and automatic differentiation
+        * ✅ **Complete Layer Support:** LayerType enum, factory methods, ModelBuilder integration, shape computation, and parameter handling
+        * ✅ **CGO Bridge Implementation:** Added case 10 in bridge_graph.m with proper Metal Performance Shaders integration
+        * ✅ **ONNX Compatibility:** Full export/import support with standard ONNX "Tanh" operator
+        * ✅ **Checkpoint Support:** Complete serialization support in both JSON and ONNX formats
+        * ✅ **Architecture Compliance:** Maintains all four core requirements (GPU-resident, minimal CGO, MPSGraph-centric, memory management)
+        * **Use Cases:** Zero-centered activations, traditional neural networks, balanced gradient flow, symmetric activation response
+      * ✅ **Swish:** **COMPLETED** - Implemented Swish(x) = x * σ(x) activation function with complete MPSGraph integration for improved gradient flow in deep networks
+        * ✅ **MPSGraph Integration:** Uses combination of `sigmoidWithTensor` and `multiplicationWithPrimaryTensor` operations for optimal performance
+        * ✅ **Complete Layer Support:** LayerType enum, factory methods, ModelBuilder integration, shape computation, and parameter handling
+        * ✅ **CGO Bridge Implementation:** Added case 11 in bridge_graph.m with proper Metal Performance Shaders integration
+        * ✅ **ONNX Compatibility:** Full export/import support with multi-node implementation (Sigmoid + Multiply)
+        * ✅ **Checkpoint Support:** Complete serialization support in both JSON and ONNX formats
+        * ✅ **Architecture Compliance:** Maintains all four core requirements (GPU-resident, minimal CGO, MPSGraph-centric, memory management)
+        * **Use Cases:** Modern deep networks, improved gradient flow, smooth activation curves, self-gating mechanisms
       * **GELU:** Implement GELU(x) = x * Φ(x) activation function with MPSGraph integration for Transformer architectures and modern NLP models
 
     * **Further Performance Optimization:** Continuously profile and optimize existing components to squeeze out additional performance gains.

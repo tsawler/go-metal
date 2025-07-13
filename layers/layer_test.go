@@ -87,8 +87,7 @@ func TestDropoutLayer(t *testing.T) {
 		t.Fatalf("Failed to compile model with Dropout: %v", err)
 	}
 	
-	fmt.Printf("✅ Model with Dropout compiled successfully\n")
-	fmt.Printf("Total layers: %d\n", len(model.Layers))
+	// Model compiled successfully - only report if test passes
 	
 	// Test 2: Verify Dropout layer parameters
 	var dropoutLayer *layers.LayerSpec
@@ -120,7 +119,7 @@ func TestDropoutLayer(t *testing.T) {
 		t.Errorf("Expected training mode true, got %v", training)
 	}
 	
-	fmt.Printf("✅ Dropout parameters verified: rate=%.1f, training=%v\n", rate, training)
+	// Dropout parameters verified - silent success
 	
 	// Test 3: Verify Dropout has no parameters
 	if dropoutLayer.ParameterCount != 0 {
@@ -2032,4 +2031,284 @@ func TestSerializationEdgeCases(t *testing.T) {
 	
 	fmt.Println("✅ Serialization correctly rejected uncompiled model")
 	fmt.Println("✅ Serialization edge cases test completed successfully!")
+}
+
+// TestSigmoidLayer tests the Sigmoid layer functionality
+func TestSigmoidLayer(t *testing.T) {
+	// Test 1: Sigmoid layer creation
+	inputShape := []int{32, 128} // 2D input
+	builder := layers.NewModelBuilder(inputShape)
+	
+	model, err := builder.
+		AddDense(64, true, "dense1").
+		AddSigmoid("sigmoid1").                    // Add Sigmoid activation
+		AddDense(1, true, "output").
+		Compile()
+	
+	if err != nil {
+		t.Fatalf("Failed to compile model with Sigmoid: %v", err)
+	}
+	
+	// Test 2: Verify Sigmoid layer has no parameters
+	sigmoidLayer := model.Layers[1] // Second layer is Sigmoid
+	if sigmoidLayer.Type != layers.Sigmoid {
+		t.Fatalf("Expected Sigmoid layer, got %s", sigmoidLayer.Type.String())
+	}
+	
+	if sigmoidLayer.ParameterCount != 0 {
+		t.Errorf("Expected Sigmoid to have 0 parameters, got %d", sigmoidLayer.ParameterCount)
+	}
+	
+	// Test 3: Verify Sigmoid doesn't change shape
+	expectedInputShape := []int{32, 64}  // Output of previous Dense layer
+	expectedOutputShape := []int{32, 64} // Should be unchanged
+	
+	if len(sigmoidLayer.InputShape) != len(expectedInputShape) {
+		t.Errorf("Sigmoid changed tensor rank: input %d, output %d", len(expectedInputShape), len(sigmoidLayer.InputShape))
+	}
+	
+	for i, dim := range sigmoidLayer.InputShape {
+		if dim != expectedInputShape[i] {
+			t.Errorf("Sigmoid input shape mismatch at dimension %d: expected %d, got %d", i, expectedInputShape[i], dim)
+		}
+	}
+	
+	for i, dim := range sigmoidLayer.OutputShape {
+		if dim != expectedOutputShape[i] {
+			t.Errorf("Sigmoid output shape mismatch at dimension %d: expected %d, got %d", i, expectedOutputShape[i], dim)
+		}
+	}
+	
+	// Test 4: Verify Sigmoid serialization
+	serialized, err := model.SerializeForCGO()
+	if err != nil {
+		t.Fatalf("Failed to serialize model with Sigmoid: %v", err)
+	}
+	
+	// Find Sigmoid layer in serialized format
+	foundSigmoid := false
+	for _, layer := range serialized.Layers {
+		if layer.LayerType == 9 { // Sigmoid = 9 in Go enum
+			foundSigmoid = true
+			
+			if len(layer.ParamFloat) != 0 {
+				t.Errorf("Sigmoid should have 0 float params, got %d", len(layer.ParamFloat))
+			}
+			if len(layer.ParamInt) != 0 {
+				t.Errorf("Sigmoid should have 0 int params, got %d", len(layer.ParamInt))
+			}
+			break
+		}
+	}
+	
+	if !foundSigmoid {
+		t.Fatalf("Sigmoid layer not found in serialized model")
+	}
+}
+
+// TestTanhLayer tests the Tanh layer functionality  
+func TestTanhLayer(t *testing.T) {
+	
+	// Test 1: Tanh layer creation
+	inputShape := []int{32, 128} // 2D input
+	builder := layers.NewModelBuilder(inputShape)
+	
+	model, err := builder.
+		AddDense(64, true, "dense1").
+		AddTanh("tanh1").                         // Add Tanh activation
+		AddDense(1, true, "output").
+		Compile()
+	
+	if err != nil {
+		t.Fatalf("Failed to compile model with Tanh: %v", err)
+	}
+	
+	
+	// Test 2: Verify Tanh layer has no parameters
+	tanhLayer := model.Layers[1] // Second layer is Tanh
+	if tanhLayer.Type != layers.Tanh {
+		t.Fatalf("Expected Tanh layer, got %s", tanhLayer.Type.String())
+	}
+	
+	if tanhLayer.ParameterCount != 0 {
+		t.Errorf("Expected Tanh to have 0 parameters, got %d", tanhLayer.ParameterCount)
+	}
+	
+	// Test 3: Verify Tanh doesn't change shape
+	expectedInputShape := []int{32, 64}  // Output of previous Dense layer
+	expectedOutputShape := []int{32, 64} // Should be unchanged
+	
+	if len(tanhLayer.InputShape) != len(expectedInputShape) {
+		t.Errorf("Tanh changed tensor rank: input %d, output %d", len(expectedInputShape), len(tanhLayer.InputShape))
+	}
+	
+	for i, dim := range tanhLayer.InputShape {
+		if dim != expectedInputShape[i] {
+			t.Errorf("Tanh input shape mismatch at dimension %d: expected %d, got %d", i, expectedInputShape[i], dim)
+		}
+	}
+	
+	for i, dim := range tanhLayer.OutputShape {
+		if dim != expectedOutputShape[i] {
+			t.Errorf("Tanh output shape mismatch at dimension %d: expected %d, got %d", i, expectedOutputShape[i], dim)
+		}
+	}
+	
+	
+	// Test 4: Verify Tanh serialization
+	serialized, err := model.SerializeForCGO()
+	if err != nil {
+		t.Fatalf("Failed to serialize model with Tanh: %v", err)
+	}
+	
+	// Find Tanh layer in serialized format
+	foundTanh := false
+	for _, layer := range serialized.Layers {
+		if layer.LayerType == 10 { // Tanh = 10 in Go enum
+			foundTanh = true
+			
+			if len(layer.ParamFloat) != 0 {
+				t.Errorf("Tanh should have 0 float params, got %d", len(layer.ParamFloat))
+			}
+			if len(layer.ParamInt) != 0 {
+				t.Errorf("Tanh should have 0 int params, got %d", len(layer.ParamInt))
+			}
+			break
+		}
+	}
+	
+	if !foundTanh {
+		t.Fatalf("Tanh layer not found in serialized model")
+	}
+	
+}
+
+// TestSwishLayer tests the Swish layer functionality
+func TestSwishLayer(t *testing.T) {
+	
+	// Test 1: Swish layer creation
+	inputShape := []int{32, 128} // 2D input
+	builder := layers.NewModelBuilder(inputShape)
+	
+	model, err := builder.
+		AddDense(64, true, "dense1").
+		AddSwish("swish1").                       // Add Swish activation
+		AddDense(1, true, "output").
+		Compile()
+	
+	if err != nil {
+		t.Fatalf("Failed to compile model with Swish: %v", err)
+	}
+	
+	
+	// Test 2: Verify Swish layer has no parameters
+	swishLayer := model.Layers[1] // Second layer is Swish
+	if swishLayer.Type != layers.Swish {
+		t.Fatalf("Expected Swish layer, got %s", swishLayer.Type.String())
+	}
+	
+	if swishLayer.ParameterCount != 0 {
+		t.Errorf("Expected Swish to have 0 parameters, got %d", swishLayer.ParameterCount)
+	}
+	
+	// Test 3: Verify Swish doesn't change shape
+	expectedInputShape := []int{32, 64}  // Output of previous Dense layer
+	expectedOutputShape := []int{32, 64} // Should be unchanged
+	
+	if len(swishLayer.InputShape) != len(expectedInputShape) {
+		t.Errorf("Swish changed tensor rank: input %d, output %d", len(expectedInputShape), len(swishLayer.InputShape))
+	}
+	
+	for i, dim := range swishLayer.InputShape {
+		if dim != expectedInputShape[i] {
+			t.Errorf("Swish input shape mismatch at dimension %d: expected %d, got %d", i, expectedInputShape[i], dim)
+		}
+	}
+	
+	for i, dim := range swishLayer.OutputShape {
+		if dim != expectedOutputShape[i] {
+			t.Errorf("Swish output shape mismatch at dimension %d: expected %d, got %d", i, expectedOutputShape[i], dim)
+		}
+	}
+	
+	
+	// Test 4: Verify Swish serialization
+	serialized, err := model.SerializeForCGO()
+	if err != nil {
+		t.Fatalf("Failed to serialize model with Swish: %v", err)
+	}
+	
+	// Find Swish layer in serialized format
+	foundSwish := false
+	for _, layer := range serialized.Layers {
+		if layer.LayerType == 11 { // Swish = 11 in Go enum
+			foundSwish = true
+			
+			if len(layer.ParamFloat) != 0 {
+				t.Errorf("Swish should have 0 float params, got %d", len(layer.ParamFloat))
+			}
+			if len(layer.ParamInt) != 0 {
+				t.Errorf("Swish should have 0 int params, got %d", len(layer.ParamInt))
+			}
+			break
+		}
+	}
+	
+	if !foundSwish {
+		t.Fatalf("Swish layer not found in serialized model")
+	}
+	
+}
+
+// TestAllActivationFunctions tests all activation functions together
+func TestAllActivationFunctions(t *testing.T) {
+	
+	// Test comprehensive model with all activations
+	inputShape := []int{32, 64}
+	builder := layers.NewModelBuilder(inputShape)
+	
+	model, err := builder.
+		AddDense(32, true, "dense1").
+		AddReLU("relu1").
+		AddDense(32, true, "dense2").
+		AddSigmoid("sigmoid1").
+		AddDense(32, true, "dense3").
+		AddTanh("tanh1").
+		AddDense(32, true, "dense4").
+		AddSwish("swish1").
+		AddDense(16, true, "dense5").
+		AddLeakyReLU(0.1, "leaky_relu1").
+		AddDense(8, true, "dense6").
+		AddELU(1.0, "elu1").
+		AddDense(1, true, "output").
+		Compile()
+	
+	if err != nil {
+		t.Fatalf("Failed to create comprehensive model: %v", err)
+	}
+	
+	
+	// Verify all activation types are present
+	activationTypes := []layers.LayerType{
+		layers.ReLU, layers.Sigmoid, layers.Tanh, layers.Swish, layers.LeakyReLU, layers.ELU,
+	}
+	
+	foundActivations := make(map[layers.LayerType]bool)
+	for _, layer := range model.Layers {
+		for _, activationType := range activationTypes {
+			if layer.Type == activationType {
+				foundActivations[activationType] = true
+			}
+		}
+	}
+	
+	for _, activationType := range activationTypes {
+		if !foundActivations[activationType] {
+			t.Errorf("Activation function %s not found in model", activationType.String())
+		} else {
+			fmt.Printf("   ✅ %s activation found\n", activationType.String())
+		}
+	}
+	
+	fmt.Println("✅ All activation functions test completed successfully!")
 }

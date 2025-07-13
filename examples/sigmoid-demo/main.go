@@ -10,7 +10,7 @@ import (
 func main() {
 	fmt.Println("=== Go-Metal Sigmoid Activation Function Demo ===")
 	fmt.Println("Demonstrating Sigmoid activation: σ(x) = 1/(1+e^(-x))")
-	fmt.Println("Output range: (0, 1) - ideal for binary classification\n")
+	fmt.Println("Output range: (0, 1) - ideal for binary classification")
 
 	// Test 1: Simple MLP with Sigmoid activation for binary classification
 	fmt.Println("📋 Creating binary classification model with Sigmoid...")

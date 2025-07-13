@@ -29,7 +29,7 @@ Why did I build this? I wanted to increase my knowledge in Machine Learning, and
 - **Broadcasting**: NumPy/PyTorch-style broadcasting for all operations
 - **Element-wise Operations**: Add, Sub, Mul, Div with GPU acceleration
 - **Matrix Operations**: High-performance GPU matrix multiplication
-- **Activation Functions**: ReLU, Softmax, LeakyReLU, ELU, Sigmoid with Metal implementations
+- **Activation Functions**: ReLU, Softmax, LeakyReLU, ELU, Sigmoid, Tanh, Swish with Metal implementations
 
 ### Deep Learning Components
 - **Neural Network Layers**: Linear, Conv2D, MaxPool2D, BatchNorm, Flatten
@@ -310,7 +310,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ### Areas for Contribution
 - More neural network layers (LSTM, Transformer blocks)
-- Additional activation functions (Tanh, Swish, GELU)
+- Additional activation functions (GELU)
 - Model serialization formats
 - Performance optimizations
 - Advanced optimization techniques (learning rate scheduling, gradient clipping)
