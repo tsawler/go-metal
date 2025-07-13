@@ -199,3 +199,7 @@ After running this example:
 ---
 
 **This example demonstrates Go-Metal's capability to handle real-world computer vision tasks with performance competitive with established ML frameworks!** 🚀
+
+# Credits
+This example uses the Kaggle Cats vs. Dogs imageset. 
+Will Cukierski. Dogs vs. Cats. https://kaggle.com/competitions/dogs-vs-cats, 2013. Kaggle.
