@@ -325,7 +325,7 @@ Go-Metal is released under the MIT License. See [LICENSE.md](LICENSE.md) for det
 - **PyTorch** team for API design inspiration
 - **Go team** for the fantastic Go language and runtime
 - Open source contributors and the machine learning community
-- The CNN classification example uses the Kaggle Cats vs. Dogs imageset: Will Cukierski. Dogs vs. Cats. https://kaggle.com/competitions/dogs-vs-cats, 2013. Kaggle.
+- The CNN classification example uses the Kaggle Dogs vs. Cats imageset: Will Cukierski. Dogs vs. Cats. https://kaggle.com/competitions/dogs-vs-cats, 2013. Kaggle.
 
 ---
 
