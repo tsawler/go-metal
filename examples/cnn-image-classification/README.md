@@ -2,6 +2,17 @@
 
 This example demonstrates convolutional neural network (CNN) training for image classification using Go-Metal's GPU-accelerated operations. It uses a cats vs dogs dataset to showcase real-world computer vision applications.
 
+You **must** download the Kaggle Cats & Dogs dataset. You can find a copy of it [here](https://www.microsoft.com/en-us/download/details.aspx?id=54765). Download it, extract it, and arrange the data like this:
+
+```
+.
+└── data/
+    ├── cat/
+    └── dog/
+```
+
+All of the cat images go in the cat directory, and the dog images go in the dog directory.
+
 ## What This Demonstrates
 
 ### 🖼️ Computer Vision with CNNs
