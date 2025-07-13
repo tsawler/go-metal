@@ -520,6 +520,8 @@ func buildMLPWithDifferentActivations(batchSize, inputSize, numClasses int,
         builder = builder.AddELU(1.0, "activation1")
     case "tanh":
         builder = builder.AddTanh("activation1")
+    case "swish":
+        builder = builder.AddSwish("activation1")
     default:
         return nil, fmt.Errorf("unknown activation type: %s", activationType)
     }
@@ -551,6 +553,7 @@ func findBestArchitecture(batchSize, inputSize, numClasses int) {
         {"Deep", []int{64, 64, 32}, "relu"},
         {"LeakyReLU", []int{64, 32}, "leaky_relu"},
         {"ELU", []int{64, 32}, "elu"},
+        {"Swish", []int{64, 32}, "swish"},
     }
     
     for _, arch := range architectures {

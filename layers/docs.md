@@ -103,12 +103,33 @@ func (lf *LayerFactory) CreateReLUSpec(name string) LayerSpec
 ```
 CreateReLUSpec creates a ReLU activation specification
 
+#### func (*LayerFactory) CreateSigmoidSpec
+
+```go
+func (lf *LayerFactory) CreateSigmoidSpec(name string) LayerSpec
+```
+CreateSigmoidSpec creates a Sigmoid activation specification
+
 #### func (*LayerFactory) CreateSoftmaxSpec
 
 ```go
 func (lf *LayerFactory) CreateSoftmaxSpec(axis int, name string) LayerSpec
 ```
 CreateSoftmaxSpec creates a Softmax activation specification
+
+#### func (*LayerFactory) CreateSwishSpec
+
+```go
+func (lf *LayerFactory) CreateSwishSpec(name string) LayerSpec
+```
+CreateSwishSpec creates a Swish activation specification
+
+#### func (*LayerFactory) CreateTanhSpec
+
+```go
+func (lf *LayerFactory) CreateTanhSpec(name string) LayerSpec
+```
+CreateTanhSpec creates a Tanh activation specification
 
 #### type LayerSpec
 
@@ -168,6 +189,9 @@ const (
 	BatchNorm
 	LeakyReLU
 	ELU
+	Sigmoid
+	Tanh
+	Swish
 )
 ```
 
@@ -261,12 +285,36 @@ func (mb *ModelBuilder) AddReLU(name string) *ModelBuilder
 ```
 AddReLU adds a ReLU activation to the model
 
+#### func (*ModelBuilder) AddSigmoid
+
+```go
+func (mb *ModelBuilder) AddSigmoid(name string) *ModelBuilder
+```
+AddSigmoid adds a Sigmoid activation to the model Sigmoid(x) = 1/(1+e^(-x)) -
+outputs values between 0 and 1
+
 #### func (*ModelBuilder) AddSoftmax
 
 ```go
 func (mb *ModelBuilder) AddSoftmax(axis int, name string) *ModelBuilder
 ```
 AddSoftmax adds a Softmax activation to the model
+
+#### func (*ModelBuilder) AddSwish
+
+```go
+func (mb *ModelBuilder) AddSwish(name string) *ModelBuilder
+```
+AddSwish adds a Swish activation to the model Swish(x) = x * Sigmoid(x) - smooth
+activation with improved gradient flow
+
+#### func (*ModelBuilder) AddTanh
+
+```go
+func (mb *ModelBuilder) AddTanh(name string) *ModelBuilder
+```
+AddTanh adds a Tanh activation to the model Tanh(x) = (e^x - e^(-x))/(e^x +
+e^(-x)) - outputs values between -1 and 1
 
 #### func (*ModelBuilder) Compile
 

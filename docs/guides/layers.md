@@ -212,6 +212,19 @@ Applies: `f(x) = (e^x - e^(-x)) / (e^x + e^(-x))`
 - Zero-centered
 - Stronger gradients than sigmoid
 
+#### Swish (SiLU - Sigmoid Linear Unit)
+Applies: `f(x) = x * σ(x)` where `σ(x)` is the sigmoid function
+
+```go
+.AddSwish("name")
+```
+
+**Properties:**
+- Smooth, non-monotonic activation
+- Better performance than ReLU in deep networks
+- Self-gating mechanism
+- Unbounded above, bounded below
+
 ### Regularization Layers
 
 #### Dropout
@@ -494,6 +507,7 @@ Now that you understand all available layers:
 | **ELU** | `.AddELU(alpha, name)` | alpha | Same as input |
 | **Sigmoid** | `.AddSigmoid(name)` | - | Same as input |
 | **Tanh** | `.AddTanh(name)` | - | Same as input |
+| **Swish** | `.AddSwish(name)` | - | Same as input |
 | **Dropout** | `.AddDropout(rate, name)` | rate | Same as input |
 | **Flatten** | `.AddFlatten(name)` | - | `[batch, features]` |
 | **Reshape** | `.AddReshape(shape, name)` | newShape | `[batch, ...shape]` |
