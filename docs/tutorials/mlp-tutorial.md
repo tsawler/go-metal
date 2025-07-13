@@ -190,14 +190,19 @@ func setupTrainer(model *layers.Model, batchSize int) (*training.ModelTrainer, e
 }
 ```
 
-### Step 5: Training Loop with Progress Tracking
+### Step 5: Training Loop with Professional Progress Tracking
+
+Go-metal provides PyTorch-style progress bars for professional training visualization. Here's both the simple approach and the recommended session-based approach:
+
+#### Simple Progress Bar
 
 ```go
-func trainModel(trainer *training.ModelTrainer, inputData []float32, inputShape []int, 
-                labelData []int32, labelShape []int, epochs int) error {
+func trainModelWithProgressBar(trainer *training.ModelTrainer, inputData []float32, inputShape []int, 
+                              labelData []int32, labelShape []int, epochs int) error {
     fmt.Printf("🚀 Training for %d epochs\n", epochs)
-    fmt.Println("Epoch | Loss     | Progress")
-    fmt.Println("------|----------|----------")
+    
+    // Create progress bar for training
+    pb := training.NewProgressBar("Training", epochs)
     
     for epoch := 1; epoch <= epochs; epoch++ {
         // Execute training step
@@ -206,22 +211,15 @@ func trainModel(trainer *training.ModelTrainer, inputData []float32, inputShape 
             return fmt.Errorf("training epoch %d failed: %v", epoch, err)
         }
         
-        // Progress indicator
-        var progressBar string
-        progress := float64(epoch) / float64(epochs)
-        barLength := 10
-        filled := int(progress * float64(barLength))
+        // Calculate metrics
+        accuracy := calculateAccuracy(result, labelData) // You implement this
         
-        for i := 0; i < barLength; i++ {
-            if i < filled {
-                progressBar += "█"
-            } else {
-                progressBar += "░"
-            }
+        // Update progress with metrics
+        metrics := map[string]float64{
+            "loss":     float64(result.Loss),
+            "accuracy": accuracy,
         }
-        
-        fmt.Printf("%5d | %.6f | %s %.1f%%\n", 
-                   epoch, result.Loss, progressBar, progress*100)
+        pb.Update(epoch, metrics)
         
         // Check for convergence
         if result.Loss < 0.1 {
@@ -230,9 +228,68 @@ func trainModel(trainer *training.ModelTrainer, inputData []float32, inputShape 
         }
     }
     
+    pb.Finish()
     return nil
 }
 ```
+
+#### Training Session (Recommended)
+
+For more complex training with validation, use the training session system:
+
+```go
+func trainModelWithSession(trainer *training.ModelTrainer, 
+                          trainData, valData []float32, 
+                          trainLabels, valLabels []int32, 
+                          inputShape []int, epochs int) error {
+    
+    stepsPerEpoch := 1  // For this simple example
+    validationSteps := 1
+    
+    // Create training session with automatic progress tracking
+    session := trainer.CreateTrainingSession("IrisClassifier", epochs, stepsPerEpoch, validationSteps)
+    
+    // Start training (automatically displays model architecture)
+    session.StartTraining()
+    
+    for epoch := 1; epoch <= epochs; epoch++ {
+        // Training phase
+        session.StartEpoch(epoch)
+        
+        result, err := trainer.TrainBatch(trainData, inputShape, trainLabels, []int{len(trainLabels)})
+        if err != nil {
+            return err
+        }
+        
+        accuracy := calculateAccuracy(result, trainLabels)
+        session.UpdateTrainingProgress(1, float64(result.Loss), accuracy)
+        session.FinishTrainingEpoch()
+        
+        // Validation phase
+        session.StartValidation()
+        
+        valResult, err := trainer.InferBatch(valData, inputShape)
+        if err == nil {
+            valLoss := calculateValidationLoss(valResult, valLabels)
+            valAccuracy := calculateValidationAccuracy(valResult, valLabels)
+            session.UpdateValidationProgress(1, valLoss, valAccuracy)
+        }
+        
+        session.FinishValidationEpoch()
+        session.PrintEpochSummary()
+        
+        // Check for convergence
+        if result.Loss < 0.1 {
+            fmt.Printf("🎉 Early convergence achieved!\n")
+            break
+        }
+    }
+    
+    return nil
+}
+```
+
+**Note**: For complete details on progress tracking, see the **[Progress Tracking Guide](../guides/progress-tracking.md)**.
 
 ### Step 6: Complete Training Program
 
@@ -626,6 +683,7 @@ func optimizedTrainingLoop(trainer *training.ModelTrainer,
 
 You've mastered MLP building with go-metal! Continue your journey:
 
+- **[Progress Tracking Guide](../guides/progress-tracking.md)** - Professional PyTorch-style progress bars
 - **[CNN Tutorial](cnn-tutorial.md)** - Learn convolutional networks for images
 - **[Performance Guide](../guides/performance.md)** - Optimize training speed
 - **[Mixed Precision Tutorial](mixed-precision.md)** - 86% speedup with FP16
