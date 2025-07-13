@@ -85,6 +85,9 @@ func main() {
 	fmt.Println("✅ Checkpoint serialization support")
 
 	fmt.Println("\n🚀 Ready for production use in binary classification models!")
+	
+	// Run ONNX test
+	testONNXSigmoid()
 }
 
 func getSigmoidUseCase(layerName string) string {
