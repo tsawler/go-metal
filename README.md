@@ -63,7 +63,7 @@ Why did I build this? I wanted to increase my knowledge in Machine Learning, and
 
 ## 🛠️ Installation
 
-1. **Install Go** (if not already installed)
+1. [**Install Go**](http://go.dev) (if not already installed)
    
 
 2. **Install Xcode Command Line Tools**:
