@@ -41,10 +41,10 @@ go version
 If you need to install or update Go:
 
 ```bash
-# Using Homebrew (recommended)
-brew install go
+# Download from https://go.dev/dl (recommended)
 
-# Or download from https://golang.org/dl/
+# Or, using Homebrew
+brew install go
 ```
 
 ### 3. Install Go-Metal
