@@ -61,10 +61,8 @@ Go-Metal is a PyTorch-inspired deep learning library built specifically for Appl
 
 ## 🛠️ Installation
 
-1. **Install Go** (if not already installed):
-   ```bash
-   brew install go
-   ```
+1. **Install Go** (if not already installed)
+   
 
 2. **Install Xcode Command Line Tools**:
    ```bash
@@ -249,11 +247,11 @@ go run main.go
 ## 🔧 Advanced Features
 
 ### Visualization Support
-Go-Metal includes a sidecar service for real-time training visualization:
+Go-Metal includes a [sidecar](https://github.com/tsawler/go-metal-sidecar-plots) service for real-time training visualization:
 
 ```bash
 # Start visualization service
-cd sidecar
+cd go-metal-sidecar-plots
 docker-compose up -d
 
 # Enable in your training code
