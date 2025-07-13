@@ -29,11 +29,11 @@ Why did I build this? I wanted to increase my knowledge in Machine Learning, and
 - **Broadcasting**: NumPy/PyTorch-style broadcasting for all operations
 - **Element-wise Operations**: Add, Sub, Mul, Div with GPU acceleration
 - **Matrix Operations**: High-performance GPU matrix multiplication
-- **Activation Functions**: ReLU, Sigmoid, Tanh with Metal implementations
+- **Activation Functions**: ReLU, Softmax, LeakyReLU, ELU with Metal implementations
 
 ### Deep Learning Components
 - **Neural Network Layers**: Linear, Conv2D, MaxPool2D, BatchNorm, Flatten
-- **Optimizers**: SGD with momentum, Adam with adaptive learning rates
+- **Optimizers**: SGD, Adam, AdaGrad, RMSprop, AdaDelta, NAdam, L-BFGS
 - **Loss Functions**: MSE (regression), CrossEntropy (classification)
 - **Automatic Differentiation**: Complete autograd engine with gradient computation
 - **Model Containers**: Sequential models for easy layer composition
@@ -224,25 +224,29 @@ Go-Metal delivers exceptional performance on Apple Silicon:
 ## 🎯 Examples
 
 ### Complete Examples
-Explore the `/app` directory for comprehensive examples:
+Explore the `/examples` directory for comprehensive examples:
 
-- **[Phase 1 Demo](app/phase1-demo/)** - CPU tensor operations
-- **[Phase 6 Demo](app/phase6-demo/)** - Complete training pipeline with GPU acceleration
-- **[Cats vs Dogs](app/cats-dogs/)** - CNN image classification example
-- **[Async GPU Demo](app/demo-async-gpu/)** - Advanced GPU operation patterns
+- **[Basic Tensor Operations](examples/basic-tensor-operations/)** - Fundamental tensor operations and dynamic batch sizes
+- **[Complete Training Pipeline](examples/complete-training-pipeline/)** - End-to-end MLP training with BatchNorm and Dropout
+- **[CNN Image Classification](examples/cnn-image-classification/)** - Convolutional neural networks for image classification
+- **[Model Serialization](examples/model-serialization/)** - Saving and loading trained models (ONNX format)
 
 ### Sample Applications
 ```bash
 # Run the complete training demo
-cd app/phase6-demo
+cd examples/complete-training-pipeline
 go run main.go
 
 # Explore CNN training
-cd app/cats-dogs
+cd examples/cnn-image-classification
 go run main.go
 
-# Test GPU performance
-cd app/phase3-demo
+# Test basic tensor operations
+cd examples/basic-tensor-operations
+go run main.go
+
+# Try model serialization
+cd examples/model-serialization
 go run main.go
 ```
 
@@ -305,11 +309,11 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
    ```
 
 ### Areas for Contribution
-- Additional optimizers (RMSprop, AdaGrad)
 - More neural network layers (LSTM, Transformer blocks)
-- Additional activation functions
+- Additional activation functions (Sigmoid, Tanh, Swish, GELU)
 - Model serialization formats
 - Performance optimizations
+- Advanced optimization techniques (learning rate scheduling, gradient clipping)
 
 ## 📄 License
 

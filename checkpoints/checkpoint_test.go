@@ -531,7 +531,7 @@ func TestExtractWeightsFromTensors(t *testing.T) {
 			} else {
 				t.Errorf("Dense layer %s missing use_bias parameter", layerSpec.Name)
 			}
-		case layers.ReLU, layers.LeakyReLU, layers.Softmax, layers.Dropout:
+		case layers.ReLU, layers.LeakyReLU, layers.Softmax, layers.Dropout, layers.Sigmoid:
 			// These should be handled (no parameters)
 			t.Logf("Activation layer %s of type %s", layerSpec.Name, layerSpec.Type.String())
 		default:

@@ -220,6 +220,15 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                     }
                     break;
                     
+                case 9: // Sigmoid
+                    {
+                        // Sigmoid(x) = 1 / (1 + exp(-x))
+                        // Using MPSGraph's built-in sigmoid operation for optimal performance
+                        currentTensor = [engine->graph sigmoidWithTensor:currentTensor
+                                                                    name:[NSString stringWithFormat:@"sigmoid_%d", layerIdx]];
+                    }
+                    break;
+                    
                 default:
                     NSLog(@"Unsupported layer type: %d", layer->layer_type);
                     return NO;

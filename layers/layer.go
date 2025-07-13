@@ -19,6 +19,7 @@ const (
 	BatchNorm
 	LeakyReLU
 	ELU
+	Sigmoid
 )
 
 func (lt LayerType) String() string {
@@ -41,6 +42,8 @@ func (lt LayerType) String() string {
 		return "LeakyReLU"
 	case ELU:
 		return "ELU"
+	case Sigmoid:
+		return "Sigmoid"
 	default:
 		return "Unknown"
 	}
@@ -158,6 +161,15 @@ func (lf *LayerFactory) CreateELUSpec(alpha float32, name string) LayerSpec {
 		Parameters: map[string]interface{}{
 			"alpha": alpha,
 		},
+	}
+}
+
+// CreateSigmoidSpec creates a Sigmoid activation specification
+func (lf *LayerFactory) CreateSigmoidSpec(name string) LayerSpec {
+	return LayerSpec{
+		Type:       Sigmoid,
+		Name:       name,
+		Parameters: map[string]interface{}{},
 	}
 }
 
@@ -330,6 +342,17 @@ func (mb *ModelBuilder) AddELU(alpha float32, name string) *ModelBuilder {
 	return mb.AddLayer(layer)
 }
 
+// AddSigmoid adds a Sigmoid activation to the model
+// Sigmoid(x) = 1/(1+e^(-x)) - outputs values between 0 and 1
+func (mb *ModelBuilder) AddSigmoid(name string) *ModelBuilder {
+	layer := LayerSpec{
+		Type:       Sigmoid,
+		Name:       name,
+		Parameters: map[string]interface{}{},
+	}
+	return mb.AddLayer(layer)
+}
+
 // Compile compiles the model and computes shapes and parameter counts
 func (mb *ModelBuilder) Compile() (*ModelSpec, error) {
 	if len(mb.layers) == 0 {
@@ -392,7 +415,7 @@ func (mb *ModelBuilder) computeLayerInfo(layer *LayerSpec, inputShape []int) ([]
 		return mb.computeConv2DInfo(layer, inputShape)
 	case BatchNorm:
 		return mb.computeBatchNormInfo(layer, inputShape)
-	case ReLU, Softmax, Dropout, LeakyReLU, ELU:
+	case ReLU, Softmax, Dropout, LeakyReLU, ELU, Sigmoid:
 		return mb.computeActivationInfo(layer, inputShape)
 	default:
 		return nil, nil, 0, fmt.Errorf("unsupported layer type: %s", layer.Type.String())
@@ -736,7 +759,7 @@ func (ms *ModelSpec) validateLayerForDynamicEngine(layer LayerSpec, index int) e
 			}
 		}
 		
-	case ReLU, Softmax, LeakyReLU, ELU:
+	case ReLU, Softmax, LeakyReLU, ELU, Sigmoid:
 		// Activation layers don't require specific parameters
 		
 	case MaxPool2D:
@@ -1134,6 +1157,10 @@ func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
 			// ReLU has no parameters
 			break
 			
+		case Sigmoid:
+			// Sigmoid has no parameters
+			break
+			
 		case LeakyReLU:
 			// Leaky ReLU parameters: negative_slope
 			negativeSlope := getFloatParam(layer.Parameters, "negative_slope", 0.01)
@@ -1315,6 +1342,12 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamFloatCount = 1
 			spec.ParamIntCount = 0
 			// Shape unchanged for ELU
+
+		case Sigmoid:
+			spec.LayerType = 9 // Sigmoid = 9 in Go enum (next available after ELU=8)
+			spec.ParamIntCount = 0
+			spec.ParamFloatCount = 0
+			// Shape unchanged for Sigmoid
 
 		case Softmax:
 			spec.LayerType = 3 // Softmax = 3 in C

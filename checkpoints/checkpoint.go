@@ -326,7 +326,7 @@ func ExtractWeightsFromTensors(tensors []*memory.Tensor, modelSpec *layers.Model
 				paramIndex++
 			}
 			
-		case layers.ReLU, layers.LeakyReLU, layers.Softmax, layers.Dropout:
+		case layers.ReLU, layers.LeakyReLU, layers.Softmax, layers.Dropout, layers.Sigmoid:
 			// Activation layers have no parameters
 			continue
 			

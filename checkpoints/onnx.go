@@ -106,6 +106,8 @@ func (oe *ONNXExporter) buildONNXGraph(checkpoint *Checkpoint) (*GraphProto, err
 			nodes, currentTensorName, err = oe.createDropoutNode(layerSpec, currentTensorName, layerIdx)
 		case layers.Softmax:
 			nodes, currentTensorName, err = oe.createSoftmaxNode(layerSpec, currentTensorName, layerIdx)
+		case layers.Sigmoid:
+			nodes, currentTensorName, err = oe.createSigmoidNode(layerSpec, currentTensorName, layerIdx)
 		default:
 			return nil, fmt.Errorf("unsupported layer type for ONNX export: %s", layerSpec.Type.String())
 		}
@@ -268,6 +270,21 @@ func (oe *ONNXExporter) createLeakyReLUNode(layerSpec layers.LayerSpec, inputTen
 	}
 	
 	return []*NodeProto{leakyReluNode}, outputTensor, nil
+}
+
+// createSigmoidNode creates ONNX Sigmoid node
+func (oe *ONNXExporter) createSigmoidNode(layerSpec layers.LayerSpec, inputTensor string, layerIdx int) ([]*NodeProto, string, error) {
+	layerName := layerSpec.Name
+	outputTensor := fmt.Sprintf("%s_output", layerName)
+	
+	sigmoidNode := &NodeProto{
+		OpType: "Sigmoid",
+		Name:   layerName,
+		Input:  []string{inputTensor},
+		Output: []string{outputTensor},
+	}
+	
+	return []*NodeProto{sigmoidNode}, outputTensor, nil
 }
 
 // createBatchNormNode creates ONNX BatchNormalization node
@@ -568,6 +585,8 @@ func (oi *ONNXImporter) convertONNXNodeToLayer(node *NodeProto, weightMap map[st
 		return oi.convertReluNode(node), weights, nil
 	case "LeakyRelu":
 		return oi.convertLeakyReluNode(node), weights, nil
+	case "Sigmoid":
+		return oi.convertSigmoidNode(node), weights, nil
 	case "BatchNormalization":
 		return oi.convertBatchNormNode(node, weightMap, shapeMap, &weights)
 	case "Dropout":
@@ -838,6 +857,14 @@ func (oi *ONNXImporter) convertLeakyReluNode(node *NodeProto) *layers.LayerSpec 
 		Parameters: map[string]interface{}{
 			"negative_slope": alpha,
 		},
+	}
+}
+
+func (oi *ONNXImporter) convertSigmoidNode(node *NodeProto) *layers.LayerSpec {
+	return &layers.LayerSpec{
+		Type:       layers.Sigmoid,
+		Name:       node.Name,
+		Parameters: map[string]interface{}{},
 	}
 }
 

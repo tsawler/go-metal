@@ -109,6 +109,12 @@ This phase prioritizes resolving existing limitations and implementing fundament
       ✅ **Comprehensive Testing:** Unit tests (`loss/sparse_cross_entropy_test.go`) and demo application (`app/sparse-cross-demo`) validate correctness.
       ✅ **Files Modified:** `cgo_bridge/bridge_graph.m`, `training/model_trainer.go` - minimal, focused changes maintaining architectural principles.
 
+    * **Additional Activation Functions:** Implement missing activation functions that are commonly used in modern deep learning:
+      * **Sigmoid:** Implement σ(x) = 1/(1+e^(-x)) activation function with MPSGraph integration for binary classification and legacy architectures
+      * **Tanh:** Implement tanh(x) = (e^x - e^(-x))/(e^x + e^(-x)) activation function with MPSGraph integration for zero-centered outputs
+      * **Swish:** Implement Swish(x) = x * σ(x) activation function with MPSGraph integration for improved gradient flow in deep networks
+      * **GELU:** Implement GELU(x) = x * Φ(x) activation function with MPSGraph integration for Transformer architectures and modern NLP models
+
     * **Further Performance Optimization:** Continuously profile and optimize existing components to squeeze out additional performance gains.
 
     * **Dynamic Engine CNN Performance Optimization:** **HIGH PRIORITY** - Optimize the Dynamic Engine to match or exceed Hybrid Engine performance for CNN architectures (currently 20k+ batches/second). This is critical as we've removed artificial architecture constraints and need Dynamic Engine to be the primary high-performance option.
