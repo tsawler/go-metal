@@ -58,7 +58,8 @@ Cleanup releases all GPU buffers
 ```go
 func (adadelta *AdaDeltaOptimizerState) GetState() (*OptimizerState, error)
 ```
-GetState extracts optimizer state for checkpointing (not yet implemented)
+GetState extracts optimizer state for checkpointing Transfers GPU state to CPU
+in a single batched operation per buffer type
 
 #### func (*AdaDeltaOptimizerState) GetStats
 
@@ -86,7 +87,8 @@ GetStepCount returns the current optimization step number
 ```go
 func (adadelta *AdaDeltaOptimizerState) LoadState(state *OptimizerState) error
 ```
-LoadState restores optimizer state from checkpoint (not yet implemented)
+LoadState restores optimizer state from checkpoint Transfers CPU state back to
+GPU in batched operations
 
 #### func (*AdaDeltaOptimizerState) SetCommandPool
 
@@ -112,7 +114,7 @@ Step performs a single AdaDelta optimization step
 #### func (*AdaDeltaOptimizerState) UpdateLearningRate
 
 ```go
-func (adadelta *AdaDeltaOptimizerState) UpdateLearningRate(newLR float32) error
+func (adadelta *AdaDeltaOptimizerState) UpdateLearningRate(newLR float32)
 ```
 UpdateLearningRate is not used in AdaDelta (it adapts automatically)
 
@@ -169,7 +171,8 @@ Cleanup releases all GPU buffers
 ```go
 func (adagrad *AdaGradOptimizerState) GetState() (*OptimizerState, error)
 ```
-GetState extracts optimizer state for checkpointing (not yet implemented)
+GetState extracts optimizer state for checkpointing Transfers GPU state to CPU
+in a single batched operation per buffer type
 
 #### func (*AdaGradOptimizerState) GetStats
 
@@ -197,7 +200,8 @@ GetStepCount returns the current optimization step number
 ```go
 func (adagrad *AdaGradOptimizerState) LoadState(state *OptimizerState) error
 ```
-LoadState restores optimizer state from checkpoint (not yet implemented)
+LoadState restores optimizer state from checkpoint Transfers CPU state back to
+GPU in batched operations
 
 #### func (*AdaGradOptimizerState) SetCommandPool
 
@@ -223,7 +227,7 @@ Step performs a single AdaGrad optimization step
 #### func (*AdaGradOptimizerState) UpdateLearningRate
 
 ```go
-func (adagrad *AdaGradOptimizerState) UpdateLearningRate(newLR float32) error
+func (adagrad *AdaGradOptimizerState) UpdateLearningRate(newLR float32)
 ```
 UpdateLearningRate updates the learning rate for the optimizer
 
@@ -518,7 +522,8 @@ Cleanup releases all GPU buffers
 ```go
 func (nadam *NadamOptimizerState) GetState() (*OptimizerState, error)
 ```
-GetState extracts optimizer state for checkpointing (not yet implemented)
+GetState extracts optimizer state for checkpointing Transfers GPU state to CPU
+in a single batched operation per buffer type
 
 #### func (*NadamOptimizerState) GetStats
 
@@ -546,7 +551,8 @@ GetStepCount returns the current optimization step number
 ```go
 func (nadam *NadamOptimizerState) LoadState(state *OptimizerState) error
 ```
-LoadState restores optimizer state from checkpoint (not yet implemented)
+LoadState restores optimizer state from checkpoint Transfers CPU state back to
+GPU in batched operations
 
 #### func (*NadamOptimizerState) SetCommandPool
 
@@ -574,7 +580,7 @@ learning rates with Nesterov momentum
 #### func (*NadamOptimizerState) UpdateLearningRate
 
 ```go
-func (nadam *NadamOptimizerState) UpdateLearningRate(newLR float32) error
+func (nadam *NadamOptimizerState) UpdateLearningRate(newLR float32)
 ```
 UpdateLearningRate updates the learning rate (useful for learning rate
 scheduling)
