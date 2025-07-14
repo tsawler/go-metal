@@ -38,6 +38,7 @@ type CommandBufferPool struct {
 	maxBuffers    int
 	mutex         sync.Mutex
 	nextID        int
+	closed        bool                  // Track if pool has been cleaned up
 }
 
 // NewCommandBufferPool creates a new command buffer pool
@@ -65,7 +66,9 @@ func NewCommandBufferPool(commandQueue unsafe.Pointer, maxBuffers int) (*Command
 	}
 	
 	for i := 0; i < initialBuffers; i++ {
+		pool.mutex.Lock()
 		buffer, err := pool.createBuffer()
+		pool.mutex.Unlock()
 		if err != nil {
 			pool.Cleanup()
 			return nil, fmt.Errorf("failed to create initial command buffer %d: %v", i, err)
@@ -78,11 +81,10 @@ func NewCommandBufferPool(commandQueue unsafe.Pointer, maxBuffers int) (*Command
 }
 
 // createBuffer creates a new command buffer
+// NOTE: This function expects the caller to hold cbp.mutex
 func (cbp *CommandBufferPool) createBuffer() (*CommandBuffer, error) {
-	cbp.mutex.Lock()
 	id := cbp.nextID
 	cbp.nextID++
-	cbp.mutex.Unlock()
 	
 	// IMPLEMENTED: Create actual MTLCommandBuffer using CGO bridge
 	buffer, err := cgo_bridge.CreateCommandBuffer(cbp.commandQueue)
@@ -130,6 +132,15 @@ func (cbp *CommandBufferPool) ReturnBuffer(buffer *CommandBuffer) {
 	
 	buffer.inUse = false
 	
+	cbp.mutex.Lock()
+	closed := cbp.closed
+	cbp.mutex.Unlock()
+	
+	// Don't try to return to a closed pool
+	if closed {
+		return
+	}
+	
 	select {
 	case cbp.available <- buffer:
 		// Successfully returned to pool
@@ -157,7 +168,7 @@ func (cbp *CommandBufferPool) ExecuteAsync(buffer *CommandBuffer, completion fun
 		cgo_bridge.SetupAutoreleasePool()
 		defer cgo_bridge.DrainAutoreleasePool()
 		
-		// Commit command buffer for execution
+		// Commit command buffer for execution (Metal command buffers are one-time use)
 		if commitErr := cgo_bridge.CommitCommandBuffer(buffer.buffer); commitErr != nil {
 			err = fmt.Errorf("failed to commit command buffer: %v", commitErr)
 		} else {
@@ -166,6 +177,23 @@ func (cbp *CommandBufferPool) ExecuteAsync(buffer *CommandBuffer, completion fun
 				err = fmt.Errorf("command buffer execution failed: %v", waitErr)
 			}
 		}
+		
+		// After commit, the Metal command buffer is no longer usable
+		// We need to create a new one for this buffer wrapper
+		cbp.mutex.Lock()
+		if buffer.buffer != nil {
+			// Release the old committed buffer
+			cgo_bridge.ReleaseCommandBuffer(buffer.buffer)
+			// Create a new Metal command buffer for reuse
+			newBuffer, createErr := cgo_bridge.CreateCommandBuffer(cbp.commandQueue)
+			if createErr != nil {
+				// If we can't create a new buffer, mark this one as unusable
+				buffer.buffer = nil
+			} else {
+				buffer.buffer = newBuffer
+			}
+		}
+		cbp.mutex.Unlock()
 		
 		// Call completion handler
 		if completion != nil {
@@ -249,6 +277,12 @@ type CommandPoolStats struct {
 func (cbp *CommandBufferPool) Cleanup() {
 	cbp.mutex.Lock()
 	defer cbp.mutex.Unlock()
+	
+	// Prevent double cleanup
+	if cbp.closed {
+		return
+	}
+	cbp.closed = true
 	
 	// Drain available channel
 	close(cbp.available)

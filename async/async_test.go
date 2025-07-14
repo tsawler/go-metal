@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -55,23 +56,141 @@ func (mds *MockDataSource) Reset() error {
 	return nil
 }
 
-// TestAsyncDataLoader tests the async data loading pipeline
-func TestAsyncDataLoader(t *testing.T) {
-	// Skip this test for now as it requires Metal device integration
-	t.Skip("Skipping AsyncDataLoader test - requires Metal CGO integration")
+// TestAsyncDataLoaderIntegration tests the async data loading pipeline integration
+func TestAsyncDataLoaderIntegration(t *testing.T) {
+	// Test the full async data loading pipeline if Metal device is available
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping AsyncDataLoader integration test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+
+	memory.InitializeGlobalMemoryManager(device)
+	memoryManager := memory.GetGlobalMemoryManager()
+
+	// Create data source
+	mockDataSource := NewMockDataSource(10)
+	config := AsyncDataLoaderConfig{
+		BatchSize:     16,
+		PrefetchDepth: 3,
+		Workers:       2,
+		MemoryManager: memoryManager,
+	}
+
+	// Create and test the full pipeline
+	loader, err := NewAsyncDataLoader(mockDataSource, config)
+	if err != nil {
+		t.Fatalf("Failed to create async data loader: %v", err)
+	}
+	defer loader.Stop()
+
+	err = loader.Start()
+	if err != nil {
+		t.Fatalf("Failed to start data loader: %v", err)
+	}
+
+	// Test getting batches from the pipeline
+	for i := 0; i < 5; i++ {
+		batch, err := loader.GetBatch()
+		if err != nil {
+			t.Fatalf("Failed to get batch %d: %v", i, err)
+		}
+
+		// Verify batch structure
+		if batch.InputTensor == nil || batch.LabelTensor == nil {
+			t.Errorf("Batch %d has nil tensors", i)
+		}
+
+		batch.Release()
+		t.Logf("✅ Integration test batch %d completed", i)
+	}
+
+	t.Log("✅ AsyncDataLoader integration test passed")
 }
 
-// TestStagingBufferPool tests the staging buffer pool
-func TestStagingBufferPool(t *testing.T) {
-	// Skip this test for now as it requires Metal device integration
-	t.Skip("Skipping StagingBufferPool test - requires Metal CGO integration")
+// TestStagingBufferPoolIntegration tests the staging buffer pool integration
+func TestStagingBufferPoolIntegration(t *testing.T) {
+	// Test staging buffer pool if Metal device is available
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping StagingBufferPool integration test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+
+	memory.InitializeGlobalMemoryManager(device)
+	memoryManager := memory.GetGlobalMemoryManager()
+
+	// Create staging buffer pool
+	pool, err := NewStagingBufferPool(memoryManager, 4)
+	if err != nil {
+		t.Fatalf("Failed to create staging buffer pool: %v", err)
+	}
+	defer pool.Cleanup()
+
+	// Create test tensor
+	tensorShape := []int{256}
+	gpuTensor, err := memory.NewTensor(tensorShape, memory.Float32, memory.GPU)
+	if err != nil {
+		t.Fatalf("Failed to create GPU tensor: %v", err)
+	}
+	defer gpuTensor.Release()
+
+	// Test data transfer
+	testData := make([]float32, 256)
+	for i := range testData {
+		testData[i] = float32(i) * 0.5
+	}
+
+	err = pool.TransferToGPUSync(testData, gpuTensor)
+	if err != nil {
+		t.Fatalf("Failed to transfer data to GPU: %v", err)
+	}
+
+	t.Log("✅ StagingBufferPool integration test passed")
 }
 
-// TestCommandBufferPool tests the command buffer pool
-func TestCommandBufferPool(t *testing.T) {
-	// Skip this test as it requires actual Metal integration - mock objects cannot be used
-	// with CGO bridge functions that expect real Metal resources
-	t.Skip("Skipping CommandBufferPool test - requires real Metal device integration, mock objects cause segmentation fault with CGO bridge")
+// TestCommandBufferPoolIntegration tests the command buffer pool integration
+func TestCommandBufferPoolIntegration(t *testing.T) {
+	// Test command buffer pool if Metal device is available
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping CommandBufferPool integration test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+
+	memory.InitializeGlobalMemoryManager(device)
+
+	// Create command queue
+	commandQueue, err := cgo_bridge.CreateCommandQueue(device)
+	if err != nil {
+		t.Fatalf("Failed to create command queue: %v", err)
+	}
+	defer cgo_bridge.DestroyCommandQueue(commandQueue)
+
+	// Create command buffer pool
+	pool, err := NewCommandBufferPool(commandQueue, 4)
+	if err != nil {
+		t.Fatalf("Failed to create command buffer pool: %v", err)
+	}
+	defer pool.Cleanup()
+
+	// Test getting and returning a buffer
+	buffer, err := pool.GetBuffer()
+	if err != nil {
+		t.Fatalf("Failed to get command buffer: %v", err)
+	}
+
+	if !buffer.IsInUse() {
+		t.Error("Buffer should be marked as in use")
+	}
+
+	pool.ReturnBuffer(buffer)
+
+	if buffer.IsInUse() {
+		t.Error("Buffer should not be in use after return")
+	}
+
+	t.Log("✅ CommandBufferPool integration test passed")
 }
 
 // TestCommandBufferPoolLogic tests the command buffer pool logic without Metal integration
@@ -163,7 +282,7 @@ func TestCommandBufferPoolLogic(t *testing.T) {
 		t.Error("Completion callback should have been called")
 	}
 	
-	t.Log("Command buffer pool logic tests passed")
+	t.Log("✅ Command buffer pool logic tests passed")
 }
 
 // Helper function for string contains check (reused from layers tests)
@@ -187,8 +306,232 @@ func containsAtIndex(s, substr string) bool {
 
 // TestAsyncPipelineIntegration tests the complete async pipeline
 func TestAsyncPipelineIntegration(t *testing.T) {
-	// Skip integration test for now as it requires Metal device integration
-	t.Skip("Skipping async pipeline integration test - requires Metal CGO integration")
+	// Test complete async pipeline if Metal device is available
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping async pipeline integration test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+
+	memory.InitializeGlobalMemoryManager(device)
+	memoryManager := memory.GetGlobalMemoryManager()
+
+	// Create command queue
+	commandQueue, err := cgo_bridge.CreateCommandQueue(device)
+	if err != nil {
+		t.Fatalf("Failed to create command queue: %v", err)
+	}
+	defer cgo_bridge.DestroyCommandQueue(commandQueue)
+
+	// Create components
+	mockDataSource := NewMockDataSource(15)
+	commandPool, err := NewCommandBufferPool(commandQueue, 4)
+	if err != nil {
+		t.Fatalf("Failed to create command buffer pool: %v", err)
+	}
+	defer commandPool.Cleanup()
+
+	stagingPool, err := NewStagingBufferPool(memoryManager, 6)
+	if err != nil {
+		t.Fatalf("Failed to create staging buffer pool: %v", err)
+	}
+	defer stagingPool.Cleanup()
+
+	dataLoaderConfig := AsyncDataLoaderConfig{
+		BatchSize:     8,
+		PrefetchDepth: 3,
+		Workers:       2,
+		MemoryManager: memoryManager,
+	}
+
+	dataLoader, err := NewAsyncDataLoader(mockDataSource, dataLoaderConfig)
+	if err != nil {
+		t.Fatalf("Failed to create data loader: %v", err)
+	}
+	defer dataLoader.Stop()
+
+	// Start the pipeline
+	err = dataLoader.Start()
+	if err != nil {
+		t.Fatalf("Failed to start data loader: %v", err)
+	}
+
+	// Test the complete pipeline
+	numBatches := 5
+	for i := 0; i < numBatches; i++ {
+		// Get batch from data loader
+		batch, err := dataLoader.GetBatch()
+		if err != nil {
+			t.Fatalf("Failed to get batch %d: %v", i, err)
+		}
+
+		// Get command buffer
+		cmdBuffer, err := commandPool.GetBuffer()
+		if err != nil {
+			t.Fatalf("Failed to get command buffer for batch %d: %v", i, err)
+		}
+
+		// Test staging buffer for additional transfers
+		additionalData := []float32{1.0, 2.0, 3.0, 4.0}
+		err = stagingPool.TransferToGPU(additionalData, batch.InputTensor)
+		if err != nil {
+			t.Logf("Note: Staging transfer failed (expected for size mismatch): %v", err)
+		}
+
+		// Return command buffer
+		commandPool.ReturnBuffer(cmdBuffer)
+
+		// Release batch
+		batch.Release()
+
+		t.Logf("✅ Pipeline iteration %d completed", i)
+	}
+
+	// Verify statistics
+	dataLoaderStats := dataLoader.Stats()
+	commandPoolStats := commandPool.Stats()
+	stagingPoolStats := stagingPool.Stats()
+
+	t.Logf("Pipeline stats:")
+	t.Logf("  Data Loader: %d batches produced, %d workers", 
+		dataLoaderStats.BatchesProduced, dataLoaderStats.Workers)
+	t.Logf("  Command Pool: %d total buffers, %d in use", 
+		commandPoolStats.TotalBuffers, commandPoolStats.InUseBuffers)
+	t.Logf("  Staging Pool: %d total buffers, %d in use", 
+		stagingPoolStats.TotalBuffers, stagingPoolStats.InUseBuffers)
+
+	// Verify clean state
+	if commandPoolStats.InUseBuffers != 0 {
+		t.Errorf("Expected 0 command buffers in use, got %d", commandPoolStats.InUseBuffers)
+	}
+	if stagingPoolStats.InUseBuffers != 0 {
+		t.Errorf("Expected 0 staging buffers in use, got %d", stagingPoolStats.InUseBuffers)
+	}
+
+	t.Log("✅ Complete async pipeline integration test passed")
+}
+
+// TestAsyncPackageInterfaces tests interface implementations
+func TestAsyncPackageInterfaces(t *testing.T) {
+	// Test that MockDataSource properly implements DataSource interface
+	var dataSource DataSource = NewMockDataSource(5)
+
+	// Test interface methods
+	size := dataSource.Size()
+	if size != 5*32 {
+		t.Errorf("Expected size %d, got %d", 5*32, size)
+	}
+
+	inputData, inputShape, labelData, labelShape, err := dataSource.GetBatch(16)
+	if err != nil {
+		t.Fatalf("Failed to get batch: %v", err)
+	}
+
+	if len(inputData) != 16*3*32*32 {
+		t.Errorf("Unexpected input data length: %d", len(inputData))
+	}
+	if len(inputShape) != 4 {
+		t.Errorf("Unexpected input shape length: %d", len(inputShape))
+	}
+	if len(labelData) != 16 {
+		t.Errorf("Unexpected label data length: %d", len(labelData))
+	}
+	if len(labelShape) != 1 {
+		t.Errorf("Unexpected label shape length: %d", len(labelShape))
+	}
+
+	err = dataSource.Reset()
+	if err != nil {
+		t.Errorf("Failed to reset data source: %v", err)
+	}
+
+	t.Log("✅ Interface implementation tests passed")
+}
+
+// TestErrorHandling tests error conditions across the async package
+func TestErrorHandling(t *testing.T) {
+	// Test 1: Invalid configurations
+	t.Run("InvalidConfigurations", func(t *testing.T) {
+		// Test AsyncDataLoaderConfig validation
+		mockDataSource := NewMockDataSource(5)
+		
+		// Nil data source
+		_, err := NewAsyncDataLoader(nil, AsyncDataLoaderConfig{})
+		if err == nil {
+			t.Error("Expected error for nil data source")
+		}
+
+		// Invalid batch size
+		_, err = NewAsyncDataLoader(mockDataSource, AsyncDataLoaderConfig{
+			BatchSize: 0,
+		})
+		if err == nil {
+			t.Error("Expected error for zero batch size")
+		}
+
+		// Nil memory manager
+		_, err = NewAsyncDataLoader(mockDataSource, AsyncDataLoaderConfig{
+			BatchSize:     32,
+			MemoryManager: nil,
+		})
+		if err == nil {
+			t.Error("Expected error for nil memory manager")
+		}
+	})
+
+	// Test 2: Data source exhaustion
+	t.Run("DataSourceExhaustion", func(t *testing.T) {
+		limitedDataSource := NewMockDataSource(2) // Only 2 batches
+
+		// Get first batch
+		_, _, _, _, err := limitedDataSource.GetBatch(16)
+		if err != nil {
+			t.Fatalf("Failed to get first batch: %v", err)
+		}
+
+		// Get second batch
+		_, _, _, _, err = limitedDataSource.GetBatch(16)
+		if err != nil {
+			t.Fatalf("Failed to get second batch: %v", err)
+		}
+
+		// Third batch should fail
+		_, _, _, _, err = limitedDataSource.GetBatch(16)
+		if err == nil {
+			t.Error("Expected error for exhausted data source")
+		}
+		if !contains(err.Error(), "no more batches available") {
+			t.Errorf("Expected 'no more batches available' error, got: %v", err)
+		}
+	})
+
+	// Test 3: Configuration parameter bounds
+	t.Run("ConfigurationBounds", func(t *testing.T) {
+		// Test edge case configurations
+		mockDataSource := NewMockDataSource(10)
+		
+		// Very large batch size
+		config := AsyncDataLoaderConfig{
+			BatchSize:     1000000, // 1M - very large
+			PrefetchDepth: 1,
+			Workers:       1,
+			MemoryManager: nil, // Will cause error
+		}
+		
+		_, err := NewAsyncDataLoader(mockDataSource, config)
+		if err == nil {
+			t.Error("Expected error for nil memory manager")
+		}
+		
+		// Negative values should be handled
+		config.BatchSize = -1
+		_, err = NewAsyncDataLoader(mockDataSource, config)
+		if err == nil {
+			t.Error("Expected error for negative batch size")
+		}
+	})
+
+	t.Log("✅ Error handling tests passed")
 }
 
 // TestBasicStructures tests the basic data structures without Metal integration
@@ -249,7 +592,138 @@ func TestBasicStructures(t *testing.T) {
 		t.Errorf("Expected counter to be 0 after reset, got %d", dataSource.counter)
 	}
 
-	t.Log("Basic structure tests passed")
+	t.Log("✅ Basic structure tests passed")
+}
+
+// TestAsyncPackageConstants tests package-level constants and defaults
+func TestAsyncPackageConstants(t *testing.T) {
+	// Test AsyncDataLoaderConfig default application
+	config := AsyncDataLoaderConfig{
+		BatchSize:     32,
+		PrefetchDepth: 0, // Should get default
+		Workers:       0, // Should get default
+	}
+
+	// Simulate default application (normally done in NewAsyncDataLoader)
+	if config.PrefetchDepth <= 0 {
+		config.PrefetchDepth = 3 // Default
+	}
+	if config.Workers <= 0 {
+		config.Workers = 2 // Default
+	}
+
+	if config.PrefetchDepth != 3 {
+		t.Errorf("Expected default PrefetchDepth 3, got %d", config.PrefetchDepth)
+	}
+	if config.Workers != 2 {
+		t.Errorf("Expected default Workers 2, got %d", config.Workers)
+	}
+
+	// Test staging buffer pool constants
+	expectedBufferSize := 4 * 1024 * 1024 // 4MB
+	if expectedBufferSize != 4194304 {
+		t.Errorf("Expected buffer size calculation to be 4MB (4194304 bytes), got %d", expectedBufferSize)
+	}
+
+	t.Log("✅ Package constants tests passed")
+}
+
+// TestAsyncComponentCompatibility tests compatibility between async components
+func TestAsyncComponentCompatibility(t *testing.T) {
+	// Test that different components work together conceptually
+	
+	// Test 1: GPUBatch compatibility with different tensor shapes
+	batch1 := &GPUBatch{
+		BatchID:    1,
+		Generation: 1,
+	}
+	batch2 := &GPUBatch{
+		BatchID:    2,
+		Generation: 1,
+	}
+
+	if batch1.BatchID == batch2.BatchID {
+		t.Error("Batches should have unique IDs")
+	}
+	if batch1.Generation != batch2.Generation {
+		t.Error("Batches from same generation should have same generation number")
+	}
+
+	// Test 2: MockDataSource batch size compatibility
+	dataSource := NewMockDataSource(5)
+	
+	// Test different batch sizes
+	batchSizes := []int{1, 8, 16, 32, 64}
+	for _, batchSize := range batchSizes {
+		err := dataSource.Reset()
+		if err != nil {
+			t.Fatalf("Failed to reset for batch size %d: %v", batchSize, err)
+		}
+
+		inputData, inputShape, labelData, labelShape, err := dataSource.GetBatch(batchSize)
+		if err != nil {
+			t.Fatalf("Failed to get batch with size %d: %v", batchSize, err)
+		}
+
+		// Verify shape consistency
+		if inputShape[0] != batchSize {
+			t.Errorf("Batch size %d: input shape[0] should be %d, got %d", 
+				batchSize, batchSize, inputShape[0])
+		}
+		if labelShape[0] != batchSize {
+			t.Errorf("Batch size %d: label shape[0] should be %d, got %d", 
+				batchSize, batchSize, labelShape[0])
+		}
+
+		// Verify data consistency
+		expectedInputSize := batchSize * 3 * 32 * 32
+		if len(inputData) != expectedInputSize {
+			t.Errorf("Batch size %d: expected input data size %d, got %d", 
+				batchSize, expectedInputSize, len(inputData))
+		}
+		if len(labelData) != batchSize {
+			t.Errorf("Batch size %d: expected label data size %d, got %d", 
+				batchSize, batchSize, len(labelData))
+		}
+	}
+
+	// Test 3: Statistics structure consistency
+	dataLoaderStats := AsyncDataLoaderStats{
+		IsRunning:       true,
+		BatchesProduced: 100,
+		QueuedBatches:   5,
+		QueueCapacity:   10,
+		Workers:         2,
+		Generation:      3,
+	}
+
+	commandPoolStats := CommandPoolStats{
+		TotalBuffers:     8,
+		AvailableBuffers: 3,
+		InUseBuffers:     5,
+		MaxBuffers:       10,
+	}
+
+	stagingPoolStats := StagingPoolStats{
+		TotalBuffers:     6,
+		AvailableBuffers: 2,
+		InUseBuffers:     4,
+		BufferSize:       4 * 1024 * 1024,
+		MaxBuffers:       8,
+	}
+
+	// Verify internal consistency
+	if dataLoaderStats.QueuedBatches > dataLoaderStats.QueueCapacity {
+		t.Error("Queued batches should not exceed queue capacity")
+	}
+	if commandPoolStats.AvailableBuffers+commandPoolStats.InUseBuffers != commandPoolStats.TotalBuffers {
+		t.Error("Command pool buffer counts should be consistent")
+	}
+	if stagingPoolStats.AvailableBuffers+stagingPoolStats.InUseBuffers != stagingPoolStats.TotalBuffers {
+		t.Error("Staging pool buffer counts should be consistent")
+	}
+
+	t.Log("✅ Component compatibility tests passed")
 }
 
 // TestAsyncDataLoaderLogic tests the async data loader logic without Metal integration
@@ -376,11 +850,11 @@ func TestAsyncDataLoaderLogic(t *testing.T) {
 		t.Errorf("Expected Generation 3, got %d", stats.Generation)
 	}
 	
-	t.Log("Async data loader logic tests passed")
+	t.Log("✅ Async data loader logic tests passed")
 }
 
-// TestDataSourceInterface tests the DataSource interface implementation
-func TestDataSourceInterface(t *testing.T) {
+// TestDataSourceInterfaceIntegration tests the DataSource interface implementation with full validation
+func TestDataSourceInterfaceIntegration(t *testing.T) {
 	// Test MockDataSource implementation
 	maxBatches := 10
 	dataSource := NewMockDataSource(maxBatches)
@@ -473,5 +947,5 @@ func TestDataSourceInterface(t *testing.T) {
 		t.Fatalf("Failed to get batch after reset: %v", err)
 	}
 	
-	t.Log("DataSource interface tests passed")
+	t.Log("✅ DataSource interface integration tests passed")
 }

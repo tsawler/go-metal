@@ -34,7 +34,7 @@ Why did I build this? I wanted to increase my knowledge in Machine Learning, and
 ### Deep Learning Components
 - **Neural Network Layers**: Linear, Conv2D, MaxPool2D, BatchNorm, Flatten
 - **Optimizers**: SGD, Adam, AdaGrad, RMSprop, AdaDelta, NAdam, L-BFGS
-- **Loss Functions**: MSE (regression), CrossEntropy (classification)
+- **Loss Functions**: CrossEntropy, SparseCrossEntropy, BinaryCrossEntropy, BCEWithLogits, CategoricalCrossEntropy (for classification); Mean Squared Error (MSE), Mean Absolute Error (MAE), Huber (for regression)
 - **Automatic Differentiation**: Complete autograd engine with gradient computation
 - **Model Containers**: Sequential models for easy layer composition
 

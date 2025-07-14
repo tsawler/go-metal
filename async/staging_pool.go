@@ -27,6 +27,7 @@ type StagingBufferPool struct {
 	bufferSize    int // Fixed size for all buffers in this pool
 	mutex         sync.Mutex
 	nextID        int
+	closed        bool // Track if pool has been cleaned up
 }
 
 // NewStagingBufferPool creates a new staging buffer pool
@@ -132,6 +133,15 @@ func (sbp *StagingBufferPool) ReturnBuffer(buffer *StagingBuffer) {
 	}
 	
 	buffer.inUse = false
+	
+	sbp.mutex.Lock()
+	closed := sbp.closed
+	sbp.mutex.Unlock()
+	
+	// Don't try to return to a closed pool
+	if closed {
+		return
+	}
 	
 	select {
 	case sbp.available <- buffer:
@@ -267,6 +277,12 @@ type StagingPoolStats struct {
 func (sbp *StagingBufferPool) Cleanup() {
 	sbp.mutex.Lock()
 	defer sbp.mutex.Unlock()
+	
+	// Prevent double cleanup
+	if sbp.closed {
+		return
+	}
+	sbp.closed = true
 	
 	// Drain available channel
 	close(sbp.available)
