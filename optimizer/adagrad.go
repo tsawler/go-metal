@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/checkpoints"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -195,22 +196,101 @@ func (adagrad *AdaGradOptimizerState) Cleanup() {
 }
 
 // UpdateLearningRate updates the learning rate for the optimizer
-func (adagrad *AdaGradOptimizerState) UpdateLearningRate(newLR float32) error {
-	if newLR <= 0 {
-		return fmt.Errorf("learning rate must be positive, got %f", newLR)
-	}
+func (adagrad *AdaGradOptimizerState) UpdateLearningRate(newLR float32) {
 	adagrad.config.LearningRate = newLR
-	return nil
 }
 
-// GetState extracts optimizer state for checkpointing (not yet implemented)
+// GetState extracts optimizer state for checkpointing
+// Transfers GPU state to CPU in a single batched operation per buffer type
 func (adagrad *AdaGradOptimizerState) GetState() (*OptimizerState, error) {
-	return nil, fmt.Errorf("AdaGrad state serialization not yet implemented")
+	stateData := make([]checkpoints.OptimizerTensor, 0, len(adagrad.squaredGradAvgBuffers))
+	
+	// Extract squared gradient average buffers
+	for i, buffer := range adagrad.squaredGradAvgBuffers {
+		if buffer != nil {
+			// Calculate number of elements (buffer size / 4 bytes per float32)
+			numElements := adagrad.bufferSizes[i] / 4
+			
+			// Read GPU buffer to CPU
+			data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read squared gradient average buffer %d: %v", i, err)
+			}
+			
+			stateData = append(stateData, checkpoints.OptimizerTensor{
+				Name:      fmt.Sprintf("squared_grad_avg_%d", i),
+				Shape:     []int{len(data)},
+				Data:      data,
+				StateType: "squared_grad_avg",
+			})
+		}
+	}
+	
+	return &OptimizerState{
+		Type: "AdaGrad",
+		Parameters: map[string]interface{}{
+			"learning_rate": adagrad.config.LearningRate,
+			"epsilon":       adagrad.config.Epsilon,
+			"weight_decay":  adagrad.config.WeightDecay,
+			"step_count":    adagrad.currentStep,
+		},
+		StateData: stateData,
+	}, nil
 }
 
-// LoadState restores optimizer state from checkpoint (not yet implemented)
+// LoadState restores optimizer state from checkpoint
+// Transfers CPU state back to GPU in batched operations
 func (adagrad *AdaGradOptimizerState) LoadState(state *OptimizerState) error {
-	return fmt.Errorf("AdaGrad state deserialization not yet implemented")
+	// Validate state type
+	if err := validateStateType("AdaGrad", state); err != nil {
+		return err
+	}
+	
+	// Restore hyperparameters
+	if lr, ok := state.Parameters["learning_rate"].(float64); ok {
+		adagrad.config.LearningRate = float32(lr)
+	}
+	if eps, ok := state.Parameters["epsilon"].(float64); ok {
+		adagrad.config.Epsilon = float32(eps)
+	}
+	if wd, ok := state.Parameters["weight_decay"].(float64); ok {
+		adagrad.config.WeightDecay = float32(wd)
+	}
+	if sc, ok := state.Parameters["step_count"].(float64); ok {
+		adagrad.currentStep = uint64(sc)
+	} else if sc, ok := state.Parameters["step_count"].(uint64); ok {
+		adagrad.currentStep = sc
+	}
+	
+	// Restore GPU buffers
+	for _, tensor := range state.StateData {
+		idx := extractBufferIndex(tensor.Name)
+		if idx < 0 || idx >= len(adagrad.bufferSizes) {
+			return fmt.Errorf("invalid buffer index in tensor name: %s", tensor.Name)
+		}
+		
+		// Validate data size matches buffer size
+		expectedElements := adagrad.bufferSizes[idx] / 4
+		if len(tensor.Data) != expectedElements {
+			return fmt.Errorf("data size mismatch for %s: expected %d elements, got %d",
+				tensor.Name, expectedElements, len(tensor.Data))
+		}
+		
+		// Write data back to GPU buffer
+		switch tensor.StateType {
+		case "squared_grad_avg":
+			if adagrad.squaredGradAvgBuffers[idx] == nil {
+				return fmt.Errorf("squared gradient average buffer %d is nil", idx)
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(adagrad.squaredGradAvgBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore squared gradient average buffer %d: %v", idx, err)
+			}
+		default:
+			return fmt.Errorf("unknown state type: %s", tensor.StateType)
+		}
+	}
+	
+	return nil
 }
 
 // GetStepCount returns the current optimization step number

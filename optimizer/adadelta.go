@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/checkpoints"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -218,18 +219,130 @@ func (adadelta *AdaDeltaOptimizerState) Cleanup() {
 }
 
 // UpdateLearningRate is not used in AdaDelta (it adapts automatically)
-func (adadelta *AdaDeltaOptimizerState) UpdateLearningRate(newLR float32) error {
-	return fmt.Errorf("AdaDelta does not use a fixed learning rate; it adapts automatically based on parameter updates")
+func (adadelta *AdaDeltaOptimizerState) UpdateLearningRate(newLR float32) {
+	// AdaDelta does not use a fixed learning rate; it adapts automatically based on parameter updates
+	// This method is provided to satisfy the Optimizer interface but has no effect
 }
 
-// GetState extracts optimizer state for checkpointing (not yet implemented)
+// GetState extracts optimizer state for checkpointing
+// Transfers GPU state to CPU in a single batched operation per buffer type
 func (adadelta *AdaDeltaOptimizerState) GetState() (*OptimizerState, error) {
-	return nil, fmt.Errorf("AdaDelta state serialization not yet implemented")
+	stateData := make([]checkpoints.OptimizerTensor, 0, len(adadelta.squaredGradAvgBuffers)*2)
+	
+	// Extract squared gradient average buffers
+	for i, buffer := range adadelta.squaredGradAvgBuffers {
+		if buffer != nil {
+			// Calculate number of elements (buffer size / 4 bytes per float32)
+			numElements := adadelta.bufferSizes[i] / 4
+			
+			// Read GPU buffer to CPU
+			data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read squared gradient average buffer %d: %v", i, err)
+			}
+			
+			stateData = append(stateData, checkpoints.OptimizerTensor{
+				Name:      fmt.Sprintf("squared_grad_avg_%d", i),
+				Shape:     []int{len(data)},
+				Data:      data,
+				StateType: "squared_grad_avg",
+			})
+		}
+	}
+	
+	// Extract squared update average buffers
+	for i, buffer := range adadelta.squaredUpdateAvgBuffers {
+		if buffer != nil {
+			// Calculate number of elements
+			numElements := adadelta.bufferSizes[i] / 4
+			
+			// Read GPU buffer to CPU
+			data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read squared update average buffer %d: %v", i, err)
+			}
+			
+			stateData = append(stateData, checkpoints.OptimizerTensor{
+				Name:      fmt.Sprintf("squared_update_avg_%d", i),
+				Shape:     []int{len(data)},
+				Data:      data,
+				StateType: "squared_update_avg",
+			})
+		}
+	}
+	
+	return &OptimizerState{
+		Type: "AdaDelta",
+		Parameters: map[string]interface{}{
+			"rho":         adadelta.config.Rho,
+			"epsilon":     adadelta.config.Epsilon,
+			"weight_decay": adadelta.config.WeightDecay,
+			"step_count":  adadelta.currentStep,
+		},
+		StateData: stateData,
+	}, nil
 }
 
-// LoadState restores optimizer state from checkpoint (not yet implemented)
+// LoadState restores optimizer state from checkpoint
+// Transfers CPU state back to GPU in batched operations
 func (adadelta *AdaDeltaOptimizerState) LoadState(state *OptimizerState) error {
-	return fmt.Errorf("AdaDelta state deserialization not yet implemented")
+	// Validate state type
+	if err := validateStateType("AdaDelta", state); err != nil {
+		return err
+	}
+	
+	// Restore hyperparameters
+	if rho, ok := state.Parameters["rho"].(float64); ok {
+		adadelta.config.Rho = float32(rho)
+	}
+	if eps, ok := state.Parameters["epsilon"].(float64); ok {
+		adadelta.config.Epsilon = float32(eps)
+	}
+	if wd, ok := state.Parameters["weight_decay"].(float64); ok {
+		adadelta.config.WeightDecay = float32(wd)
+	}
+	if sc, ok := state.Parameters["step_count"].(float64); ok {
+		adadelta.currentStep = uint64(sc)
+	} else if sc, ok := state.Parameters["step_count"].(uint64); ok {
+		adadelta.currentStep = sc
+	}
+	
+	// Restore GPU buffers
+	for _, tensor := range state.StateData {
+		idx := extractBufferIndex(tensor.Name)
+		if idx < 0 || idx >= len(adadelta.bufferSizes) {
+			return fmt.Errorf("invalid buffer index in tensor name: %s", tensor.Name)
+		}
+		
+		// Validate data size matches buffer size
+		expectedElements := adadelta.bufferSizes[idx] / 4
+		if len(tensor.Data) != expectedElements {
+			return fmt.Errorf("data size mismatch for %s: expected %d elements, got %d",
+				tensor.Name, expectedElements, len(tensor.Data))
+		}
+		
+		// Write data back to GPU buffer
+		switch tensor.StateType {
+		case "squared_grad_avg":
+			if adadelta.squaredGradAvgBuffers[idx] == nil {
+				return fmt.Errorf("squared gradient average buffer %d is nil", idx)
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(adadelta.squaredGradAvgBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore squared gradient average buffer %d: %v", idx, err)
+			}
+		case "squared_update_avg":
+			if adadelta.squaredUpdateAvgBuffers[idx] == nil {
+				return fmt.Errorf("squared update average buffer %d is nil", idx)
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(adadelta.squaredUpdateAvgBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore squared update average buffer %d: %v", idx, err)
+			}
+		default:
+			return fmt.Errorf("unknown state type: %s", tensor.StateType)
+		}
+	}
+	
+	return nil
 }
 
 // GetStepCount returns the current optimization step number

@@ -52,11 +52,24 @@ type OptimizerState struct {
 
 // Common helper functions for state extraction
 
-// extractBufferIndex extracts the buffer index from state tensor names like "momentum_0", "variance_1"
+// extractBufferIndex extracts the buffer index from state tensor names like "momentum_0", "variance_1", "squared_grad_avg_0"
 func extractBufferIndex(name string) int {
 	var idx int
-	var prefix string
-	if n, err := fmt.Sscanf(name, "%[^_]_%d", &prefix, &idx); n == 2 && err == nil {
+	// Find the last underscore in the name
+	lastUnderscoreIdx := -1
+	for i := len(name) - 1; i >= 0; i-- {
+		if name[i] == '_' {
+			lastUnderscoreIdx = i
+			break
+		}
+	}
+	
+	if lastUnderscoreIdx == -1 {
+		return -1
+	}
+	
+	// Try to parse the number after the last underscore
+	if n, err := fmt.Sscanf(name[lastUnderscoreIdx+1:], "%d", &idx); n == 1 && err == nil {
 		return idx
 	}
 	return -1

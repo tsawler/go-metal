@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/checkpoints"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -225,12 +226,8 @@ func (nadam *NadamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 }
 
 // UpdateLearningRate updates the learning rate (useful for learning rate scheduling)
-func (nadam *NadamOptimizerState) UpdateLearningRate(newLR float32) error {
-	if newLR <= 0 {
-		return fmt.Errorf("learning rate must be positive, got %f", newLR)
-	}
+func (nadam *NadamOptimizerState) UpdateLearningRate(newLR float32) {
 	nadam.config.LearningRate = newLR
-	return nil
 }
 
 // SetCommandPool enables command buffer pooling for Metal operations
@@ -276,14 +273,133 @@ func (nadam *NadamOptimizerState) Cleanup() {
 	nadam.bufferSizes = nil
 }
 
-// GetState extracts optimizer state for checkpointing (not yet implemented)
+// GetState extracts optimizer state for checkpointing
+// Transfers GPU state to CPU in a single batched operation per buffer type
 func (nadam *NadamOptimizerState) GetState() (*OptimizerState, error) {
-	return nil, fmt.Errorf("Nadam state serialization not yet implemented")
+	stateData := make([]checkpoints.OptimizerTensor, 0, len(nadam.momentumBuffers)*2)
+	
+	// Extract momentum buffers
+	for i, buffer := range nadam.momentumBuffers {
+		if buffer != nil {
+			// Calculate number of elements (buffer size / 4 bytes per float32)
+			numElements := nadam.bufferSizes[i] / 4
+			
+			// Read GPU buffer to CPU
+			data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read momentum buffer %d: %v", i, err)
+			}
+			
+			stateData = append(stateData, checkpoints.OptimizerTensor{
+				Name:      fmt.Sprintf("momentum_%d", i),
+				Shape:     []int{len(data)},
+				Data:      data,
+				StateType: "momentum",
+			})
+		}
+	}
+	
+	// Extract variance buffers  
+	for i, buffer := range nadam.varianceBuffers {
+		if buffer != nil {
+			// Calculate number of elements
+			numElements := nadam.bufferSizes[i] / 4
+			
+			// Read GPU buffer to CPU
+			data, err := cgo_bridge.CopyMetalBufferToFloat32Array(buffer, numElements)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read variance buffer %d: %v", i, err)
+			}
+			
+			stateData = append(stateData, checkpoints.OptimizerTensor{
+				Name:      fmt.Sprintf("variance_%d", i),
+				Shape:     []int{len(data)},
+				Data:      data,
+				StateType: "variance",
+			})
+		}
+	}
+	
+	return &OptimizerState{
+		Type: "Nadam",
+		Parameters: map[string]interface{}{
+			"learning_rate": nadam.config.LearningRate,
+			"beta1":         nadam.config.Beta1,
+			"beta2":         nadam.config.Beta2,
+			"epsilon":       nadam.config.Epsilon,
+			"weight_decay":  nadam.config.WeightDecay,
+			"step_count":    nadam.currentStep,
+		},
+		StateData: stateData,
+	}, nil
 }
 
-// LoadState restores optimizer state from checkpoint (not yet implemented)
+// LoadState restores optimizer state from checkpoint
+// Transfers CPU state back to GPU in batched operations
 func (nadam *NadamOptimizerState) LoadState(state *OptimizerState) error {
-	return fmt.Errorf("Nadam state deserialization not yet implemented")
+	// Validate state type
+	if err := validateStateType("Nadam", state); err != nil {
+		return err
+	}
+	
+	// Restore hyperparameters
+	if lr, ok := state.Parameters["learning_rate"].(float64); ok {
+		nadam.config.LearningRate = float32(lr)
+	}
+	if b1, ok := state.Parameters["beta1"].(float64); ok {
+		nadam.config.Beta1 = float32(b1)
+	}
+	if b2, ok := state.Parameters["beta2"].(float64); ok {
+		nadam.config.Beta2 = float32(b2)
+	}
+	if eps, ok := state.Parameters["epsilon"].(float64); ok {
+		nadam.config.Epsilon = float32(eps)
+	}
+	if wd, ok := state.Parameters["weight_decay"].(float64); ok {
+		nadam.config.WeightDecay = float32(wd)
+	}
+	if sc, ok := state.Parameters["step_count"].(float64); ok {
+		nadam.currentStep = uint64(sc)
+	} else if sc, ok := state.Parameters["step_count"].(uint64); ok {
+		nadam.currentStep = sc
+	}
+	
+	// Restore GPU buffers
+	for _, tensor := range state.StateData {
+		idx := extractBufferIndex(tensor.Name)
+		if idx < 0 || idx >= len(nadam.bufferSizes) {
+			return fmt.Errorf("invalid buffer index in tensor name: %s", tensor.Name)
+		}
+		
+		// Validate data size matches buffer size
+		expectedElements := nadam.bufferSizes[idx] / 4
+		if len(tensor.Data) != expectedElements {
+			return fmt.Errorf("data size mismatch for %s: expected %d elements, got %d",
+				tensor.Name, expectedElements, len(tensor.Data))
+		}
+		
+		// Write data back to GPU buffer
+		switch tensor.StateType {
+		case "momentum":
+			if nadam.momentumBuffers[idx] == nil {
+				return fmt.Errorf("momentum buffer %d is nil", idx)
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(nadam.momentumBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore momentum buffer %d: %v", idx, err)
+			}
+		case "variance":
+			if nadam.varianceBuffers[idx] == nil {
+				return fmt.Errorf("variance buffer %d is nil", idx) 
+			}
+			if err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(nadam.varianceBuffers[idx], tensor.Data); err != nil {
+				return fmt.Errorf("failed to restore variance buffer %d: %v", idx, err)
+			}
+		default:
+			return fmt.Errorf("unknown state type: %s", tensor.StateType)
+		}
+	}
+	
+	return nil
 }
 
 // GetStepCount returns the current optimization step number
