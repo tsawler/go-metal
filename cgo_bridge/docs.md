@@ -814,6 +814,9 @@ const (
 	Adam
 	RMSProp
 	LBFGS
+	AdaGrad
+	AdaDelta
+	Nadam
 )
 ```
 

@@ -247,6 +247,46 @@ This phase focuses on building out the core utility of the `go-metal` library by
       * ✅ **AdaDelta:** **COMPLETED** - Fully implemented with GPU-resident exponential moving averages for gradients and parameter updates, RMS-based adaptive learning rate computation eliminating manual learning rate tuning, and comprehensive demo application. Features dual accumulator design (E[g²] and E[Δx²]), automatic learning rate adaptation, weight decay support, and robust optimization across different problem types without hyperparameter tuning.
       * ✅ **Nadam:** **COMPLETED** - Fully implemented Nesterov-accelerated Adam optimizer combining adaptive learning rates with Nesterov momentum for improved convergence in modern deep learning. Features GPU-resident state management, momentum schedule parameters, bias correction, MPSGraph integration, comprehensive demo application, and extensive unit tests. Provides faster convergence than standard Adam through look-ahead gradient computation and adaptive momentum scheduling.
 
+    * **CGO Bridge Integration for Standalone Optimizers:** Integrate existing standalone optimizer implementations (AdaGrad, AdaDelta, Nadam) into the unified cgo_bridge training system to enable their use with ModelTrainingEngine:
+      * ✅ **AdaGrad CGO Integration:** **COMPLETED** - Successfully integrated AdaGrad into the unified training system:
+        * ✅ Added `AdaGrad` to `cgo_bridge.OptimizerType` enum as value 4
+        * ✅ Updated `model_engine.go` optimizer validation to support AdaGrad in all switch statements (GetOptimizerState, SetOptimizerState, UpdateLearningRate)
+        * ✅ Added AdaGrad initialization logic in NewModelTrainingEngineDynamic with proper config mapping (LearningRate, Epsilon, WeightDecay)
+        * ✅ Implemented `executeAdaGradStepDynamic()` and `executeAdaGradStepDynamicWithGradients()` methods following Adam pattern
+        * ✅ Added `ExecuteModelTrainingStepWithAdaGrad()` for hybrid engine support
+        * ✅ Updated dynamic and persistent training execution logic to route AdaGrad requests correctly
+        * ✅ Added `adagradOptimizer` field to `MPSTrainingEngine` struct with proper initialization and cleanup
+        * ✅ Architecture Compliance: Maintains GPU-resident principles, minimizes CGO calls, supports MPSGraph-centric workflows, and implements proper memory management
+        * ✅ Backward Compatibility: Preserves existing standalone AdaGrad optimizer functionality while adding unified training engine support
+        * ✅ Integration Complete: AdaGrad can now be used seamlessly with ModelTrainingEngine for both dynamic and hybrid engines
+      * ✅ **AdaDelta CGO Integration:** **COMPLETED** - Successfully integrated AdaDelta into the unified training system:
+        * ✅ Added `AdaDelta` to `cgo_bridge.OptimizerType` enum as value 5
+        * ✅ Updated `model_engine.go` optimizer validation to support AdaDelta in all switch statements (GetOptimizerState, SetOptimizerState, UpdateLearningRate)
+        * ✅ Added AdaDelta initialization logic in NewModelTrainingEngineDynamic with proper config mapping (Rho via Alpha field, Epsilon, WeightDecay)
+        * ✅ Implemented `executeAdaDeltaStepDynamic()` and `executeAdaDeltaStepDynamicWithGradients()` methods following established pattern
+        * ✅ Added `ExecuteModelTrainingStepWithAdaDelta()` for hybrid engine support
+        * ✅ Updated dynamic and persistent training execution logic to route AdaDelta requests correctly
+        * ✅ Added `adadeltaOptimizer` field to `MPSTrainingEngine` struct with proper initialization and cleanup
+        * ✅ Special handling for UpdateLearningRate (AdaDelta doesn't use traditional learning rate)
+        * ✅ Architecture Compliance: Maintains GPU-resident principles, minimizes CGO calls, supports MPSGraph-centric workflows, and implements proper memory management
+        * ✅ Backward Compatibility: Preserves existing standalone AdaDelta optimizer functionality while adding unified training engine support
+        * ✅ Integration Complete: AdaDelta can now be used seamlessly with ModelTrainingEngine for both dynamic and hybrid engines  
+      * ✅ **Nadam CGO Integration:** **COMPLETED** - Successfully integrated Nadam into the unified training system:
+        * ✅ Added `Nadam` to `cgo_bridge.OptimizerType` enum as value 6
+        * ✅ Updated `model_engine.go` optimizer validation to support Nadam in all switch statements (GetOptimizerState, SetOptimizerState, UpdateLearningRate)
+        * ✅ Added Nadam initialization logic in NewModelTrainingEngineDynamic with proper config mapping (LearningRate, Beta1, Beta2, Epsilon, WeightDecay)
+        * ✅ Implemented `executeNadamStepDynamic()` and `executeNadamStepDynamicWithGradients()` methods following established pattern
+        * ✅ Added `ExecuteModelTrainingStepWithNadam()` for hybrid engine support
+        * ✅ Updated dynamic and persistent training execution logic to route Nadam requests correctly
+        * ✅ Added `nadamOptimizer` field to `MPSTrainingEngine` struct with proper initialization and cleanup
+        * ✅ Architecture Compliance: Maintains GPU-resident principles, minimizes CGO calls, supports MPSGraph-centric workflows, and implements proper memory management
+        * ✅ Backward Compatibility: Preserves existing standalone Nadam optimizer functionality while adding unified training engine support
+        * ✅ Integration Complete: Nadam can now be used seamlessly with ModelTrainingEngine for both dynamic and hybrid engines
+        * ✅ Demo Applications: Complete demo applications (nadam-demo, adadelta-demo, adagrad-demo) validate unified training system integration
+      * **Architecture Compliance:** Maintain GPU-resident principles, minimize CGO calls, support MPSGraph-centric workflows, and implement proper memory management
+      * **Backward Compatibility:** Preserve existing standalone optimizer functionality while adding unified training engine support
+      * **Validation:** Ensure all optimizers work correctly with both standalone usage and ModelTrainingEngine integration
+
     * ✅ **Common Loss Functions:** ~~Implement a broader range of loss functions, including Mean Squared Error (MSE), Binary Cross-Entropy with Logits (BCEWithLogitsLoss), Categorical Cross-Entropy, and Huber Loss.~~ **COMPLETED** - Full regression and classification loss function support implemented:
       * **Regression:** MSE, MAE, and Huber loss with MPSGraph implementations
       * **Classification:** CrossEntropy, SparseCrossEntropy, BinaryCrossEntropy, BCEWithLogits, and CategoricalCrossEntropy all fully implemented with proper MPSGraph operations

@@ -476,6 +476,28 @@ ExecuteModelTrainingStepBatchedPersistentWithGradients executes training with
 pre-allocated gradient tensors This eliminates the 128MB/step gradient
 allocation that caused 83% performance degradation
 
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepWithAdaDelta
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdaDelta(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error)
+```
+ExecuteModelTrainingStepWithAdaDelta executes model training with AdaDelta
+optimizer
+
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepWithAdaGrad
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdaGrad(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error)
+```
+ExecuteModelTrainingStepWithAdaGrad executes model training with AdaGrad
+optimizer
+
 #### func (*ModelTrainingEngine) ExecuteModelTrainingStepWithAdam
 
 ```go
@@ -495,6 +517,16 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithLBFGS(
 ) (float32, error)
 ```
 ExecuteModelTrainingStepWithLBFGS executes model training with L-BFGS optimizer
+
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepWithNadam
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithNadam(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error)
+```
+ExecuteModelTrainingStepWithNadam executes model training with Nadam optimizer
 
 #### func (*ModelTrainingEngine) GetModelSpec
 

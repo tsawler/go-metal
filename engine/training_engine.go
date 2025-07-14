@@ -21,6 +21,9 @@ type MPSTrainingEngine struct {
 	rmspropOptimizer  *optimizer.RMSPropOptimizerState  // Optional RMSProp optimizer
 	sgdOptimizer      *optimizer.SGDOptimizerState      // Optional SGD optimizer
 	lbfgsOptimizer    *optimizer.LBFGSOptimizerState    // Optional L-BFGS optimizer
+	adagradOptimizer  *optimizer.AdaGradOptimizerState  // Optional AdaGrad optimizer
+	adadeltaOptimizer *optimizer.AdaDeltaOptimizerState // Optional AdaDelta optimizer
+	nadamOptimizer    *optimizer.NadamOptimizerState    // Optional Nadam optimizer
 	
 	// RESOURCE LEAK FIX: Command buffer pooling support
 	commandQueue unsafe.Pointer           // MTLCommandQueue for command buffer creation
@@ -58,6 +61,11 @@ func NewMPSTrainingEngine(config cgo_bridge.TrainingConfig) (*MPSTrainingEngine,
 		initialized:   true,
 		isDynamic:     false, // Regular hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
+		rmspropOptimizer: nil,
+		sgdOptimizer: nil,
+		lbfgsOptimizer: nil,
+		adagradOptimizer: nil,
+		adadeltaOptimizer: nil,
 		
 		// RESOURCE LEAK FIX: Command buffer pooling support
 		commandQueue:      commandQueue,
@@ -97,6 +105,11 @@ func NewMPSTrainingEngineConstantWeights(config cgo_bridge.TrainingConfig) (*MPS
 		initialized:   true,
 		isDynamic:     false, // Constant weights hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
+		rmspropOptimizer: nil,
+		sgdOptimizer: nil,
+		lbfgsOptimizer: nil,
+		adagradOptimizer: nil,
+		adadeltaOptimizer: nil,
 		
 		// RESOURCE LEAK FIX: Command buffer pooling support
 		commandQueue:      commandQueue,
@@ -136,6 +149,11 @@ func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig, modelConfig cg
 		initialized:   true,
 		isDynamic:     false, // Constant weights hybrid engine
 		adamOptimizer: nil, // No Adam optimizer by default
+		rmspropOptimizer: nil,
+		sgdOptimizer: nil,
+		lbfgsOptimizer: nil,
+		adagradOptimizer: nil,
+		adadeltaOptimizer: nil,
 		
 		// RESOURCE LEAK FIX: Command buffer pooling support
 		commandQueue:      commandQueue,
@@ -534,9 +552,34 @@ func (e *MPSTrainingEngine) Cleanup() {
 		e.adamOptimizer = nil
 	}
 	
+	if e.rmspropOptimizer != nil {
+		e.rmspropOptimizer.Cleanup()
+		e.rmspropOptimizer = nil
+	}
+	
+	if e.sgdOptimizer != nil {
+		e.sgdOptimizer.Cleanup()
+		e.sgdOptimizer = nil
+	}
+	
 	if e.lbfgsOptimizer != nil {
 		e.lbfgsOptimizer.Cleanup()
 		e.lbfgsOptimizer = nil
+	}
+	
+	if e.adagradOptimizer != nil {
+		e.adagradOptimizer.Cleanup()
+		e.adagradOptimizer = nil
+	}
+	
+	if e.adadeltaOptimizer != nil {
+		e.adadeltaOptimizer.Cleanup()
+		e.adadeltaOptimizer = nil
+	}
+	
+	if e.nadamOptimizer != nil {
+		e.nadamOptimizer.Cleanup()
+		e.nadamOptimizer = nil
 	}
 	
 	if e.initialized && e.engine != nil {

@@ -182,20 +182,40 @@ func (nadam *NadamOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 	nadam.currentStep++
 
 	// Execute Nadam step using MPSGraph
-	err := cgo_bridge.ExecuteNadamStepMPSGraph(
-		nadam.device,
-		nadam.WeightBuffers,
-		gradientBuffers,
-		nadam.momentumBuffers,
-		nadam.varianceBuffers,
-		nadam.bufferSizes,
-		nadam.config.LearningRate,
-		nadam.config.Beta1,
-		nadam.config.Beta2,
-		nadam.config.Epsilon,
-		nadam.config.WeightDecay,
-		int(nadam.currentStep),
-	)
+	var err error
+	if nadam.usePooling && nadam.commandPool != nil {
+		// Note: ExecuteNadamStepMPSGraphPooled is not yet implemented
+		// Fall back to non-pooled version for now
+		err = cgo_bridge.ExecuteNadamStepMPSGraph(
+			nadam.device,
+			nadam.WeightBuffers,
+			gradientBuffers,
+			nadam.momentumBuffers,
+			nadam.varianceBuffers,
+			nadam.bufferSizes,
+			nadam.config.LearningRate,
+			nadam.config.Beta1,
+			nadam.config.Beta2,
+			nadam.config.Epsilon,
+			nadam.config.WeightDecay,
+			int(nadam.currentStep),
+		)
+	} else {
+		err = cgo_bridge.ExecuteNadamStepMPSGraph(
+			nadam.device,
+			nadam.WeightBuffers,
+			gradientBuffers,
+			nadam.momentumBuffers,
+			nadam.varianceBuffers,
+			nadam.bufferSizes,
+			nadam.config.LearningRate,
+			nadam.config.Beta1,
+			nadam.config.Beta2,
+			nadam.config.Epsilon,
+			nadam.config.WeightDecay,
+			int(nadam.currentStep),
+		)
+	}
 
 	if err != nil {
 		return fmt.Errorf("Nadam step execution failed: %v", err)
@@ -254,4 +274,19 @@ func (nadam *NadamOptimizerState) Cleanup() {
 	nadam.varianceBuffers = nil
 	nadam.WeightBuffers = nil
 	nadam.bufferSizes = nil
+}
+
+// GetState extracts optimizer state for checkpointing (not yet implemented)
+func (nadam *NadamOptimizerState) GetState() (*OptimizerState, error) {
+	return nil, fmt.Errorf("Nadam state serialization not yet implemented")
+}
+
+// LoadState restores optimizer state from checkpoint (not yet implemented)
+func (nadam *NadamOptimizerState) LoadState(state *OptimizerState) error {
+	return fmt.Errorf("Nadam state deserialization not yet implemented")
+}
+
+// GetStepCount returns the current optimization step number
+func (nadam *NadamOptimizerState) GetStepCount() uint64 {
+	return nadam.currentStep
 }

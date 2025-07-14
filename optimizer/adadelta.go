@@ -221,3 +221,18 @@ func (adadelta *AdaDeltaOptimizerState) Cleanup() {
 func (adadelta *AdaDeltaOptimizerState) UpdateLearningRate(newLR float32) error {
 	return fmt.Errorf("AdaDelta does not use a fixed learning rate; it adapts automatically based on parameter updates")
 }
+
+// GetState extracts optimizer state for checkpointing (not yet implemented)
+func (adadelta *AdaDeltaOptimizerState) GetState() (*OptimizerState, error) {
+	return nil, fmt.Errorf("AdaDelta state serialization not yet implemented")
+}
+
+// LoadState restores optimizer state from checkpoint (not yet implemented)
+func (adadelta *AdaDeltaOptimizerState) LoadState(state *OptimizerState) error {
+	return fmt.Errorf("AdaDelta state deserialization not yet implemented")
+}
+
+// GetStepCount returns the current optimization step number
+func (adadelta *AdaDeltaOptimizerState) GetStepCount() uint64 {
+	return adadelta.currentStep
+}

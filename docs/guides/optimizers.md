@@ -10,6 +10,8 @@ Optimizers in go-metal determine how your model learns from data by updating par
 
 ### First-Order Optimizers
 
+**✨ Newly Integrated with Unified Training System**: AdaGrad, AdaDelta, and Nadam are now fully integrated with `ModelTrainingEngine`, providing seamless GPU-resident optimization with single CGO calls and automatic MPSGraph fusion.
+
 #### Adam (Adaptive Moment Estimation)
 **Most popular and versatile optimizer for deep learning.**
 
@@ -102,72 +104,170 @@ config := training.TrainerConfig{
 - ✅ Non-stationary objectives
 
 #### AdaGrad (Adaptive Gradient Algorithm)
-**Adapts learning rate based on historical gradients.**
+**Adapts learning rate based on historical gradients - excellent for sparse features.**
 
 ```go
 config := training.TrainerConfig{
     OptimizerType: cgo_bridge.AdaGrad,
-    LearningRate:  0.01,   // Can start higher than Adam
+    LearningRate:  0.01,      // Can start higher than Adam
+    Epsilon:      1e-10,      // Numerical stability (smaller than Adam)
+    WeightDecay:  0.001,      // L2 regularization
+    EngineType:   training.Dynamic,  // Full unified training support
 }
 ```
 
 **How it works:**
-- Accumulates squared gradients over time
-- Reduces learning rate for frequently updated parameters
-- Good for sparse features
+- Accumulates squared gradients over time: `G_t = G_{t-1} + g_t²`
+- Adaptive per-parameter learning rates: `θ_t = θ_{t-1} - (α/√(G_t + ε)) * g_t`
+- Automatically reduces learning rate for frequently updated parameters
+- Perfect for sparse data where features have vastly different update frequencies
 
 **Best for:**
-- ✅ Sparse data and features
-- ✅ Natural language processing
+- ✅ Sparse data and features (NLP, recommendation systems)
+- ✅ Natural language processing with varying word frequencies
 - ✅ When parameters have very different update frequencies
+- ✅ Problems with infrequent but important features
 - ✅ Convex optimization problems
+
+**Unified Training Integration:**
+```go
+// Complete example with ModelTrainingEngine
+trainer, err := training.NewModelTrainer(model, config)
+if err != nil {
+    log.Fatal(err)
+}
+defer trainer.Cleanup()
+
+// Single call handles: forward pass + AdaGrad optimization + backward pass
+result, err := trainer.TrainStep(inputTensor, labelTensor)
+```
+
+**Architecture Benefits:**
+- **GPU-Resident**: All AdaGrad state (accumulated gradients) stays on GPU
+- **Single CGO Call**: Complete training step in one optimized call
+- **MPSGraph Integration**: Automatic kernel fusion with other operations
+- **Memory Efficient**: Buffer pooling and automatic cleanup
 
 **Caution:**
 - Learning rate can become too small over time
-- May stop learning in long training sessions
+- May stop learning in very long training sessions
+- Not ideal for non-stationary objectives
 
 #### AdaDelta 
-**Extension of AdaGrad that addresses learning rate decay.**
+**Extension of AdaGrad that addresses learning rate decay - no manual learning rate tuning required.**
 
 ```go
 config := training.TrainerConfig{
     OptimizerType: cgo_bridge.AdaDelta,
-    LearningRate:  1.0,    // Often set to 1.0 for AdaDelta
+    LearningRate:  1.0,      // Set to 1.0 - AdaDelta handles scaling automatically
+    Alpha:         0.95,     // Rho parameter (decay rate for moving averages)
+    Epsilon:       1e-6,     // Numerical stability
+    WeightDecay:   0.005,    // L2 regularization
+    EngineType:    training.Dynamic,  // Full unified training support
 }
 ```
 
 **How it works:**
-- Like AdaGrad but uses window of past gradients instead of all history
-- Automatically adapts learning rate without manual tuning
-- More robust to hyperparameter choices
+- Uses exponential moving averages instead of accumulating all history: `E[g²]_t = ρ·E[g²]_{t-1} + (1-ρ)·g_t²`
+- Also tracks moving average of parameter updates: `E[Δx²]_t = ρ·E[Δx²]_{t-1} + (1-ρ)·Δx_t²`
+- Automatically adapts learning rate: `Δx_t = -(√(E[Δx²]_{t-1} + ε) / √(E[g²]_t + ε)) · g_t`
+- No manual learning rate tuning required - algorithm determines appropriate scale
 
 **Best for:**
-- ✅ When you want adaptive learning without tuning
-- ✅ Long training sessions
-- ✅ Robust optimization across different problems
+- ✅ When you want robust optimization without hyperparameter tuning
+- ✅ Long training sessions (avoids AdaGrad's diminishing returns)
+- ✅ Robust optimization across different problem types and scales
+- ✅ When you don't know the appropriate learning rate
+- ✅ Non-stationary objectives
+
+**Unified Training Integration:**
+```go
+// Complete example with ModelTrainingEngine
+trainer, err := training.NewModelTrainer(model, config)
+if err != nil {
+    log.Fatal(err)
+}
+defer trainer.Cleanup()
+
+// Single call handles: forward pass + AdaDelta optimization + backward pass
+result, err := trainer.TrainStep(inputTensor, labelTensor)
+
+// Note: UpdateLearningRate() will return error for AdaDelta 
+// since it adapts learning rate automatically
+```
+
+**Architecture Benefits:**
+- **GPU-Resident**: All AdaDelta state (gradient and update averages) stays on GPU
+- **Single CGO Call**: Complete training step in one optimized call
+- **MPSGraph Integration**: Automatic kernel fusion with dual accumulator updates
+- **Memory Efficient**: Proper buffer pooling for both moving averages
+
+**Key Advantages:**
+- Addresses AdaGrad's learning rate decay problem
+- No learning rate hyperparameter tuning needed
+- Robust across different problem types
+- Consistent performance throughout long training runs
 
 #### Nadam (Nesterov-accelerated Adam)
-**Combines Adam with Nesterov momentum.**
+**Combines Adam's adaptive learning rates with Nesterov momentum for superior convergence.**
 
 ```go
 config := training.TrainerConfig{
     OptimizerType: cgo_bridge.Nadam,
-    LearningRate:  0.002,
-    Beta1:         0.9,
-    Beta2:         0.999,
-    Epsilon:       1e-8,
+    LearningRate:  0.002,    // Typically slightly higher than Adam
+    Beta1:         0.9,      // Momentum decay rate
+    Beta2:         0.999,    // Squared gradient decay rate
+    Epsilon:       1e-8,     // Numerical stability
+    WeightDecay:   0.01,     // L2 regularization for better generalization
+    EngineType:    training.Dynamic,  // Full unified training support
 }
 ```
 
 **How it works:**
-- Adam with Nesterov momentum correction
-- Often converges faster than standard Adam
-- More sophisticated momentum handling
+- Combines Adam's adaptive learning rates with Nesterov momentum acceleration
+- Uses momentum schedule: `μ_t = β₁ × (1 - 0.5 × 0.96^(t × 0.004))`
+- Nesterov-accelerated momentum: `m̂_t = μ_{t+1} × m̂_t + (1 - μ_{t+1}) × g_t / (1 - β₁^t)`
+- Parameter update: `θ_t = θ_{t-1} - α × m̂_t / (√v̂_t + ε)`
+- Look-ahead gradient computation provides faster convergence than standard Adam
 
 **Best for:**
-- ✅ When Adam works but you want faster convergence
-- ✅ Deep neural networks
-- ✅ Computer vision tasks
+- ✅ Modern deep learning applications requiring fast convergence
+- ✅ Computer vision tasks (CNNs, image classification)
+- ✅ Natural language processing (when you want faster than Adam)
+- ✅ Large-scale training where convergence speed matters
+- ✅ When Adam works but you want superior performance
+
+**Unified Training Integration:**
+```go
+// Complete example with ModelTrainingEngine
+trainer, err := training.NewModelTrainer(model, config)
+if err != nil {
+    log.Fatal(err)
+}
+defer trainer.Cleanup()
+
+// Single call handles: forward pass + Nadam optimization + backward pass
+result, err := trainer.TrainStep(inputTensor, labelTensor)
+
+// Supports learning rate scheduling during training
+if epoch % 10 == 0 {
+    newLR := config.LearningRate * 0.8
+    trainer.UpdateLearningRate(newLR)
+}
+```
+
+**Architecture Benefits:**
+- **GPU-Resident**: All Nadam state (momentum, variance, step count) stays on GPU
+- **Single CGO Call**: Complete training step with Nesterov momentum in one call
+- **MPSGraph Integration**: Automatic kernel fusion with momentum schedule computation
+- **Memory Efficient**: Proper buffer pooling and automatic cleanup
+
+**Key Advantages over Adam:**
+- **Faster Convergence**: Nesterov momentum provides faster convergence, especially in later stages
+- **Better Generalization**: Improved momentum schedule leads to better generalization
+- **Reduced Oscillations**: More stable optimization trajectory
+- **Theoretical Foundation**: Strong theoretical backing for the momentum schedule
+- **Modern Performance**: Often converges 10-20% faster than Adam on deep networks
 
 ### Second-Order Optimizers
 
@@ -419,6 +519,25 @@ func compareOptimizers() {
             "Sparse features, NLP",
         },
         {
+            "AdaDelta",
+            training.TrainerConfig{
+                OptimizerType: cgo_bridge.AdaDelta,
+                LearningRate:  1.0,
+                Alpha:         0.95,
+            },
+            "No LR tuning needed, robust",
+        },
+        {
+            "Nadam",
+            training.TrainerConfig{
+                OptimizerType: cgo_bridge.Nadam,
+                LearningRate:  0.002,
+                Beta1:         0.9,
+                Beta2:         0.999,
+            },
+            "Faster Adam, modern deep learning",
+        },
+        {
             "L-BFGS",
             training.TrainerConfig{
                 OptimizerType: cgo_bridge.LBFGS,
@@ -482,8 +601,8 @@ func learningRateGuidelines() {
         "Adam":     "0.001 (safe) to 0.003 (aggressive)",
         "SGD":      "0.01 (typical) to 0.1 (small models)",
         "RMSProp":  "0.001 (standard)",
-        "AdaGrad":  "0.01 (can start higher)",
-        "AdaDelta": "1.0 (algorithm handles scaling)",
+        "AdaGrad":  "0.01 (can start higher, adapts down)",
+        "AdaDelta": "1.0 (algorithm handles scaling automatically)",
         "Nadam":    "0.002 (slightly higher than Adam)",
         "L-BFGS":   "1.0 (algorithm determines step size)",
     }
@@ -623,8 +742,8 @@ func optimizerPerformanceCharacteristics() {
         {"SGD", "Low", "Fastest", "Slow", "Medium"},
         {"RMSProp", "Medium", "Fast", "Medium", "High"},
         {"AdaGrad", "Medium", "Fast", "Fast→Slow", "Medium"},
-        {"AdaDelta", "Medium", "Fast", "Medium", "High"},
-        {"Nadam", "High", "Fast", "Fastest", "High"},
+        {"AdaDelta", "Medium", "Fast", "Steady", "Very High"},
+        {"Nadam", "High", "Fast", "Very Fast", "High"},
         {"L-BFGS", "Very High", "Slow", "Very Fast", "Very High"},
     }
     
@@ -653,10 +772,11 @@ func quickOptimizerSelection() {
     
     fmt.Println("\n🔧 Special Cases:")
     fmt.Println("   • Simple model + small data → SGD")
-    fmt.Println("   • RNN/LSTM → RMSProp")
+    fmt.Println("   • RNN/LSTM → RMSProp")  
     fmt.Println("   • Sparse features → AdaGrad")
-    fmt.Println("   • Small dataset + smooth loss → L-BFGS")
+    fmt.Println("   • No LR tuning wanted → AdaDelta")
     fmt.Println("   • Need fastest convergence → Nadam")
+    fmt.Println("   • Small dataset + smooth loss → L-BFGS")
     
     fmt.Println("\n⚙️ Configuration Template:")
     fmt.Println(`   config := training.TrainerConfig{

@@ -53,6 +53,13 @@ func (adadelta *AdaDeltaOptimizerState) Cleanup()
 ```
 Cleanup releases all GPU buffers
 
+#### func (*AdaDeltaOptimizerState) GetState
+
+```go
+func (adadelta *AdaDeltaOptimizerState) GetState() (*OptimizerState, error)
+```
+GetState extracts optimizer state for checkpointing (not yet implemented)
+
 #### func (*AdaDeltaOptimizerState) GetStats
 
 ```go
@@ -66,6 +73,20 @@ GetStats returns optimizer statistics
 func (adadelta *AdaDeltaOptimizerState) GetStep() uint64
 ```
 GetStep returns the current optimization step count
+
+#### func (*AdaDeltaOptimizerState) GetStepCount
+
+```go
+func (adadelta *AdaDeltaOptimizerState) GetStepCount() uint64
+```
+GetStepCount returns the current optimization step number
+
+#### func (*AdaDeltaOptimizerState) LoadState
+
+```go
+func (adadelta *AdaDeltaOptimizerState) LoadState(state *OptimizerState) error
+```
+LoadState restores optimizer state from checkpoint (not yet implemented)
 
 #### func (*AdaDeltaOptimizerState) SetCommandPool
 
@@ -143,6 +164,13 @@ func (adagrad *AdaGradOptimizerState) Cleanup()
 ```
 Cleanup releases all GPU buffers
 
+#### func (*AdaGradOptimizerState) GetState
+
+```go
+func (adagrad *AdaGradOptimizerState) GetState() (*OptimizerState, error)
+```
+GetState extracts optimizer state for checkpointing (not yet implemented)
+
 #### func (*AdaGradOptimizerState) GetStats
 
 ```go
@@ -156,6 +184,20 @@ GetStats returns optimizer statistics
 func (adagrad *AdaGradOptimizerState) GetStep() uint64
 ```
 GetStep returns the current optimization step count
+
+#### func (*AdaGradOptimizerState) GetStepCount
+
+```go
+func (adagrad *AdaGradOptimizerState) GetStepCount() uint64
+```
+GetStepCount returns the current optimization step number
+
+#### func (*AdaGradOptimizerState) LoadState
+
+```go
+func (adagrad *AdaGradOptimizerState) LoadState(state *OptimizerState) error
+```
+LoadState restores optimizer state from checkpoint (not yet implemented)
 
 #### func (*AdaGradOptimizerState) SetCommandPool
 
@@ -471,6 +513,13 @@ func (nadam *NadamOptimizerState) Cleanup()
 ```
 Cleanup releases all GPU buffers
 
+#### func (*NadamOptimizerState) GetState
+
+```go
+func (nadam *NadamOptimizerState) GetState() (*OptimizerState, error)
+```
+GetState extracts optimizer state for checkpointing (not yet implemented)
+
 #### func (*NadamOptimizerState) GetStats
 
 ```go
@@ -484,6 +533,20 @@ GetStats returns optimizer statistics as a map for generic access
 func (nadam *NadamOptimizerState) GetStep() uint64
 ```
 GetStep returns the current step count
+
+#### func (*NadamOptimizerState) GetStepCount
+
+```go
+func (nadam *NadamOptimizerState) GetStepCount() uint64
+```
+GetStepCount returns the current optimization step number
+
+#### func (*NadamOptimizerState) LoadState
+
+```go
+func (nadam *NadamOptimizerState) LoadState(state *OptimizerState) error
+```
+LoadState restores optimizer state from checkpoint (not yet implemented)
 
 #### func (*NadamOptimizerState) SetCommandPool
 

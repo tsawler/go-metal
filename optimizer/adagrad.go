@@ -202,3 +202,18 @@ func (adagrad *AdaGradOptimizerState) UpdateLearningRate(newLR float32) error {
 	adagrad.config.LearningRate = newLR
 	return nil
 }
+
+// GetState extracts optimizer state for checkpointing (not yet implemented)
+func (adagrad *AdaGradOptimizerState) GetState() (*OptimizerState, error) {
+	return nil, fmt.Errorf("AdaGrad state serialization not yet implemented")
+}
+
+// LoadState restores optimizer state from checkpoint (not yet implemented)
+func (adagrad *AdaGradOptimizerState) LoadState(state *OptimizerState) error {
+	return fmt.Errorf("AdaGrad state deserialization not yet implemented")
+}
+
+// GetStepCount returns the current optimization step number
+func (adagrad *AdaGradOptimizerState) GetStepCount() uint64 {
+	return adagrad.currentStep
+}

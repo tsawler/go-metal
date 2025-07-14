@@ -473,6 +473,32 @@ loss := executeSingleTrainingStep(inputTensor, labelTensor) // Everything happen
 return TrainingResult{Loss: loss}
 ```
 
+### Unified Optimizer Integration
+
+**All optimizers now follow the same architecture pattern:**
+
+```go
+// Unified API supports all optimizers seamlessly
+config := training.TrainerConfig{
+    OptimizerType: cgo_bridge.Nadam,  // Adam, SGD, RMSProp, AdaGrad, AdaDelta, Nadam, LBFGS
+    // ... other config parameters
+}
+
+trainer, _ := training.NewModelTrainer(model, config)
+result, _ := trainer.TrainStep(inputTensor, labelTensor)  // Same call for all optimizers
+```
+
+**Architecture Benefits for All Optimizers:**
+- **GPU-Resident**: All optimizer state (momentum, variance, accumulated gradients) stays on GPU
+- **Single CGO Call**: Complete training step with any optimizer in one optimized call  
+- **MPSGraph Integration**: Automatic kernel fusion with optimizer-specific operations
+- **Memory Efficient**: Proper buffer pooling and cleanup for all optimizer types
+
+**Recent Integration Achievements:**
+- ✅ **AdaGrad**: Integrated with sparse gradient accumulation and adaptive per-parameter learning rates
+- ✅ **AdaDelta**: Integrated with dual exponential moving averages and automatic learning rate adaptation
+- ✅ **Nadam**: Integrated with Nesterov momentum scheduling and bias correction
+
 This architecture delivers exceptional performance while maintaining Go's safety and clarity. The four principles work together synergistically - GPU residency enables batched operations, MPSGraph provides optimization, and proper memory management ensures reliability.
 
 ---

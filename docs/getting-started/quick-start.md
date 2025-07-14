@@ -53,7 +53,7 @@ func main() {
     config := training.TrainerConfig{
         BatchSize:     batchSize,
         LearningRate:  0.01,
-        OptimizerType: cgo_bridge.Adam,
+        OptimizerType: cgo_bridge.Adam,  // Try: Adam, SGD, RMSProp, AdaGrad, AdaDelta, Nadam, LBFGS
         EngineType:    training.Dynamic,
         LossFunction:  0, // CrossEntropy
         ProblemType:   0, // Classification
@@ -180,7 +180,7 @@ config := training.TrainerConfig{
 **Key Points:**
 - **Batch Size**: Number of samples processed together (affects GPU efficiency)
 - **Learning Rate**: Controls how big steps the optimizer takes
-- **Adam**: Adaptive optimizer that adjusts learning rates automatically
+- **Adam**: Adaptive optimizer that adjusts learning rates automatically (also try AdaGrad for sparse data, AdaDelta for automatic LR, or Nadam for faster convergence)
 - **CrossEntropy**: Standard loss for multi-class classification
 
 ### 3. Training Loop
@@ -244,7 +244,7 @@ Congratulations! You've successfully trained your first neural network with go-m
 **Performance**: Larger batch sizes (32-128) often improve GPU utilization
 **Memory**: Call `defer trainer.Cleanup()` to prevent GPU memory leaks  
 **Debugging**: Check error messages - go-metal provides detailed diagnostics
-**Experimentation**: Try different optimizers, learning rates, and architectures
+**Experimentation**: Try different optimizers (AdaGrad for sparse data, AdaDelta for no LR tuning, Nadam for fastest convergence), learning rates, and architectures
 
 ---
 

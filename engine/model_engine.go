@@ -105,6 +105,11 @@ func NewModelTrainingEngineDynamic(
 		initialized:   true,
 		isDynamic:     true, // This is a dynamic engine
 		adamOptimizer: nil, // Dynamic engine handles optimization externally
+		rmspropOptimizer: nil,
+		sgdOptimizer: nil,
+		lbfgsOptimizer: nil,
+		adagradOptimizer: nil,
+		adadeltaOptimizer: nil,
 		
 		// RESOURCE LEAK FIX: Command buffer pooling support
 		commandQueue:      commandQueue,
@@ -229,6 +234,92 @@ func NewModelTrainingEngineDynamic(
 		// RESOURCE LEAK FIX: Enable command buffer pooling in RMSProp optimizer
 		if baseEngine.useCommandPooling && baseEngine.commandQueue != nil {
 			rmspropOptimizer.SetCommandPool(baseEngine.commandQueue)
+		}
+	}
+	
+	// For AdaGrad optimizer, initialize the external optimizer state  
+	if config.OptimizerType == cgo_bridge.AdaGrad {
+		adagradConfig := optimizer.AdaGradConfig{
+			LearningRate: config.LearningRate,
+			Epsilon:      config.Epsilon,   // Epsilon for numerical stability
+			WeightDecay:  config.WeightDecay,
+		}
+		
+		// Get all parameter shapes for AdaGrad initialization (dynamic engine uses all parameters)
+		paramShapes := modelSpec.ParameterShapes
+		adagradOptimizer, err := optimizer.NewAdaGradOptimizer(
+			adagradConfig,
+			paramShapes,
+			memory.GetGlobalMemoryManager(),
+			baseEngine.device,
+		)
+		if err != nil {
+			baseEngine.Cleanup()
+			return nil, fmt.Errorf("failed to create AdaGrad optimizer for dynamic engine: %v", err)
+		}
+		baseEngine.adagradOptimizer = adagradOptimizer
+		
+		// RESOURCE LEAK FIX: Enable command buffer pooling in AdaGrad optimizer
+		if baseEngine.useCommandPooling && baseEngine.commandQueue != nil {
+			adagradOptimizer.SetCommandPool(baseEngine.commandQueue)
+		}
+	}
+	
+	// For AdaDelta optimizer, initialize the external optimizer state  
+	if config.OptimizerType == cgo_bridge.AdaDelta {
+		adadeltaConfig := optimizer.AdaDeltaConfig{
+			Rho:         config.Alpha,      // Use Alpha field for Rho (decay rate)
+			Epsilon:     config.Epsilon,    // Epsilon for numerical stability
+			WeightDecay: config.WeightDecay,
+		}
+		
+		// Get all parameter shapes for AdaDelta initialization (dynamic engine uses all parameters)
+		paramShapes := modelSpec.ParameterShapes
+		adadeltaOptimizer, err := optimizer.NewAdaDeltaOptimizer(
+			adadeltaConfig,
+			paramShapes,
+			memory.GetGlobalMemoryManager(),
+			baseEngine.device,
+		)
+		if err != nil {
+			baseEngine.Cleanup()
+			return nil, fmt.Errorf("failed to create AdaDelta optimizer for dynamic engine: %v", err)
+		}
+		baseEngine.adadeltaOptimizer = adadeltaOptimizer
+		
+		// RESOURCE LEAK FIX: Enable command buffer pooling in AdaDelta optimizer
+		if baseEngine.useCommandPooling && baseEngine.commandQueue != nil {
+			adadeltaOptimizer.SetCommandPool(baseEngine.commandQueue)
+		}
+	}
+	
+	// For Nadam optimizer, initialize the external optimizer state  
+	if config.OptimizerType == cgo_bridge.Nadam {
+		nadamConfig := optimizer.NadamConfig{
+			LearningRate: config.LearningRate,
+			Beta1:        config.Beta1,       // Momentum decay rate
+			Beta2:        config.Beta2,       // Variance decay rate
+			Epsilon:      config.Epsilon,     // Numerical stability
+			WeightDecay:  config.WeightDecay,
+		}
+		
+		// Get all parameter shapes for Nadam initialization (dynamic engine uses all parameters)
+		paramShapes := modelSpec.ParameterShapes
+		nadamOptimizer, err := optimizer.NewNadamOptimizer(
+			nadamConfig,
+			paramShapes,
+			memory.GetGlobalMemoryManager(),
+			baseEngine.device,
+		)
+		if err != nil {
+			baseEngine.Cleanup()
+			return nil, fmt.Errorf("failed to create Nadam optimizer for dynamic engine: %v", err)
+		}
+		baseEngine.nadamOptimizer = nadamOptimizer
+		
+		// RESOURCE LEAK FIX: Enable command buffer pooling in Nadam optimizer
+		if baseEngine.useCommandPooling && baseEngine.commandQueue != nil {
+			nadamOptimizer.SetCommandPool(baseEngine.commandQueue)
 		}
 	}
 	
@@ -1158,7 +1249,7 @@ func (mte *ModelTrainingEngine) executeSGDStepDynamicWithGradients(
 	} else {
 		// Use non-pooled dynamic execution for SGD (works without placeholder issues)
 		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
-			mte.MPSTrainingEngine.engine,
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
 			inputTensor.MetalBuffer(),
 			labelTensor.MetalBuffer(),
 			weightBuffers,
@@ -1170,6 +1261,322 @@ func (mte *ModelTrainingEngine) executeSGDStepDynamicWithGradients(
 	
 	if err != nil {
 		return 0, fmt.Errorf("SGD training step failed: %v", err)
+	}
+	
+	// Return actual computed loss
+	return actualLoss, nil
+}
+
+// ExecuteModelTrainingStepWithAdaGrad executes model training with AdaGrad optimizer
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdaGrad(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	if !mte.compiledForModel {
+		return 0, fmt.Errorf("model not compiled for execution")
+	}
+	
+	if mte.isDynamicEngine {
+		// Dynamic engine uses external AdaGrad optimization with gradient extraction
+		return mte.executeAdaGradStepDynamic(inputTensor, labelTensor)
+	} else {
+		// Hybrid fallback engine - AdaGrad not yet supported for hybrid
+		return 0, fmt.Errorf("AdaGrad not yet supported for hybrid engine")
+	}
+}
+
+// executeAdaGradStepDynamic executes AdaGrad optimization for dynamic engines using forward+backward+AdaGrad pattern
+func (mte *ModelTrainingEngine) executeAdaGradStepDynamic(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	return mte.executeAdaGradStepDynamicWithGradients(inputTensor, labelTensor, nil)
+}
+
+// executeAdaGradStepDynamicWithGradients executes AdaGrad optimization with optional pre-allocated gradient tensors
+// PERFORMANCE CRITICAL: This eliminates 128MB/step allocation when persistentGradientTensors is provided
+func (mte *ModelTrainingEngine) executeAdaGradStepDynamicWithGradients(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	persistentGradientTensors []*memory.Tensor, // If nil, will allocate (fallback behavior)
+) (float32, error) {
+	// Get all parameter tensors for the dynamic engine (it uses all parameters, not just FC)
+	allParameters := mte.parameterTensors
+	if len(allParameters) == 0 {
+		return 0, fmt.Errorf("no parameter tensors found for dynamic engine")
+	}
+	
+	// Convert parameter tensors to weight buffers for CGO call
+	weightBuffers := make([]unsafe.Pointer, len(allParameters))
+	for i, tensor := range allParameters {
+		if tensor == nil {
+			return 0, fmt.Errorf("parameter tensor %d is nil", i)
+		}
+		weightBuffers[i] = tensor.MetalBuffer()
+	}
+	
+	// Get batch size from input tensor shape
+	inputShape := inputTensor.Shape()
+	if len(inputShape) == 0 {
+		return 0, fmt.Errorf("input tensor has no shape")
+	}
+	batchSize := inputShape[0]
+	
+	// Step 1: Set weight buffers in AdaGrad optimizer
+	if mte.MPSTrainingEngine.adagradOptimizer == nil {
+		return 0, fmt.Errorf("AdaGrad optimizer not initialized for dynamic engine")
+	}
+	
+	err := mte.MPSTrainingEngine.adagradOptimizer.SetWeightBuffers(weightBuffers)
+	if err != nil {
+		return 0, fmt.Errorf("failed to set weight buffers in AdaGrad optimizer: %v", err)
+	}
+	
+	// Step 2: Use persistent gradient tensors if provided, otherwise allocate
+	gradientBuffers := make([]unsafe.Pointer, len(allParameters))
+	var gradientTensors []*memory.Tensor
+	var allocatedGradients bool
+
+	if persistentGradientTensors != nil && len(persistentGradientTensors) == len(allParameters) {
+		// PERFORMANCE OPTIMIZATION: Use pre-allocated persistent gradient tensors
+		gradientTensors = persistentGradientTensors
+		allocatedGradients = false
+		for i, gradTensor := range gradientTensors {
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	} else {
+		// FALLBACK: Allocate gradient tensors (original behavior for compatibility)
+		gradientTensors = make([]*memory.Tensor, len(allParameters))
+		allocatedGradients = true
+		defer func() {
+			if allocatedGradients {
+				for _, gradTensor := range gradientTensors {
+					if gradTensor != nil {
+						gradTensor.Release()
+					}
+				}
+			}
+		}()
+
+		for i, paramTensor := range allParameters {
+			// Create gradient tensor with same shape as parameter
+			gradTensor, err := memory.NewTensor(paramTensor.Shape(), memory.Float32, memory.GPU)
+			if err != nil {
+				// Cleanup previously created tensors
+				for j := 0; j < i; j++ {
+					gradientTensors[j].Release()
+				}
+				return 0, fmt.Errorf("failed to create gradient tensor %d: %v", i, err)
+			}
+			gradientTensors[i] = gradTensor
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	}
+
+	// Step 3: Compute ACTUAL loss and gradients using MPSGraph automatic differentiation
+	// RESOURCE LEAK FIX: Use pooled version if command pooling is enabled
+	var actualLoss float32
+	
+	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
+		// Use pooled version with command queue for resource leak prevention
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradientsPooled(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			batchSize,
+			mte.MPSTrainingEngine.commandQueue, // Pass command queue as pool
+		)
+	} else {
+		// Use regular version without pooling (fallback)
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			mte.MPSTrainingEngine.config.LearningRate, // Pass learning rate for AdaGrad
+			batchSize,
+		)
+	}
+	
+	if err != nil {
+		return 0, fmt.Errorf("gradient computation failed: %v", err)
+	}
+
+	// Step 4: Apply AdaGrad optimization with REAL gradients
+	// UNIFIED OPTIMIZER: Skip separate AdaGrad step if optimizer is integrated into the graph
+	// When using the pooled version with unified optimizer, the parameter updates
+	// are already performed within the same MPSGraph execution
+	if !mte.MPSTrainingEngine.useCommandPooling {
+		// Only run separate AdaGrad step if NOT using unified optimizer
+		err = mte.MPSTrainingEngine.adagradOptimizer.Step(gradientBuffers)
+		if err != nil {
+			return 0, fmt.Errorf("AdaGrad optimization step failed: %v", err)
+		}
+	} else {
+		// UNIFIED OPTIMIZER: Parameters already updated in single MPSGraph execution
+		// This implements the design-doc.md requirement for single command buffer
+		// No separate optimizer step needed
+	}
+	
+	// Return actual computed loss
+	return actualLoss, nil
+}
+
+// ExecuteModelTrainingStepWithAdaDelta executes model training with AdaDelta optimizer
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdaDelta(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	if !mte.compiledForModel {
+		return 0, fmt.Errorf("model not compiled for execution")
+	}
+	
+	if mte.isDynamicEngine {
+		// Dynamic engine uses external AdaDelta optimization with gradient extraction
+		return mte.executeAdaDeltaStepDynamic(inputTensor, labelTensor)
+	} else {
+		// Hybrid fallback engine - AdaDelta not yet supported for hybrid
+		return 0, fmt.Errorf("AdaDelta not yet supported for hybrid engine")
+	}
+}
+
+// executeAdaDeltaStepDynamic executes AdaDelta optimization for dynamic engines using forward+backward+AdaDelta pattern
+func (mte *ModelTrainingEngine) executeAdaDeltaStepDynamic(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	return mte.executeAdaDeltaStepDynamicWithGradients(inputTensor, labelTensor, nil)
+}
+
+// executeAdaDeltaStepDynamicWithGradients executes AdaDelta optimization with optional pre-allocated gradient tensors
+// PERFORMANCE CRITICAL: This eliminates 128MB/step allocation when persistentGradientTensors is provided
+func (mte *ModelTrainingEngine) executeAdaDeltaStepDynamicWithGradients(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	persistentGradientTensors []*memory.Tensor, // If nil, will allocate (fallback behavior)
+) (float32, error) {
+	// Get all parameter tensors for the dynamic engine (it uses all parameters, not just FC)
+	allParameters := mte.parameterTensors
+	if len(allParameters) == 0 {
+		return 0, fmt.Errorf("no parameter tensors found for dynamic engine")
+	}
+	
+	// Convert parameter tensors to weight buffers for CGO call
+	weightBuffers := make([]unsafe.Pointer, len(allParameters))
+	for i, tensor := range allParameters {
+		if tensor == nil {
+			return 0, fmt.Errorf("parameter tensor %d is nil", i)
+		}
+		weightBuffers[i] = tensor.MetalBuffer()
+	}
+	
+	// Get batch size from input tensor shape
+	inputShape := inputTensor.Shape()
+	if len(inputShape) == 0 {
+		return 0, fmt.Errorf("input tensor has no shape")
+	}
+	batchSize := inputShape[0]
+	
+	// Step 1: Set weight buffers in AdaDelta optimizer
+	if mte.MPSTrainingEngine.adadeltaOptimizer == nil {
+		return 0, fmt.Errorf("AdaDelta optimizer not initialized for dynamic engine")
+	}
+	
+	err := mte.MPSTrainingEngine.adadeltaOptimizer.SetWeightBuffers(weightBuffers)
+	if err != nil {
+		return 0, fmt.Errorf("failed to set weight buffers in AdaDelta optimizer: %v", err)
+	}
+	
+	// Step 2: Use persistent gradient tensors if provided, otherwise allocate
+	gradientBuffers := make([]unsafe.Pointer, len(allParameters))
+	var gradientTensors []*memory.Tensor
+	var allocatedGradients bool
+
+	if persistentGradientTensors != nil && len(persistentGradientTensors) == len(allParameters) {
+		// PERFORMANCE OPTIMIZATION: Use pre-allocated persistent gradient tensors
+		gradientTensors = persistentGradientTensors
+		allocatedGradients = false
+		for i, gradTensor := range gradientTensors {
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	} else {
+		// FALLBACK: Allocate gradient tensors (original behavior for compatibility)
+		gradientTensors = make([]*memory.Tensor, len(allParameters))
+		allocatedGradients = true
+		defer func() {
+			if allocatedGradients {
+				for _, gradTensor := range gradientTensors {
+					if gradTensor != nil {
+						gradTensor.Release()
+					}
+				}
+			}
+		}()
+
+		for i, paramTensor := range allParameters {
+			// Create gradient tensor with same shape as parameter
+			gradTensor, err := memory.NewTensor(paramTensor.Shape(), memory.Float32, memory.GPU)
+			if err != nil {
+				// Cleanup previously created tensors
+				for j := 0; j < i; j++ {
+					gradientTensors[j].Release()
+				}
+				return 0, fmt.Errorf("failed to create gradient tensor %d: %v", i, err)
+			}
+			gradientTensors[i] = gradTensor
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	}
+
+	// Step 3: Compute ACTUAL loss and gradients using MPSGraph automatic differentiation
+	// RESOURCE LEAK FIX: Use pooled version if command pooling is enabled
+	var actualLoss float32
+	
+	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
+		// Use pooled version with command queue for resource leak prevention
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradientsPooled(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			batchSize,
+			mte.MPSTrainingEngine.commandQueue, // Pass command queue as pool
+		)
+	} else {
+		// Use regular version without pooling (fallback)
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			1.0, // AdaDelta doesn't use traditional learning rate, set to 1.0
+			batchSize,
+		)
+	}
+	
+	if err != nil {
+		return 0, fmt.Errorf("gradient computation failed: %v", err)
+	}
+
+	// Step 4: Apply AdaDelta optimization with REAL gradients
+	// UNIFIED OPTIMIZER: Skip separate AdaDelta step if optimizer is integrated into the graph
+	// When using the pooled version with unified optimizer, the parameter updates
+	// are already performed within the same MPSGraph execution
+	if !mte.MPSTrainingEngine.useCommandPooling {
+		// Only run separate AdaDelta step if NOT using unified optimizer
+		err = mte.MPSTrainingEngine.adadeltaOptimizer.Step(gradientBuffers)
+		if err != nil {
+			return 0, fmt.Errorf("AdaDelta optimization step failed: %v", err)
+		}
+	} else {
+		// UNIFIED OPTIMIZER: Parameters already updated in single MPSGraph execution
+		// This implements the design-doc.md requirement for single command buffer
+		// No separate optimizer step needed
 	}
 	
 	// Return actual computed loss
@@ -1333,13 +1740,32 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatched(
 	// Execute training step based on engine type
 	var loss float32
 	if mte.isDynamicEngine {
-		loss, err = mte.executeAdamStepDynamic(inputTensor, labelTensor)
+		// Choose dynamic optimizer based on configuration
+		switch mte.MPSTrainingEngine.config.OptimizerType {
+		case cgo_bridge.Adam:
+			loss, err = mte.executeAdamStepDynamic(inputTensor, labelTensor)
+		case cgo_bridge.AdaGrad:
+			loss, err = mte.executeAdaGradStepDynamic(inputTensor, labelTensor)
+		case cgo_bridge.AdaDelta:
+			loss, err = mte.executeAdaDeltaStepDynamic(inputTensor, labelTensor)
+		case cgo_bridge.Nadam:
+			loss, err = mte.executeNadamStepDynamic(inputTensor, labelTensor)
+		default:
+			// For other optimizers, fall back to Adam for now
+			loss, err = mte.executeAdamStepDynamic(inputTensor, labelTensor)
+		}
 	} else {
 		// Check configured optimizer type for hybrid engine
 		if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Adam {
 			loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
 		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.LBFGS {
 			loss, err = mte.ExecuteModelTrainingStepWithLBFGS(inputTensor, labelTensor)
+		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.AdaGrad {
+			loss, err = mte.ExecuteModelTrainingStepWithAdaGrad(inputTensor, labelTensor)
+		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.AdaDelta {
+			loss, err = mte.ExecuteModelTrainingStepWithAdaDelta(inputTensor, labelTensor)
+		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Nadam {
+			loss, err = mte.ExecuteModelTrainingStepWithNadam(inputTensor, labelTensor)
 		} else {
 			// SGD optimizer - use regular training step with learning rate
 			loss, err = mte.ExecuteModelTrainingStep(inputTensor, labelTensor, mte.MPSTrainingEngine.config.LearningRate)
@@ -1435,14 +1861,32 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGra
 	// Execute training step based on engine type and optimizer
 	var loss float32
 	if mte.isDynamicEngine {
-		// Use persistent gradients if provided, otherwise allocate (fallback)
-		loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+		// Choose dynamic optimizer based on configuration
+		switch mte.MPSTrainingEngine.config.OptimizerType {
+		case cgo_bridge.Adam:
+			loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+		case cgo_bridge.AdaGrad:
+			loss, err = mte.executeAdaGradStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+		case cgo_bridge.AdaDelta:
+			loss, err = mte.executeAdaDeltaStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+		case cgo_bridge.Nadam:
+			loss, err = mte.executeNadamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+		default:
+			// For other optimizers, fall back to Adam for now
+			loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+		}
 	} else {
 		// Check configured optimizer type for hybrid engine
 		if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Adam {
 			loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
 		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.LBFGS {
 			loss, err = mte.ExecuteModelTrainingStepWithLBFGS(inputTensor, labelTensor)
+		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.AdaGrad {
+			loss, err = mte.ExecuteModelTrainingStepWithAdaGrad(inputTensor, labelTensor)
+		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.AdaDelta {
+			loss, err = mte.ExecuteModelTrainingStepWithAdaDelta(inputTensor, labelTensor)
+		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Nadam {
+			loss, err = mte.ExecuteModelTrainingStepWithNadam(inputTensor, labelTensor)
 		} else {
 			// SGD optimizer - use regular training step with learning rate
 			loss, err = mte.ExecuteModelTrainingStep(inputTensor, labelTensor, mte.MPSTrainingEngine.config.LearningRate)
@@ -1734,6 +2178,152 @@ func findLayerIndex(modelSpec *layers.ModelSpec, layerType layers.LayerType, occ
 	return -1 // Not found
 }
 
+// ExecuteModelTrainingStepWithNadam executes model training with Nadam optimizer
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithNadam(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	
+	if mte.isDynamicEngine {
+		// Dynamic engine uses external Nadam optimization with gradient extraction
+		return mte.executeNadamStepDynamic(inputTensor, labelTensor)
+	} else {
+		// Hybrid fallback engine - Nadam not yet supported for hybrid
+		return 0, fmt.Errorf("Nadam not yet supported for hybrid engine")
+	}
+}
+
+// executeNadamStepDynamic executes Nadam optimization for dynamic engines using forward+backward+Nadam pattern
+func (mte *ModelTrainingEngine) executeNadamStepDynamic(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	return mte.executeNadamStepDynamicWithGradients(inputTensor, labelTensor, nil)
+}
+
+// executeNadamStepDynamicWithGradients executes Nadam optimization with optional pre-allocated gradient tensors
+// PERFORMANCE CRITICAL: This eliminates 128MB/step allocation when persistentGradientTensors is provided
+func (mte *ModelTrainingEngine) executeNadamStepDynamicWithGradients(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	persistentGradientTensors []*memory.Tensor, // If nil, will allocate (fallback behavior)
+) (float32, error) {
+	// Get all parameter tensors for the dynamic engine (it uses all parameters, not just FC)
+	allParameters := mte.parameterTensors
+	if len(allParameters) == 0 {
+		return 0, fmt.Errorf("no parameter tensors found for dynamic engine")
+	}
+	
+	// Convert parameter tensors to weight buffers for CGO call
+	weightBuffers := make([]unsafe.Pointer, len(allParameters))
+	for i, tensor := range allParameters {
+		if tensor == nil {
+			return 0, fmt.Errorf("parameter tensor %d is nil", i)
+		}
+		weightBuffers[i] = tensor.MetalBuffer()
+	}
+	
+	// Handle gradient tensor allocation or use persistent ones
+	var gradientBuffers []unsafe.Pointer
+	if persistentGradientTensors != nil {
+		// Use pre-allocated persistent gradient tensors (performance optimization)
+		gradientBuffers = make([]unsafe.Pointer, len(persistentGradientTensors))
+		for i, tensor := range persistentGradientTensors {
+			if tensor == nil {
+				return 0, fmt.Errorf("persistent gradient tensor %d is nil", i)
+			}
+			gradientBuffers[i] = tensor.MetalBuffer()
+		}
+	} else {
+		// Allocate new gradient tensors (fallback behavior)
+		gradientTensors := make([]*memory.Tensor, len(allParameters))
+		gradientBuffers = make([]unsafe.Pointer, len(allParameters))
+		for i, paramTensor := range allParameters {
+			gradientTensor, err := memory.NewTensor(paramTensor.Shape(), memory.Float32, memory.GPU)
+			if err != nil {
+				return 0, fmt.Errorf("failed to create gradient tensor %d: %v", i, err)
+			}
+			gradientTensors[i] = gradientTensor
+			gradientBuffers[i] = gradientTensor.MetalBuffer()
+		}
+		
+		// Cleanup allocated tensors when done
+		defer func() {
+			for _, tensor := range gradientTensors {
+				if tensor != nil {
+					tensor.Release()
+				}
+			}
+		}()
+	}
+	
+	// Get input shape for batch size calculation
+	inputShape := inputTensor.Shape()
+	if len(inputShape) == 0 {
+		return 0, fmt.Errorf("input tensor has no shape")
+	}
+	batchSize := inputShape[0]
+	
+	// Step 1: Set weight buffers in Nadam optimizer
+	if mte.MPSTrainingEngine.nadamOptimizer == nil {
+		return 0, fmt.Errorf("Nadam optimizer not initialized for dynamic engine")
+	}
+	
+	err := mte.MPSTrainingEngine.nadamOptimizer.SetWeightBuffers(weightBuffers)
+	if err != nil {
+		return 0, fmt.Errorf("failed to set weight buffers in Nadam optimizer: %v", err)
+	}
+	
+	// Step 2: Execute forward pass + backward pass + gradient computation using dynamic engine
+	// This computes REAL gradients and returns actual loss
+	var actualLoss float32
+	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
+		// Use pooled version with command queue for resource leak prevention
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradientsPooled(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			batchSize,
+			mte.MPSTrainingEngine.commandQueue, // Pass command queue as pool
+		)
+	} else {
+		// Use regular version without pooling (fallback)
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			mte.MPSTrainingEngine.config.LearningRate, // Pass learning rate for Nadam
+			batchSize,
+		)
+	}
+	
+	if err != nil {
+		return 0, fmt.Errorf("dynamic gradient computation failed: %v", err)
+	}
+	
+	// Step 3: Apply Nadam optimization with REAL gradients
+	// UNIFIED OPTIMIZER: Skip separate Nadam step if optimizer is integrated into the graph
+	// When using the pooled version with unified optimizer, the parameter updates
+	// are already performed within the same MPSGraph execution
+	if !mte.MPSTrainingEngine.useCommandPooling {
+		// Only run separate Nadam step if NOT using unified optimizer
+		err = mte.MPSTrainingEngine.nadamOptimizer.Step(gradientBuffers)
+		if err != nil {
+			return 0, fmt.Errorf("Nadam optimization step failed: %v", err)
+		}
+	} else {
+		// For unified optimizer, weights are already updated within the graph execution
+		// This is the GPU-resident optimization path with minimal CGO calls
+	}
+	
+	// Return actual computed loss
+	return actualLoss, nil
+}
+
 // GetOptimizerState extracts the current optimizer state for checkpointing
 // This method bridges between the CGO-level optimizer and the Go optimizer interface
 func (mte *ModelTrainingEngine) GetOptimizerState() (*optimizer.OptimizerState, error) {
@@ -1765,6 +2355,24 @@ func (mte *ModelTrainingEngine) GetOptimizerState() (*optimizer.OptimizerState, 
 		}
 		return nil, fmt.Errorf("SGD optimizer not initialized")
 		
+	case cgo_bridge.AdaGrad:
+		if mte.MPSTrainingEngine.adagradOptimizer != nil {
+			return mte.MPSTrainingEngine.adagradOptimizer.GetState()
+		}
+		return nil, fmt.Errorf("AdaGrad optimizer not initialized")
+		
+	case cgo_bridge.AdaDelta:
+		if mte.MPSTrainingEngine.adadeltaOptimizer != nil {
+			return mte.MPSTrainingEngine.adadeltaOptimizer.GetState()
+		}
+		return nil, fmt.Errorf("AdaDelta optimizer not initialized")
+		
+	case cgo_bridge.Nadam:
+		if mte.MPSTrainingEngine.nadamOptimizer != nil {
+			return mte.MPSTrainingEngine.nadamOptimizer.GetState()
+		}
+		return nil, fmt.Errorf("Nadam optimizer not initialized")
+		
 	default:
 		return nil, fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
 	}
@@ -1785,7 +2393,7 @@ func (mte *ModelTrainingEngine) SetOptimizerState(state *optimizer.OptimizerStat
 	// Restore state based on the optimizer type
 	config := mte.MPSTrainingEngine.GetConfig()
 	
-	// Validate state type matches current optimizer
+	// Validate state type matches current optimizer. 
 	expectedType := ""
 	switch config.OptimizerType {
 	case cgo_bridge.Adam:
@@ -1794,6 +2402,12 @@ func (mte *ModelTrainingEngine) SetOptimizerState(state *optimizer.OptimizerStat
 		expectedType = "RMSProp"
 	case cgo_bridge.SGD:
 		expectedType = "SGD"
+	case cgo_bridge.AdaGrad:
+		expectedType = "AdaGrad"
+	case cgo_bridge.AdaDelta:
+		expectedType = "AdaDelta"
+	case cgo_bridge.Nadam:
+		expectedType = "Nadam"
 	default:
 		return fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
 	}
@@ -1821,6 +2435,24 @@ func (mte *ModelTrainingEngine) SetOptimizerState(state *optimizer.OptimizerStat
 			return mte.MPSTrainingEngine.sgdOptimizer.LoadState(state)
 		}
 		return fmt.Errorf("SGD optimizer not initialized")
+		
+	case cgo_bridge.AdaGrad:
+		if mte.MPSTrainingEngine.adagradOptimizer != nil {
+			return mte.MPSTrainingEngine.adagradOptimizer.LoadState(state)
+		}
+		return fmt.Errorf("AdaGrad optimizer not initialized")
+		
+	case cgo_bridge.AdaDelta:
+		if mte.MPSTrainingEngine.adadeltaOptimizer != nil {
+			return mte.MPSTrainingEngine.adadeltaOptimizer.LoadState(state)
+		}
+		return fmt.Errorf("AdaDelta optimizer not initialized")
+		
+	case cgo_bridge.Nadam:
+		if mte.MPSTrainingEngine.nadamOptimizer != nil {
+			return mte.MPSTrainingEngine.nadamOptimizer.LoadState(state)
+		}
+		return fmt.Errorf("Nadam optimizer not initialized")
 		
 	default:
 		return fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
@@ -1868,6 +2500,26 @@ func (mte *ModelTrainingEngine) UpdateLearningRate(newLR float32) error {
 			return nil
 		}
 		return fmt.Errorf("L-BFGS optimizer not initialized")
+		
+	case cgo_bridge.AdaGrad:
+		if mte.MPSTrainingEngine.adagradOptimizer != nil {
+			mte.MPSTrainingEngine.adagradOptimizer.UpdateLearningRate(newLR)
+			return nil
+		}
+		return fmt.Errorf("AdaGrad optimizer not initialized")
+		
+	case cgo_bridge.AdaDelta:
+		if mte.MPSTrainingEngine.adadeltaOptimizer != nil {
+			// AdaDelta doesn't use traditional learning rate
+			return fmt.Errorf("AdaDelta optimizer does not support learning rate updates")
+		}
+		return fmt.Errorf("AdaDelta optimizer not initialized")
+		
+	case cgo_bridge.Nadam:
+		if mte.MPSTrainingEngine.nadamOptimizer != nil {
+			return mte.MPSTrainingEngine.nadamOptimizer.UpdateLearningRate(newLR)
+		}
+		return fmt.Errorf("Nadam optimizer not initialized")
 		
 	default:
 		return fmt.Errorf("unsupported optimizer type: %v", config.OptimizerType)
