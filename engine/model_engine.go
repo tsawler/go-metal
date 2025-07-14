@@ -2517,7 +2517,8 @@ func (mte *ModelTrainingEngine) UpdateLearningRate(newLR float32) error {
 		
 	case cgo_bridge.Nadam:
 		if mte.MPSTrainingEngine.nadamOptimizer != nil {
-			return mte.MPSTrainingEngine.nadamOptimizer.UpdateLearningRate(newLR)
+			mte.MPSTrainingEngine.nadamOptimizer.UpdateLearningRate(newLR)
+			return nil
 		}
 		return fmt.Errorf("Nadam optimizer not initialized")
 		
