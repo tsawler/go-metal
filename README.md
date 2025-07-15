@@ -32,7 +32,7 @@ Why did I build this? I wanted to increase my knowledge in Machine Learning, and
 - **Activation Functions**: ReLU, Softmax, LeakyReLU, ELU, Sigmoid, Tanh, Swish with Metal implementations
 
 ### Deep Learning Components
-- **Neural Network Layers**: Linear, Conv2D, MaxPool2D, BatchNorm, Flatten
+- **Neural Network Layers**: Linear, Conv2D, MaxPool2D, BatchNorm, Dropout, ReLU, Softmax, LeakyReLU, ELU, Sigmoid, Tanh, Swish (Flattening is handled implicitly by Dense layers)
 - **Optimizers**: SGD, Adam, AdaGrad, RMSprop, AdaDelta, NAdam, L-BFGS
 - **Loss Functions**: CrossEntropy, SparseCrossEntropy, BinaryCrossEntropy, BCEWithLogits, CategoricalCrossEntropy (for classification); Mean Squared Error (MSE), Mean Absolute Error (MAE), Huber (for regression)
 - **Automatic Differentiation**: Complete autograd engine with gradient computation
@@ -128,34 +128,62 @@ func main() {
 package main
 
 import (
-    "github.com/tsawler/go-metal/training"
-    "github.com/tsawler/go-metal/tensor"
+	"fmt"
+	"github.com/tsawler/go-metal/tensor"
+	"github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    // Create a neural network
-    model := training.NewSequential(
-        training.NewLinear(784, 128, true),  // Input layer
-        training.NewReLU(),
-        training.NewLinear(128, 64, true),   // Hidden layer
-        training.NewReLU(), 
-        training.NewLinear(64, 10, true),    // Output layer
-    )
-    
-    // Setup training components
-    optimizer := training.NewAdam(model.Parameters(), 0.001, 0.9, 0.999, 1e-8)
-    criterion := training.NewCrossEntropyLoss()
-    
-    config := training.TrainingConfig{
-        Device:       tensor.PersistentGPU,  // Keep model on GPU
-        LearningRate: 0.001,
-        BatchSize:    32,
-        Epochs:       10,
-    }
-    
-    // Create trainer and start training
-    trainer := training.NewTrainer(model, optimizer, criterion, config)
-    trainer.Train(trainLoader, validLoader)
+	// Create dummy data for demonstration purposes
+	// In a real application, you would load your actual dataset here.
+	// For simplicity, we'll create a small, synthetic dataset.
+	numSamples := 100
+	inputFeatures := 784 // Corresponds to the input layer size
+	outputClasses := 10  // Corresponds to the output layer size
+
+	// Generate random input data (e.g., flattened images)
+	trainData := make([]float32, numSamples*inputFeatures)
+	for i := range trainData {
+		trainData[i] = float32(i%256) / 255.0 // Simple pattern for demonstration
+	}
+	trainInputTensor, _ := tensor.NewTensor([]int{numSamples, inputFeatures}, tensor.Float32, tensor.CPU, trainData)
+
+	// Generate random labels (e.g., one-hot encoded)
+	trainLabels := make([]float32, numSamples*outputClasses)
+	for i := 0; i < numSamples; i++ {
+		trainLabels[i*outputClasses+(i%outputClasses)] = 1.0 // Simple one-hot encoding
+	}
+	trainLabelTensor, _ := tensor.NewTensor([]int{numSamples, outputClasses}, tensor.Float32, tensor.CPU, trainLabels)
+
+	// Create DataLoader instances
+	trainLoader := training.NewDataLoader(trainInputTensor, trainLabelTensor, 32, true)
+	validLoader := training.NewDataLoader(trainInputTensor, trainLabelTensor, 32, false) // Using same data for validation for simplicity
+
+	// Create a neural network
+	model := training.NewSequential(
+		training.NewLinear(inputFeatures, 128, true), // Input layer
+		training.NewReLU(),
+		training.NewLinear(128, 64, true), // Hidden layer
+		training.NewReLU(),
+		training.NewLinear(64, outputClasses, true), // Output layer
+	)
+
+	// Setup training components
+	optimizer := training.NewAdam(model.Parameters(), 0.001, 0.9, 0.999, 1e-8)
+	criterion := training.NewCrossEntropyLoss()
+
+	config := training.TrainingConfig{
+		Device:       tensor.PersistentGPU, // Keep model on GPU
+		LearningRate: 0.001,
+		BatchSize:    32,
+		Epochs:       10,
+	}
+
+	// Create trainer and start training
+	trainer := training.NewTrainer(model, optimizer, criterion, config)
+	trainer.Train(trainLoader, validLoader)
+
+	fmt.Println("Training complete!")
 }
 ```
 
