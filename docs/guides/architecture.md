@@ -509,6 +509,7 @@ This architecture delivers exceptional performance while maintaining Go's safety
 Now that you understand go-metal's architecture:
 
 - **[Layer Reference](layers.md)** - Detailed layer documentation
+- **[Memory Management Guide](memory-management.md)** - GPU memory optimization and best practices
 - **[Performance Guide](performance.md)** - Optimization techniques
 - **[MLP Tutorial](../tutorials/mlp-tutorial.md)** - Build complete neural networks
 - **[Mixed Precision Guide](../tutorials/mixed-precision.md)** - 86% training speedup

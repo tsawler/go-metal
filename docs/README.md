@@ -37,6 +37,7 @@ Go-Metal is a native Go machine learning framework that leverages Apple's Metal 
 - **[Optimizers](guides/optimizers.md)** - Optimizer selection and configuration
 - **[Loss Functions](guides/loss-functions.md)** - Loss function reference
 - **[Performance](guides/performance.md)** - Optimization techniques and mixed precision
+- **[Memory Management](guides/memory-management.md)** - GPU memory optimization and best practices
 - **[Progress Tracking](guides/progress-tracking.md)** - PyTorch-style progress bars and training sessions
 - **[Visualization](guides/visualization.md)** - Training metrics and plotting
 

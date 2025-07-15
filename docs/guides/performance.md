@@ -811,6 +811,7 @@ top -pid $(pgrep -f your_program)
 
 ## 🚀 Next Steps
 
+- **[Memory Management Guide](memory-management.md)** - GPU memory optimization and best practices
 - **[Mixed Precision Tutorial](../tutorials/mixed-precision.md)** - Further speed improvements
 - **[Visualization Guide](visualization.md)** - Monitor training progress
 - **[Advanced Examples](../examples/)** - Production-ready optimizations
