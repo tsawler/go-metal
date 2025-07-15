@@ -3,37 +3,62 @@ package main
 import (
     "fmt"
     "math/rand"
-    "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    // Create synthetic data
-    batchSize := 32
-    inputData := make([]float32, batchSize*10)
+    // Basic tensor operations in go-metal are performed through neural network layers
+    // This example demonstrates the actual tensor operations available
+    
+    fmt.Println("=== Basic Tensor Operations in Go-Metal ===")
+    
+    // Create input data (this represents our "tensors")
+    batchSize := 4
+    inputSize := 6
+    inputData := make([]float32, batchSize*inputSize)
+    
+    // Fill with sample data
     for i := range inputData {
-        inputData[i] = rand.Float32()
+        inputData[i] = rand.Float32() * 2.0 - 1.0  // Random values between -1 and 1
     }
     
-    // Build a model
-    builder := layers.NewModelBuilder([]int{batchSize, 10})
+    fmt.Printf("Input data shape: [%d, %d]\n", batchSize, inputSize)
+    
+    // 1. Matrix multiplication (through Dense layer)
+    builder := layers.NewModelBuilder([]int{batchSize, inputSize})
+    
+    // This Dense layer performs: output = input * weight + bias
+    // Which is matrix multiplication + addition
     model, _ := builder.
-        AddDense(16, true, "hidden").
-        AddReLU("relu").
-        AddDense(1, true, "output").
+        AddDense(3, true, "matrix_multiply").  // 6->3 matrix multiplication
         Compile()
     
-    // Configure training
-    config := training.TrainerConfig{
-        BatchSize:     batchSize,
-        LearningRate:  0.001,
-        OptimizerType: cgo_bridge.Adam,
-        Beta1:         0.9,
-        Beta2:         0.999,
-        Epsilon:       1e-8,
-    }
+    fmt.Printf("Created matrix multiplication layer: %dx%d -> %dx%d\n", 
+        batchSize, inputSize, batchSize, 3)
+    fmt.Printf("Matrix model has %d parameters\n", model.TotalParameters)
     
-    fmt.Printf("Model ready for training with %d parameters\n", model.TotalParameters)
-    fmt.Printf("Training config: batch_size=%d, learning_rate=%f\n", config.BatchSize, config.LearningRate)
+    // 2. Element-wise operations (through activation layers)
+    activationBuilder := layers.NewModelBuilder([]int{batchSize, inputSize})
+    
+    activationModel, _ := activationBuilder.
+        AddReLU("relu_activation").           // Element-wise: max(0, x)
+        AddDense(inputSize, false, "dense").  // Matrix multiplication
+        AddSigmoid("sigmoid_activation").     // Element-wise: 1/(1+exp(-x))
+        Compile()
+    
+    fmt.Printf("Created activation layers for element-wise operations\n")
+    fmt.Printf("Activation model has %d parameters\n", activationModel.TotalParameters)
+    
+    // 3. Available tensor operations
+    fmt.Println("\n=== Available Tensor Operations ===")
+    fmt.Println("✓ Matrix Multiplication (Dense layers)")
+    fmt.Println("✓ Element-wise Addition (bias in Dense layers)")
+    fmt.Println("✓ Element-wise Activations (ReLU, Sigmoid, Tanh, etc.)")
+    fmt.Println("✓ 2D Convolution (Conv2D layers)")
+    fmt.Println("✓ Tensor Reshaping (automatic in layer transitions)")
+    fmt.Println("✓ Batch Normalization (BatchNorm layers)")
+    fmt.Println("✓ Dropout (element-wise masking)")
+    
+    fmt.Println("\nNote: Go-Metal focuses on neural network operations.")
+    fmt.Println("Tensor math operations are performed within neural network layers.")
 }
