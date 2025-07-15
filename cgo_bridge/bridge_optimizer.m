@@ -15,7 +15,7 @@ void cacheAdamScalarTensors(training_engine_t* engine) {
             return; // Already cached or no graph/device available
         }
         
-        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching Adam scalar tensors to eliminate allocation overhead...");
+        // NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching Adam scalar tensors to eliminate allocation overhead...");
         
         // Create scalar tensors for Adam hyperparameters ONCE
         float lr = engine->config.learning_rate;
@@ -69,7 +69,7 @@ void cacheAdamScalarTensors(training_engine_t* engine) {
         }
         
         engine->adamScalarsCached = YES;
-        NSLog(@"✅ PRODUCTION OPTIMIZATION: Adam scalar tensors cached - zero scalar allocations during training");
+        // NSLog(@"✅ PRODUCTION OPTIMIZATION: Adam scalar tensors cached - zero scalar allocations during training");
     }
 }
 
@@ -82,7 +82,7 @@ void cacheRMSPropScalarTensors(training_engine_t* engine) {
             return; // Already cached or no graph/device available
         }
         
-        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching RMSProp scalar tensors to eliminate allocation overhead...");
+        // NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching RMSProp scalar tensors to eliminate allocation overhead...");
         
         // Create scalar tensors for RMSProp hyperparameters ONCE
         float lr = engine->config.learning_rate;
@@ -108,7 +108,7 @@ void cacheRMSPropScalarTensors(training_engine_t* engine) {
         }
         
         engine->rmspropScalarsCached = YES;
-        NSLog(@"✅ PRODUCTION OPTIMIZATION: RMSProp scalar tensors cached - zero scalar allocations during training");
+        // NSLog(@"✅ PRODUCTION OPTIMIZATION: RMSProp scalar tensors cached - zero scalar allocations during training");
     }
 }
 
@@ -121,7 +121,7 @@ void cacheSGDScalarTensors(training_engine_t* engine) {
             return; // Already cached or no graph/device available
         }
         
-        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching SGD scalar tensors to eliminate allocation overhead...");
+        // NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching SGD scalar tensors to eliminate allocation overhead...");
         
         // Create scalar tensors for SGD hyperparameters ONCE
         float lr = engine->config.learning_rate;
@@ -152,7 +152,7 @@ void cacheSGDScalarTensors(training_engine_t* engine) {
         }
         
         engine->sgdScalarsCached = YES;
-        NSLog(@"✅ PRODUCTION OPTIMIZATION: SGD scalar tensors cached - zero scalar allocations during training");
+        // NSLog(@"✅ PRODUCTION OPTIMIZATION: SGD scalar tensors cached - zero scalar allocations during training");
     }
 }
 
@@ -722,7 +722,7 @@ void cacheLBFGSScalarTensors(training_engine_t* engine) {
             return; // Already cached or no graph available
         }
         
-        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching L-BFGS scalar tensors...");
+        // NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching L-BFGS scalar tensors...");
         
         // Create scalar tensors for L-BFGS hyperparameters ONCE
         engine->lbfgsCachedInitialStepTensor = [engine->graph constantWithScalar:1.0f dataType:MPSDataTypeFloat32];
@@ -1164,7 +1164,7 @@ void cacheAdaGradScalarTensors(training_engine_t* engine) {
             return; // Already cached or no graph available
         }
         
-        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching AdaGrad scalar tensors...");
+        // NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching AdaGrad scalar tensors...");
         
         // Create scalar tensors for AdaGrad hyperparameters ONCE
         float lr = engine->config.learning_rate;
@@ -1426,7 +1426,7 @@ void cacheAdaDeltaScalarTensors(training_engine_t* engine) {
             return; // Already cached or no graph available
         }
         
-        NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching AdaDelta scalar tensors...");
+        // NSLog(@"🚀 PRODUCTION OPTIMIZATION: Caching AdaDelta scalar tensors...");
         
         // Create scalar tensors for AdaDelta hyperparameters ONCE
         float rho = engine->config.alpha; // Using alpha field for rho parameter

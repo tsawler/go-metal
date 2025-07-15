@@ -826,7 +826,7 @@ uintptr_t create_training_engine_dynamic(
             // Adam state initialization moved earlier - before pre-compilation
             
             engine->initialized = YES;
-            NSLog(@"✅ Dynamic training engine created successfully with %d layers", num_layers);
+            // NSLog(@"✅ Dynamic training engine created successfully with %d layers", num_layers);
             
             return (uintptr_t)engine;
             

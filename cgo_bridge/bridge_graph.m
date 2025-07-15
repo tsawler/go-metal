@@ -703,10 +703,10 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             case 7: lossFunctionName = @"Huber"; break;
         }
         
-        NSLog(@"✅ Dynamic graph built successfully with %d layers and proper loss computation", numLayers);
-        NSLog(@"   - Parameters: %lu placeholders", (unsigned long)allParameterPlaceholders.count);
-        NSLog(@"   - Output classes: %d", numClasses);
-        NSLog(@"   - Loss: %@ with automatic differentiation", lossFunctionName);
+        // NSLog(@"✅ Dynamic graph built successfully with %d layers and proper loss computation", numLayers);
+        // NSLog(@"   - Parameters: %lu placeholders", (unsigned long)allParameterPlaceholders.count);
+        // NSLog(@"   - Output classes: %d", numClasses);
+        // NSLog(@"   - Loss: %@ with automatic differentiation", lossFunctionName);
         
         // PRODUCTION OPTIMIZATION: Cache Adam scalar tensors if using Adam optimizer
         if (engine->config.optimizer_type == 1) { // Adam optimizer
@@ -761,8 +761,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             engine->adamStepCount = 0;
             
             engine->adamStateInitialized = YES;
-            NSLog(@"✅ Adam state initialized EARLY for %lu parameters", [engine->allWeightPlaceholders count]);
-            NSLog(@"🔍 ADAM DEBUG: State flag set to %d", engine->adamStateInitialized);
+            // NSLog(@"✅ Adam state initialized EARLY for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"🔍 ADAM DEBUG: State flag set to %d", engine->adamStateInitialized);
         }
         
         // UNIFIED OPTIMIZER: Initialize SGD state for momentum (shares momentum arrays with Adam)
@@ -974,8 +974,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             engine->precompiledGradientTensors = precompiledGradientTensors;
             // NSLog(@"🔧 DEBUG: Set precompiledGradientTensors to %lu items", [precompiledGradientTensors count]);
             
-            NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
-            NSLog(@"🚀 PRE-COMPILATION: Building SGD parameter update operations...");
+            // NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"🚀 PRE-COMPILATION: Building SGD parameter update operations...");
             
             // Pre-compile SGD parameter updates only if properly initialized (same pattern as Adam)
             NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
@@ -1069,11 +1069,11 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
         // ADAM-SPECIFIC GRAPH COMPILATION: Build Adam graph without SGD dependencies  
         else if (engine->config.optimizer_type == 1 && engine->allWeightPlaceholders.count > 0 && engine->adamStateInitialized && !engine->adamGraphCompiled) { // Adam optimizer
             
-            NSLog(@"🚀 PRE-COMPILATION: Building gradient and Adam operations in graph...");
+            // NSLog(@"🚀 PRE-COMPILATION: Building gradient and Adam operations in graph...");
             
             // DEBUG: Log gradient computation setup for Adam
-            NSLog(@"🔍 ADAM GRADIENT DEBUG: About to compute gradients for %lu parameters", [engine->allWeightPlaceholders count]);
-            NSLog(@"🔍 ADAM GRADIENT DEBUG: Loss output tensor (shape: %@)", engine->lossOutput.shape);
+            // NSLog(@"🔍 ADAM GRADIENT DEBUG: About to compute gradients for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"🔍 ADAM GRADIENT DEBUG: Loss output tensor (shape: %@)", engine->lossOutput.shape);
             
             // Pre-compile gradient computation using automatic differentiation ONCE during graph building
             // CRITICAL FIX: Wrap gradient computation in try-catch to handle MPSGraph AD limitations
@@ -1082,7 +1082,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                 precompiledGradients = [engine->graph gradientForPrimaryTensor:engine->lossOutput
                                                              withTensors:engine->allWeightPlaceholders
                                                                     name:@"precompiled_gradients"];
-                NSLog(@"✅ ADAM GRADIENT DEBUG: Successfully computed gradients dictionary with %lu entries", (unsigned long)precompiledGradients.count);
+                // NSLog(@"✅ ADAM GRADIENT DEBUG: Successfully computed gradients dictionary with %lu entries", (unsigned long)precompiledGradients.count);
             } @catch (NSException* exception) {
                 NSLog(@"❌ ADAM GRADIENT COMPUTATION FAILED: %@", exception.reason);
                 NSLog(@"❌ Exception name: %@", exception.name);
@@ -1122,8 +1122,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             // Also store in legacy array for backward compatibility
             engine->precompiledGradientTensors = precompiledGradientTensors;
             
-            NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
-            NSLog(@"🚀 PRE-COMPILATION: Building Adam parameter update operations...");
+            // NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"🚀 PRE-COMPILATION: Building Adam parameter update operations...");
             
             
             // Pre-compile Adam parameter updates only if properly initialized
@@ -1231,7 +1231,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             engine->precompiledUpdatedVariance = precompiledUpdatedVariance;
             
             engine->adamGraphCompiled = YES;
-            NSLog(@"✅ PRE-COMPILATION: Successfully built Adam operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"✅ PRE-COMPILATION: Successfully built Adam operations for %lu parameters", [engine->allWeightPlaceholders count]);
         }
         
         // RMSPROP-SPECIFIC GRAPH COMPILATION: Build RMSProp graph without Adam/SGD dependencies
@@ -1266,8 +1266,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             // Also store in legacy array for backward compatibility
             engine->precompiledGradientTensors = precompiledGradientTensors;
             
-            NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
-            NSLog(@"🚀 PRE-COMPILATION: Building RMSProp parameter update operations...");
+            // NSLog(@"✅ PRE-COMPILATION: Successfully built gradient operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"🚀 PRE-COMPILATION: Building RMSProp parameter update operations...");
             
             // CRITICAL: Verify array integrity before use to prevent string/array confusion crashes
             if (![engine->squaredGradPlaceholders isKindOfClass:[NSMutableArray class]]) {
@@ -1427,7 +1427,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             engine->precompiledUpdatedParams = precompiledUpdatedParams;
             
             engine->rmspropGraphCompiled = YES;
-            NSLog(@"✅ PRE-COMPILATION: Successfully built RMSProp operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"✅ PRE-COMPILATION: Successfully built RMSProp operations for %lu parameters", [engine->allWeightPlaceholders count]);
         } else {
             NSLog(@"⚠️ PRE-COMPILATION: Skipping pre-compilation (optimizer: %d, params: %lu, adam_state: %d, sgd_state: %d)", 
                   engine->config.optimizer_type, [engine->allWeightPlaceholders count], 
