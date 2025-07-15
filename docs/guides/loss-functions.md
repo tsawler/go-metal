@@ -1035,171 +1035,125 @@ func main() {
 
 ### Loss Function Comparison
 
-```go
-func compareLossFunctions() {
-    fmt.Println("📊 Loss Function Comparison")
-    
-    losses := []struct {
-        name string
-        problem_type string
-        input_format string
-        label_format string
-        use_case string
-    }{
-        {"CrossEntropy", "Classification", "Logits", "One-hot", "Multi-class"},
-        {"SparseCrossEntropy", "Classification", "Logits", "Integers", "Multi-class (preferred)"},
-        {"BinaryCrossEntropy", "Classification", "Probabilities", "Binary", "Binary classification"},
-        {"BCEWithLogits", "Classification", "Logits", "Binary", "Binary (stable)"},
-        {"MeanSquaredError", "Regression", "Continuous", "Continuous", "Standard regression"},
-        {"MeanAbsoluteError", "Regression", "Continuous", "Continuous", "Robust regression"},
-        {"Huber", "Regression", "Continuous", "Continuous", "Balanced robustness"},
-    }
-    
-    fmt.Printf("%-18s | %-14s | %-13s | %-10s | %-20s\n",
-               "Loss Function", "Problem Type", "Input Format", "Labels", "Use Case")
-    fmt.Println("-------------------|----------------|---------------|------------|--------------------")
-    
-    for _, loss := range losses {
-        fmt.Printf("%-18s | %-14s | %-13s | %-10s | %-20s\n",
-                   loss.name, loss.problem_type, loss.input_format, 
-                   loss.label_format, loss.use_case)
-    }
-}
-```
+| Loss Function      | Problem Type   | Input Format  | Labels     | Use Case            |
+|--------------------|----------------|---------------|------------|---------------------|
+| CrossEntropy       | Classification | Logits        | One-hot    | Multi-class         |
+| SparseCrossEntropy | Classification | Logits        | Integers   | Multi-class (preferred) |
+| BinaryCrossEntropy | Classification | Probabilities | Binary     | Binary classification |
+| BCEWithLogits      | Classification | Logits        | Binary     | Binary (stable)     |
+| MeanSquaredError   | Regression     | Continuous    | Continuous | Standard regression |
+| MeanAbsoluteError  | Regression     | Continuous    | Continuous | Robust regression   |
+| Huber              | Regression     | Continuous    | Continuous | Balanced robustness |
 
 ## 🎓 Advanced Topics
 
 ### Loss Function Properties
 
-```go
-func lossFunctionProperties() {
-    fmt.Println("🔍 Loss Function Properties")
-    
-    fmt.Println("\n📊 Classification Losses:")
-    fmt.Println("   • CrossEntropy: Probabilistic, smooth gradients")
-    fmt.Println("   • SparseCrossEntropy: Memory efficient, same math")
-    fmt.Println("   • BCEWithLogits: Numerically stable sigmoid+BCE")
-    
-    fmt.Println("\n📈 Regression Losses:")
-    fmt.Println("   • MSE: Smooth, sensitive to outliers, L2 norm")
-    fmt.Println("   • MAE: Robust, less smooth gradients, L1 norm")
-    fmt.Println("   • Huber: Adaptive, combines MSE+MAE benefits")
-    
-    fmt.Println("\n⚡ Gradient Properties:")
-    fmt.Println("   • MSE: Linear gradients (proportional to error)")
-    fmt.Println("   • MAE: Constant gradients (sign of error)")
-    fmt.Println("   • Huber: Smooth transition between MSE and MAE")
-}
-```
+**📊 Classification Losses:**
+- **CrossEntropy**: Probabilistic, smooth gradients
+- **SparseCrossEntropy**: Memory efficient, same math  
+- **BCEWithLogits**: Numerically stable sigmoid+BCE
+
+**📈 Regression Losses:**
+- **MSE**: Smooth, sensitive to outliers, L2 norm
+- **MAE**: Robust, less smooth gradients, L1 norm
+- **Huber**: Adaptive, combines MSE+MAE benefits
+
+**⚡ Gradient Properties:**
+- **MSE**: Linear gradients (proportional to error)
+- **MAE**: Constant gradients (sign of error)
+- **Huber**: Smooth transition between MSE and MAE
 
 ### Numerical Stability Considerations
 
-```go
-func numericalStabilityConsiderations() {
-    fmt.Println("🔒 Numerical Stability Considerations")
-    
-    fmt.Println("\n⚠️ Potential Issues:")
-    fmt.Println("   • Large logits → overflow in softmax")
-    fmt.Println("   • Very small probabilities → log(0) = -∞")
-    fmt.Println("   • Extreme predictions → gradient explosion")
-    
-    fmt.Println("\n✅ Go-Metal Safeguards:")
-    fmt.Println("   • Automatic logit clipping")
-    fmt.Println("   • Numerically stable implementations")
-    fmt.Println("   • MPSGraph optimizations")
-    
-    fmt.Println("\n🎯 Best Practices:")
-    fmt.Println("   • Use BCEWithLogits over BinaryCrossEntropy + Sigmoid")
-    fmt.Println("   • Avoid extreme learning rates")
-    fmt.Println("   • Monitor loss values for NaN/Inf")
-    fmt.Println("   • Use appropriate loss scaling for mixed precision")
-}
-```
+**⚠️ Potential Issues:**
+- Large logits → overflow in softmax
+- Very small probabilities → log(0) = -∞
+- Extreme predictions → gradient explosion
+
+**✅ Go-Metal Safeguards:**
+- Automatic logit clipping
+- Numerically stable implementations
+- MPSGraph optimizations
+
+**🎯 Best Practices:**
+- Use BCEWithLogits over BinaryCrossEntropy + Sigmoid
+- Avoid extreme learning rates
+- Monitor loss values for NaN/Inf
+- Use appropriate loss scaling for mixed precision
 
 ### Custom Loss Function Concepts
 
-```go
-func customLossConcepts() {
-    fmt.Println("🛠️ Custom Loss Function Concepts")
-    
-    fmt.Println("\n🎯 When You Might Need Custom Losses:")
-    fmt.Println("   • Domain-specific objectives")
-    fmt.Println("   • Multi-task learning")
-    fmt.Println("   • Imbalanced dataset handling")
-    fmt.Println("   • Specialized metrics optimization")
-    
-    fmt.Println("\n📝 Implementation Notes:")
-    fmt.Println("   • Go-metal uses built-in MPSGraph loss functions")
-    fmt.Println("   • Custom losses would require C/Objective-C extension")
-    fmt.Println("   • Current losses cover 95% of use cases")
-    
-    fmt.Println("\n💡 Alternatives:")
-    fmt.Println("   • Weighted sampling for imbalanced data")
-    fmt.Println("   • Data augmentation for bias correction")
-    fmt.Println("   • Post-processing for specialized metrics")
-}
-```
+**🎯 When You Might Need Custom Losses:**
+- Domain-specific objectives
+- Multi-task learning
+- Imbalanced dataset handling
+- Specialized metrics optimization
+
+**📝 Implementation Notes:**
+- Go-metal uses built-in MPSGraph loss functions
+- Custom losses would require C/Objective-C extension
+- Current losses cover 95% of use cases
+
+**💡 Alternatives:**
+- Weighted sampling for imbalanced data
+- Data augmentation for bias correction
+- Post-processing for specialized metrics
 
 ## 🎯 Quick Reference
 
 ### Loss Function Quick Selection
 
+**🎯 Default Choices:**
+- Multi-class classification → SparseCrossEntropy
+- Binary classification → BCEWithLogits
+- Regression → MeanSquaredError
+- Robust regression → Huber
+
+**⚙️ Configuration Templates:**
+
+Multi-class classification:
 ```go
-func quickLossSelection() {
-    fmt.Println("⚡ Quick Loss Function Selection")
-    
-    fmt.Println("\n🎯 Default Choices:")
-    fmt.Println("   Multi-class classification → SparseCrossEntropy")
-    fmt.Println("   Binary classification → BCEWithLogits")
-    fmt.Println("   Regression → MeanSquaredError")
-    fmt.Println("   Robust regression → Huber")
-    
-    fmt.Println("\n⚙️ Configuration Templates:")
-    
-    fmt.Println("\n// Multi-class classification")
-    fmt.Println(`config := training.TrainerConfig{
+config := training.TrainerConfig{
     LossFunction: training.SparseCrossEntropy,
     ProblemType:  training.Classification,
-}`)
-    
-    fmt.Println("\n// Binary classification")
-    fmt.Println(`config := training.TrainerConfig{
+}
+```
+
+Binary classification:
+```go
+config := training.TrainerConfig{
     LossFunction: training.BCEWithLogits,
     ProblemType:  training.Classification,
-}`)
-    
-    fmt.Println("\n// Regression")
-    fmt.Println(`config := training.TrainerConfig{
+}
+```
+
+Regression:
+```go
+config := training.TrainerConfig{
     LossFunction: training.MeanSquaredError,
     ProblemType:  training.Regression,
-}`)
 }
 ```
 
 ### Debugging Loss Values
 
-```go
-func debuggingLossValues() {
-    fmt.Println("🔍 Debugging Loss Values")
-    
-    fmt.Println("\n✅ Healthy Loss Patterns:")
-    fmt.Println("   • Decreasing trend over epochs")
-    fmt.Println("   • Smooth convergence (not jagged)")
-    fmt.Println("   • Reasonable final values")
-    
-    fmt.Println("\n⚠️ Warning Signs:")
-    fmt.Println("   • Loss = NaN → learning rate too high")
-    fmt.Println("   • Loss = 0 exactly → potential bug")
-    fmt.Println("   • Loss increases → wrong loss function or LR")
-    fmt.Println("   • Loss plateaus immediately → data/model issue")
-    
-    fmt.Println("\n🔧 Typical Loss Ranges:")
-    fmt.Println("   • CrossEntropy: 0.1-3.0 (lower is better)")
-    fmt.Println("   • MSE: depends on target scale")
-    fmt.Println("   • MAE: depends on target scale")
-    fmt.Println("   • Huber: between MSE and MAE")
-}
-```
+**✅ Healthy Loss Patterns:**
+- Decreasing trend over epochs
+- Smooth convergence (not jagged)
+- Reasonable final values
+
+**⚠️ Warning Signs:**
+- Loss = NaN → learning rate too high
+- Loss = 0 exactly → potential bug
+- Loss increases → wrong loss function or LR
+- Loss plateaus immediately → data/model issue
+
+**🔧 Typical Loss Ranges:**
+- CrossEntropy: 0.1-3.0 (lower is better)
+- MSE: depends on target scale
+- MAE: depends on target scale
+- Huber: between MSE and MAE
 
 ## 🚀 Next Steps
 
