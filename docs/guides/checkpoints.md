@@ -591,7 +591,6 @@ func main() {
             epochLoss += float64(result.Loss)
             epochSteps++
             
-            totalStep := (epoch-1)*15 + step
             if step%5 == 0 {
                 fmt.Printf("Epoch %d, Step %d: Loss = %.6f\n", epoch, step, result.Loss)
             }
