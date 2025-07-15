@@ -344,7 +344,7 @@ func main() {
 
 ### 1. Persistent Buffers
 
-Pre-allocate tensors for maximum performance:
+Persistent buffers are required for training in go-metal and provide optimal performance by pre-allocating GPU memory:
 
 ```go
 package main
@@ -356,6 +356,7 @@ import (
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
     "github.com/tsawler/go-metal/training"
+    "github.com/tsawler/go-metal/memory"
 )
 
 func main() {
@@ -392,48 +393,58 @@ func main() {
     }
     defer trainer.Cleanup()
     
-    // Compare performance with and without persistent buffers
-    fmt.Println("=== Performance Comparison ===")
+    fmt.Println("=== Persistent Buffers Demo ===")
     
-    // Test without persistent buffers
-    fmt.Println("Testing without persistent buffers...")
-    timeWithoutPersistent := benchmarkTraining(trainer, inputShape, false)
+    // Check initial memory state
+    memManager := memory.GetGlobalMemoryManager()
+    initialStats := memManager.Stats()
+    fmt.Printf("Initial memory pools: %v\n", initialStats)
     
-    // Test with persistent buffers
-    fmt.Println("Testing with persistent buffers...")
+    // Enable persistent buffers - this is required for training
+    fmt.Println("\nEnabling persistent buffers...")
     err = trainer.EnablePersistentBuffers(inputShape)
     if err != nil {
         log.Fatalf("Failed to enable persistent buffers: %v", err)
     }
-    timeWithPersistent := benchmarkTraining(trainer, inputShape, true)
     
-    // Results
-    fmt.Printf("Without persistent buffers: %.2f ms/batch\n", timeWithoutPersistent.Seconds()*1000)
-    fmt.Printf("With persistent buffers: %.2f ms/batch\n", timeWithPersistent.Seconds()*1000)
-    improvement := (timeWithoutPersistent.Seconds() - timeWithPersistent.Seconds()) / timeWithoutPersistent.Seconds() * 100
-    fmt.Printf("Performance improvement: %.1f%%\n", improvement)
+    // Check memory state after persistent buffers
+    afterPersistentStats := memManager.Stats()
+    fmt.Printf("After persistent buffers: %v\n", afterPersistentStats)
+    
+    // Run training to show efficient memory usage
+    fmt.Println("\nRunning training with persistent buffers...")
+    trainingTime := benchmarkTraining(trainer, inputShape)
+    
+    // Final memory state
+    finalStats := memManager.Stats()
+    fmt.Printf("\nFinal memory pools: %v\n", finalStats)
+    fmt.Printf("Training performance: %.2f ms/batch\n", trainingTime.Seconds()*1000)
+    fmt.Printf("Model parameters: %d\n", model.TotalParameters)
+    
+    // Show the benefit of persistent buffers
+    fmt.Println("\n✅ Benefits of Persistent Buffers:")
+    fmt.Println("   • Pre-allocated GPU memory reduces allocation overhead")
+    fmt.Println("   • Tensors remain GPU-resident throughout training")
+    fmt.Println("   • Eliminates CPU-GPU memory transfers during training")
+    fmt.Println("   • Required for optimal performance in go-metal")
 }
 
-func benchmarkTraining(trainer *training.ModelTrainer, inputShape []int, persistent bool) time.Duration {
-    numBatches := 50
+func benchmarkTraining(trainer *training.ModelTrainer, inputShape []int) time.Duration {
+    numBatches := 20
     
     start := time.Now()
     for i := 0; i < numBatches; i++ {
         inputData, labelData := generateBenchmarkBatch()
         
-        if persistent {
-            _, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
-            if err != nil {
-                log.Printf("Training failed: %v", err)
-                continue
-            }
-        } else {
-            // Simulate training without persistent buffers
-            _, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
-            if err != nil {
-                log.Printf("Training failed: %v", err)
-                continue
-            }
+        _, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
+        if err != nil {
+            log.Printf("Training failed: %v", err)
+            continue
+        }
+        
+        // Show progress occasionally
+        if i%5 == 0 {
+            fmt.Printf("   Batch %d/%d completed\n", i+1, numBatches)
         }
     }
     
@@ -892,16 +903,21 @@ func main() {
 
 ### 1. Always Use Persistent Buffers
 
-For any training loop, always enable persistent buffers:
+Persistent buffers are **required** for training in go-metal and provide optimal performance:
 
 ```go
-// ✅ Good: Enable persistent buffers
+// ✅ Required: Enable persistent buffers before training
 err = trainer.EnablePersistentBuffers(inputShape)
 if err != nil {
     log.Fatalf("Failed to enable persistent buffers: %v", err)
 }
 
-// ❌ Bad: Not using persistent buffers leads to allocation overhead
+// Now you can train
+result, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
+
+// ❌ Error: Training without persistent buffers will fail
+// result, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
+// // This will return: "persistent buffers not enabled - call EnablePersistentBuffers() first"
 ```
 
 ### 2. Proper Tensor Cleanup
