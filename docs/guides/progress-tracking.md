@@ -21,6 +21,7 @@ This system is designed to give you the same professional training experience as
 package main
 
 import (
+    "math/rand"
     "github.com/tsawler/go-metal/training"
 )
 
@@ -42,6 +43,18 @@ func main() {
     
     pb.Finish()
 }
+
+// Helper function to simulate training step
+func performTrainingStep() float64 {
+    // Simulate training logic returning loss
+    return 2.0 + rand.Float64()*0.5
+}
+
+// Helper function to calculate accuracy
+func calculateAccuracy() float64 {
+    // Simulate accuracy calculation
+    return 0.5 + rand.Float64()*0.4
+}
 ```
 
 ## 🏗️ Training Session Management
@@ -56,23 +69,14 @@ package main
 import (
     "fmt"
     "log"
+    "math/rand"
     
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
     "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    // Initialize Metal device and memory manager
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
-    
     // Build your model
     inputShape := []int{32, 3, 32, 32}
     builder := layers.NewModelBuilder(inputShape)
@@ -95,8 +99,12 @@ func main() {
         BatchSize:     32,
         LearningRate:  0.01,
         OptimizerType: cgo_bridge.Adam,
-        ProblemType:   training.Classification,
+        EngineType:    training.Dynamic,
         LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
     }
     
     trainer, err := training.NewModelTrainer(model, config)
@@ -104,6 +112,12 @@ func main() {
         log.Fatalf("Trainer creation failed: %v", err)
     }
     defer trainer.Cleanup()
+    
+    // Enable persistent buffers for better performance
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
     
     // Training parameters
     epochs := 10
@@ -125,15 +139,15 @@ func main() {
             // Generate or load your training data
             inputData, labelData := generateTrainingBatch()
             
-            // Train batch
-            result, err := trainer.TrainBatch(inputData, inputShape, labelData, []int{32})
+            // Train batch using unified API
+            result, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
             if err != nil {
                 log.Printf("Training step failed: %v", err)
                 continue
             }
             
             // Calculate accuracy (optional)
-            accuracy := calculateAccuracy(result, labelData)
+            accuracy := calculateAccuracy(epoch, step)
             
             // Update progress (loss and accuracy are displayed automatically)
             session.UpdateTrainingProgress(step, float64(result.Loss), accuracy)
@@ -146,18 +160,18 @@ func main() {
         
         for step := 1; step <= validationSteps; step++ {
             // Generate or load validation data
-            valInputData, valLabelData := generateValidationBatch()
+            valInputData, _ := generateValidationBatch()
             
             // Run validation
-            valResult, err := trainer.InferBatch(valInputData, inputShape)
+            _, err := trainer.InferBatch(valInputData, inputShape)
             if err != nil {
                 log.Printf("Validation step failed: %v", err)
                 continue
             }
             
             // Calculate validation metrics
-            valLoss := calculateValidationLoss(valResult, valLabelData)
-            valAccuracy := calculateValidationAccuracy(valResult, valLabelData)
+            valLoss := calculateValidationLoss(epoch, step)
+            valAccuracy := calculateValidationAccuracy(epoch, step)
             
             // Update validation progress
             session.UpdateValidationProgress(step, valLoss, valAccuracy)
@@ -168,6 +182,78 @@ func main() {
     }
     
     fmt.Println("Training completed!")
+}
+
+// Helper function to generate training batch
+func generateTrainingBatch() ([]float32, *training.Int32Labels) {
+    batchSize := 32
+    
+    // Generate random input data
+    inputData := make([]float32, batchSize*3*32*32)
+    for i := range inputData {
+        inputData[i] = rand.Float32()
+    }
+    
+    // Generate random labels
+    labelData := make([]int32, batchSize)
+    for i := range labelData {
+        labelData[i] = int32(rand.Intn(10))
+    }
+    
+    // Create label tensor
+    labels, err := training.NewInt32Labels(labelData, []int{batchSize})
+    if err != nil {
+        log.Fatalf("Failed to create label tensor: %v", err)
+    }
+    
+    return inputData, labels
+}
+
+// Helper function to generate validation batch
+func generateValidationBatch() ([]float32, *training.Int32Labels) {
+    return generateTrainingBatch()
+}
+
+// Helper function to calculate accuracy
+func calculateAccuracy(epoch, step int) float64 {
+    // Simulate improving accuracy over time
+    progress := float64(epoch-1)*100 + float64(step)
+    totalSteps := 1000.0 // 10 epochs * 100 steps
+    
+    baseAccuracy := 0.1 + 0.8*(progress/totalSteps)
+    noise := (rand.Float64() - 0.5) * 0.1
+    
+    accuracy := baseAccuracy + noise
+    if accuracy < 0 {
+        accuracy = 0
+    }
+    if accuracy > 1 {
+        accuracy = 1
+    }
+    
+    return accuracy
+}
+
+// Helper function to calculate validation loss
+func calculateValidationLoss(epoch, step int) float64 {
+    // Simulate decreasing validation loss
+    progress := float64(epoch-1)*20 + float64(step)
+    totalSteps := 200.0 // 10 epochs * 20 steps
+    
+    baseLoss := 2.5 - 1.5*(progress/totalSteps)
+    noise := (rand.Float64() - 0.5) * 0.2
+    
+    loss := baseLoss + noise
+    if loss < 0.1 {
+        loss = 0.1
+    }
+    
+    return loss
+}
+
+// Helper function to calculate validation accuracy
+func calculateValidationAccuracy(epoch, step int) float64 {
+    return calculateAccuracy(epoch, step) * 0.9 // Slightly lower than training
 }
 ```
 
@@ -263,6 +349,19 @@ for step := 1; step <= stepsPerEpoch; step++ {
         "f1_score":  f1Score,
     })
 }
+
+// Helper functions for custom metrics
+func calculatePrecision(epoch, step int) float64 {
+    return 0.7 + 0.2*rand.Float64()
+}
+
+func calculateRecall(epoch, step int) float64 {
+    return 0.6 + 0.3*rand.Float64()
+}
+
+func calculateF1Score(precision, recall float64) float64 {
+    return 2 * (precision * recall) / (precision + recall)
+}
 ```
 
 ### Progress Bar Customization
@@ -352,12 +451,12 @@ for epoch := 1; epoch <= epochs; epoch++ {
     
     // Training loop with automatic progress tracking
     for step := 1; step <= stepsPerEpoch; step++ {
-        result, err := trainer.TrainBatch(inputData, inputShape, labelData, labelShape)
+        result, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
         if err != nil {
             continue
         }
         
-        accuracy := calculateAccuracy(result, labelData)
+        accuracy := calculateAccuracy(epoch, step)
         session.UpdateTrainingProgress(step, float64(result.Loss), accuracy)
     }
     
@@ -503,7 +602,7 @@ func trainCNN() error {
         runningAccuracy := 0.0
         
         for step, batch := range trainLoader.Enumerate() {
-            result, err := trainer.TrainBatch(batch.Data, batch.Shape, batch.Labels, batch.LabelShape)
+            result, err := trainer.TrainBatchUnified(batch.Data, batch.Shape, batch.Labels)
             if err != nil {
                 log.Printf("Training error: %v", err)
                 continue

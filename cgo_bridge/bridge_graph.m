@@ -805,9 +805,9 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             }
             
             engine->sgdStateInitialized = YES;
-            NSLog(@"✅ SGD state initialized for %lu parameters (momentum: %s)", 
-                  [engine->allWeightPlaceholders count], 
-                  engine->config.beta1 > 0.0f ? "enabled" : "disabled");
+            // NSLog(@"✅ SGD state initialized for %lu parameters (momentum: %s)", 
+            //       [engine->allWeightPlaceholders count], 
+            //       engine->config.beta1 > 0.0f ? "enabled" : "disabled");
         }
         
         // RMSProp OPTIMIZER: Initialize RMSProp state arrays
@@ -888,10 +888,10 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             }
             
             engine->rmspropStateInitialized = YES;
-            NSLog(@"✅ RMSProp state initialized for %lu parameters (momentum=%s, centered=%s)", 
-                  [engine->allWeightPlaceholders count], 
-                  engine->config.momentum > 0.0f ? "enabled" : "disabled",
-                  engine->config.centered ? "enabled" : "disabled");
+            // NSLog(@"✅ RMSProp state initialized for %lu parameters (momentum=%s, centered=%s)", 
+            //       [engine->allWeightPlaceholders count], 
+            //       engine->config.momentum > 0.0f ? "enabled" : "disabled",
+            //       engine->config.centered ? "enabled" : "disabled");
         }
         
         // OPTIMIZER-SPECIFIC PRE-COMPILATION: Build optimizer-specific graphs to avoid conflicts
@@ -902,7 +902,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
         // SGD-SPECIFIC GRAPH COMPILATION: Build SGD graph without Adam dependencies
         if (engine->config.optimizer_type == 0 && engine->allWeightPlaceholders.count > 0 && engine->sgdStateInitialized && !engine->sgdGraphCompiled) { // SGD optimizer
             
-            NSLog(@"🚀 SGD PRE-COMPILATION: Building gradient and SGD operations in graph...");
+            // NSLog(@"🚀 SGD PRE-COMPILATION: Building gradient and SGD operations in graph...");
             
             // SGD scalar tensors should already be cached by cacheSGDScalarTensors
             // Just verify they exist and use the correct field names
@@ -919,11 +919,11 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             // NSLog(@"🔧 DEBUG: SGD using sgdCachedLrTensor with config value: %.6f", engine->config.learning_rate);
             
             // DEBUG: Log gradient computation setup
-            NSLog(@"🔍 GRADIENT DEBUG: About to compute gradients for %lu parameters", [engine->allWeightPlaceholders count]);
-            NSLog(@"🔍 GRADIENT DEBUG: Loss output tensor (shape: %@)", engine->lossOutput.shape);
+            // NSLog(@"🔍 GRADIENT DEBUG: About to compute gradients for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"🔍 GRADIENT DEBUG: Loss output tensor (shape: %@)", engine->lossOutput.shape);
             for (int i = 0; i < engine->allWeightPlaceholders.count; i++) {
                 MPSGraphTensor* param = engine->allWeightPlaceholders[i];
-                NSLog(@"🔍 GRADIENT DEBUG: Parameter %d (shape: %@)", i, param.shape);
+                // NSLog(@"🔍 GRADIENT DEBUG: Parameter %d (shape: %@)", i, param.shape);
             }
             
             // Pre-compile gradient computation using automatic differentiation ONCE during graph building (same as Adam)
@@ -933,7 +933,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                 precompiledGradients = [engine->graph gradientForPrimaryTensor:engine->lossOutput
                                                              withTensors:engine->allWeightPlaceholders
                                                                     name:@"sgd_precompiled_gradients"];
-                NSLog(@"✅ GRADIENT DEBUG: Successfully computed gradients dictionary with %lu entries", (unsigned long)precompiledGradients.count);
+                // NSLog(@"✅ GRADIENT DEBUG: Successfully computed gradients dictionary with %lu entries", (unsigned long)precompiledGradients.count);
             } @catch (NSException* exception) {
                 NSLog(@"❌ GRADIENT COMPUTATION FAILED: %@", exception.reason);
                 NSLog(@"❌ Exception name: %@", exception.name);
@@ -1063,7 +1063,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             engine->precompiledUpdatedMomentum = precompiledUpdatedMomentum;
             
             engine->sgdGraphCompiled = YES;
-            NSLog(@"✅ SGD PRE-COMPILATION: Successfully built SGD update operations for %lu parameters", [engine->allWeightPlaceholders count]);
+            // NSLog(@"✅ SGD PRE-COMPILATION: Successfully built SGD update operations for %lu parameters", [engine->allWeightPlaceholders count]);
         }
         
         // ADAM-SPECIFIC GRAPH COMPILATION: Build Adam graph without SGD dependencies  
@@ -1237,7 +1237,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
         // RMSPROP-SPECIFIC GRAPH COMPILATION: Build RMSProp graph without Adam/SGD dependencies
         else if (engine->config.optimizer_type == 2 && engine->allWeightPlaceholders.count > 0 && engine->rmspropStateInitialized && !engine->rmspropGraphCompiled) { // RMSProp optimizer
             
-            NSLog(@"🚀 PRE-COMPILATION: Building gradient and RMSProp operations in graph...");
+            // NSLog(@"🚀 PRE-COMPILATION: Building gradient and RMSProp operations in graph...");
             
             // Pre-compile gradient computation using automatic differentiation ONCE during graph building
             NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
@@ -1275,7 +1275,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                 return NO;
             }
             
-            NSLog(@"🔍 Array verification: squaredGradPlaceholders has %lu items", [engine->squaredGradPlaceholders count]);
+            // NSLog(@"🔍 Array verification: squaredGradPlaceholders has %lu items", [engine->squaredGradPlaceholders count]);
             
             // Pre-compile RMSProp parameter updates
             NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
