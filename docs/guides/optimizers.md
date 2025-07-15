@@ -192,8 +192,8 @@ defer trainer.Cleanup()
 // Single call handles: forward pass + AdaDelta optimization + backward pass
 result, err := trainer.TrainStep(inputTensor, labelTensor)
 
-// Note: UpdateLearningRate() will return error for AdaDelta 
-// since it adapts learning rate automatically
+// Note: AdaDelta adapts learning rate automatically
+// Manual learning rate changes have minimal effect
 ```
 
 **Architecture Benefits:**
@@ -252,7 +252,7 @@ result, err := trainer.TrainStep(inputTensor, labelTensor)
 // Supports learning rate scheduling during training
 if epoch % 10 == 0 {
     newLR := config.LearningRate * 0.8
-    trainer.UpdateLearningRate(newLR)
+    trainer.SetLearningRate(newLR)
 }
 ```
 
@@ -421,28 +421,22 @@ import (
     "log"
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
     "github.com/tsawler/go-metal/training"
 )
 
 func setupAdamTraining() {
-    // Initialize Metal device and memory manager
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
-    
     // Build a simple model
     inputShape := []int{32, 784}
     builder := layers.NewModelBuilder(inputShape)
-    model, _ := builder.
+    model, err := builder.
         AddDense(128, true, "hidden").
         AddReLU("relu").
         AddDense(10, true, "output").
         Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to build model: %v", err)
+    }
     
     // Configure Adam optimizer
     config := training.TrainerConfig{
@@ -470,322 +464,171 @@ func setupAdamTraining() {
     fmt.Printf("   Beta1 (momentum): %.3f\n", config.Beta1)
     fmt.Printf("   Beta2 (adaptive): %.3f\n", config.Beta2)
 }
+
+func main() {
+    setupAdamTraining()
+}
 ```
 
 #### Optimizer Comparison Example
 
-```go
-func compareOptimizers() {
-    fmt.Println("🔍 Optimizer Comparison Example")
-    
-    optimizers := []struct {
-        name string
-        config training.TrainerConfig
-        use_case string
-    }{
-        {
-            "Adam (Standard)",
-            training.TrainerConfig{
-                OptimizerType: cgo_bridge.Adam,
-                LearningRate:  0.001,
-                Beta1:         0.9,
-                Beta2:         0.999,
-                Epsilon:       1e-8,
-            },
-            "General purpose, most problems",
-        },
-        {
-            "SGD (Conservative)",
-            training.TrainerConfig{
-                OptimizerType: cgo_bridge.SGD,
-                LearningRate:  0.01,
-            },
-            "Simple problems, interpretability",
-        },
-        {
-            "RMSProp",
-            training.TrainerConfig{
-                OptimizerType: cgo_bridge.RMSProp,
-                LearningRate:  0.001,
-            },
-            "RNNs, non-stationary objectives",
-        },
-        {
-            "AdaGrad",
-            training.TrainerConfig{
-                OptimizerType: cgo_bridge.AdaGrad,
-                LearningRate:  0.01,
-            },
-            "Sparse features, NLP",
-        },
-        {
-            "AdaDelta",
-            training.TrainerConfig{
-                OptimizerType: cgo_bridge.AdaDelta,
-                LearningRate:  1.0,
-                Alpha:         0.95,
-            },
-            "No LR tuning needed, robust",
-        },
-        {
-            "Nadam",
-            training.TrainerConfig{
-                OptimizerType: cgo_bridge.Nadam,
-                LearningRate:  0.002,
-                Beta1:         0.9,
-                Beta2:         0.999,
-            },
-            "Faster Adam, modern deep learning",
-        },
-        {
-            "L-BFGS",
-            training.TrainerConfig{
-                OptimizerType: cgo_bridge.LBFGS,
-                LearningRate:  1.0,
-            },
-            "Small datasets, batch optimization",
-        },
-    }
-    
-    fmt.Printf("%-18s | %-8s | %-35s\n", "Optimizer", "LR", "Best Use Case")
-    fmt.Println("-------------------|----------|------------------------------------")
-    
-    for _, opt := range optimizers {
-        fmt.Printf("%-18s | %-8.4f | %-35s\n", 
-                   opt.name, opt.config.LearningRate, opt.use_case)
-    }
-}
-```
+| Optimizer          | LR       | Best Use Case                      |
+|--------------------|----------|-------------------------------------|
+| Adam (Standard)    | 0.0010   | General purpose, most problems      |
+| SGD (Conservative) | 0.0100   | Simple problems, interpretability   |
+| RMSProp            | 0.0010   | RNNs, non-stationary objectives     |
+| AdaGrad            | 0.0100   | Sparse features, NLP                |
+| AdaDelta           | 1.0000   | No LR tuning needed, robust         |
+| Nadam              | 0.0020   | Faster Adam, modern deep learning   |
+| L-BFGS             | 1.0000   | Small datasets, batch optimization  |
 
 ### Learning Rate Scheduling Patterns
 
-```go
-func demonstrateLearningRateScheduling() {
-    fmt.Println("📈 Learning Rate Scheduling Patterns")
-    
-    fmt.Println("\n🎯 Common LR Schedules:")
-    
-    // Step decay pattern
-    fmt.Println("Step Decay:")
-    fmt.Println("   Epochs 1-10:  LR = 0.01")
-    fmt.Println("   Epochs 11-20: LR = 0.005")
-    fmt.Println("   Epochs 21+:   LR = 0.001")
-    
-    // Exponential decay
-    fmt.Println("\nExponential Decay:")
-    fmt.Println("   LR = initial_lr * (decay_rate ^ epoch)")
-    fmt.Println("   Example: 0.01 * (0.95 ^ epoch)")
-    
-    // Cosine annealing
-    fmt.Println("\nCosine Annealing:")
-    fmt.Println("   LR follows cosine curve from max to min")
-    fmt.Println("   Smooth transitions, good for fine-tuning")
-    
-    // Warm-up + decay
-    fmt.Println("\nWarm-up + Decay:")
-    fmt.Println("   Epochs 1-5:  Linear increase 0 → 0.01")
-    fmt.Println("   Epochs 6+:   Decay from 0.01")
-}
-```
+**🎯 Common LR Schedules:**
+
+**Step Decay:**
+- Epochs 1-10:  LR = 0.01
+- Epochs 11-20: LR = 0.005
+- Epochs 21+:   LR = 0.001
+
+**Exponential Decay:**
+- LR = initial_lr × (decay_rate ^ epoch)
+- Example: 0.01 × (0.95 ^ epoch)
+
+**Cosine Annealing:**
+- LR follows cosine curve from max to min
+- Smooth transitions, good for fine-tuning
+
+**Warm-up + Decay:**
+- Epochs 1-5:  Linear increase 0 → 0.01
+- Epochs 6+:   Decay from 0.01
 
 ## 🎓 Tuning Guidelines
 
 ### Learning Rate Selection
 
-```go
-func learningRateGuidelines() {
-    fmt.Println("🎯 Learning Rate Selection Guidelines")
-    
-    fmt.Println("\n📊 Starting Points by Optimizer:")
-    rates := map[string]string{
-        "Adam":     "0.001 (safe) to 0.003 (aggressive)",
-        "SGD":      "0.01 (typical) to 0.1 (small models)",
-        "RMSProp":  "0.001 (standard)",
-        "AdaGrad":  "0.01 (can start higher, adapts down)",
-        "AdaDelta": "1.0 (algorithm handles scaling automatically)",
-        "Nadam":    "0.002 (slightly higher than Adam)",
-        "L-BFGS":   "1.0 (algorithm determines step size)",
-    }
-    
-    for opt, rate := range rates {
-        fmt.Printf("   %-8s: %s\n", opt, rate)
-    }
-    
-    fmt.Println("\n🔧 Tuning Strategy:")
-    fmt.Println("   1. Start with recommended default")
-    fmt.Println("   2. If loss decreases too slowly → increase LR")
-    fmt.Println("   3. If loss oscillates/explodes → decrease LR")
-    fmt.Println("   4. Monitor first 10-20 epochs for trend")
-}
-```
+**📊 Starting Points by Optimizer:**
+- **Adam**: 0.001 (safe) to 0.003 (aggressive)
+- **SGD**: 0.01 (typical) to 0.1 (small models)
+- **RMSProp**: 0.001 (standard)
+- **AdaGrad**: 0.01 (can start higher, adapts down)
+- **AdaDelta**: 1.0 (algorithm handles scaling automatically)
+- **Nadam**: 0.002 (slightly higher than Adam)
+- **L-BFGS**: 1.0 (algorithm determines step size)
+
+**🔧 Tuning Strategy:**
+1. Start with recommended default
+2. If loss decreases too slowly → increase LR
+3. If loss oscillates/explodes → decrease LR
+4. Monitor first 10-20 epochs for trend
 
 ### Batch Size Impact
 
-```go
-func batchSizeImpact() {
-    fmt.Println("📦 Batch Size Impact on Optimizers")
-    
-    fmt.Println("\n🎯 General Rules:")
-    fmt.Println("   • Larger batches → more stable gradients → can use higher LR")
-    fmt.Println("   • Smaller batches → more noise → may need lower LR")
-    fmt.Println("   • Adam handles batch size variations better than SGD")
-    
-    fmt.Println("\n📊 Recommended Adjustments:")
-    adjustments := []struct {
-        batch_size string
-        lr_adjustment string
-        notes string
-    }{
-        {"8-16", "Standard LR", "Good for CNNs, limited memory"},
-        {"32-64", "Standard LR", "Sweet spot for most problems"},
-        {"128-256", "1.5-2x higher LR", "Stable gradients, faster training"},
-        {"512+", "2-4x higher LR", "Very stable, linear scaling"},
-    }
-    
-    fmt.Printf("%-12s | %-18s | %-25s\n", "Batch Size", "LR Adjustment", "Notes")
-    fmt.Println("-------------|-------------------|-------------------------")
-    for _, adj := range adjustments {
-        fmt.Printf("%-12s | %-18s | %-25s\n", 
-                   adj.batch_size, adj.lr_adjustment, adj.notes)
-    }
-}
-```
+**🎯 General Rules:**
+- Larger batches → more stable gradients → can use higher LR
+- Smaller batches → more noise → may need lower LR
+- Adam handles batch size variations better than SGD
+
+**📊 Recommended Adjustments:**
+
+| Batch Size  | LR Adjustment      | Notes                       |
+|-------------|--------------------|-----------------------------|
+| 8-16        | Standard LR        | Good for CNNs, limited memory |
+| 32-64       | Standard LR        | Sweet spot for most problems |
+| 128-256     | 1.5-2x higher LR   | Stable gradients, faster training |
+| 512+        | 2-4x higher LR     | Very stable, linear scaling |
 
 ### Convergence Diagnostics
 
-```go
-func convergenceDiagnostics() {
-    fmt.Println("🔍 Convergence Diagnostics")
-    
-    fmt.Println("\n✅ Good Signs:")
-    fmt.Println("   • Loss decreases steadily")
-    fmt.Println("   • Validation loss tracks training loss")
-    fmt.Println("   • Learning rate feels 'just right'")
-    
-    fmt.Println("\n⚠️ Warning Signs:")
-    fmt.Println("   • Loss plateaus early → try higher LR")
-    fmt.Println("   • Loss oscillates wildly → try lower LR") 
-    fmt.Println("   • Validation loss diverges → overfitting")
-    fmt.Println("   • Very slow progress → wrong optimizer/LR")
-    
-    fmt.Println("\n🔧 Fixes:")
-    fmt.Println("   • Plateau: Increase LR by 2-5x")
-    fmt.Println("   • Oscillation: Decrease LR by 2-10x")
-    fmt.Println("   • Overfitting: Add regularization, lower LR")
-    fmt.Println("   • Slow: Try Adam instead of SGD")
-}
-```
+**✅ Good Signs:**
+- Loss decreases steadily
+- Validation loss tracks training loss
+- Learning rate feels 'just right'
+
+**⚠️ Warning Signs:**
+- Loss plateaus early → try higher LR
+- Loss oscillates wildly → try lower LR
+- Validation loss diverges → overfitting
+- Very slow progress → wrong optimizer/LR
+
+**🔧 Fixes:**
+- **Plateau**: Increase LR by 2-5x
+- **Oscillation**: Decrease LR by 2-10x
+- **Overfitting**: Add regularization, lower LR
+- **Slow**: Try Adam instead of SGD
 
 ## 🚀 Advanced Optimization Techniques
 
 ### Gradient Clipping Concepts
 
-```go
-func gradientClippingConcepts() {
-    fmt.Println("✂️ Gradient Clipping Concepts")
-    
-    fmt.Println("\n🎯 When to Use:")
-    fmt.Println("   • Training RNNs (exploding gradients)")
-    fmt.Println("   • Very deep networks")
-    fmt.Println("   • When loss occasionally spikes")
-    
-    fmt.Println("\n📊 Types:")
-    fmt.Println("   • Norm clipping: Limit gradient magnitude")
-    fmt.Println("   • Value clipping: Limit individual gradient values")
-    
-    fmt.Println("\n⚙️ Implementation Note:")
-    fmt.Println("   Currently handled internally by go-metal optimizers")
-    fmt.Println("   Automatic stabilization for numerical stability")
-}
-```
+**🎯 When to Use:**
+- Training RNNs (exploding gradients)
+- Very deep networks
+- When loss occasionally spikes
+
+**📊 Types:**
+- **Norm clipping**: Limit gradient magnitude
+- **Value clipping**: Limit individual gradient values
+
+**⚙️ Implementation Note:**
+- Currently handled internally by go-metal optimizers
+- Automatic stabilization for numerical stability
 
 ### Optimizer State Management
 
-```go
-func optimizerStateManagement() {
-    fmt.Println("💾 Optimizer State Management")
-    
-    fmt.Println("\n🎯 What Optimizers Remember:")
-    fmt.Println("   • Adam: Momentum and squared gradient moving averages")
-    fmt.Println("   • SGD: Previous gradients (if momentum enabled)")
-    fmt.Println("   • RMSProp: Squared gradient moving averages")
-    fmt.Println("   • AdaGrad: Accumulated squared gradients")
-    
-    fmt.Println("\n🔧 Implications:")
-    fmt.Println("   • First few iterations may behave differently")
-    fmt.Println("   • Warm-up periods help stabilize adaptive optimizers")
-    fmt.Println("   • State is reset when creating new trainer")
-    
-    fmt.Println("\n💡 Best Practices:")
-    fmt.Println("   • Don't change optimizers mid-training")
-    fmt.Println("   • Consider warm-up for large learning rates")
-    fmt.Println("   • Monitor early training behavior")
-}
-```
+**🎯 What Optimizers Remember:**
+- **Adam**: Momentum and squared gradient moving averages
+- **SGD**: Previous gradients (if momentum enabled)
+- **RMSProp**: Squared gradient moving averages
+- **AdaGrad**: Accumulated squared gradients
+
+**🔧 Implications:**
+- First few iterations may behave differently
+- Warm-up periods help stabilize adaptive optimizers
+- State is reset when creating new trainer
+
+**💡 Best Practices:**
+- Don't change optimizers mid-training
+- Consider warm-up for large learning rates
+- Monitor early training behavior
 
 ## 📊 Performance Comparison
 
 ### Optimizer Performance Characteristics
 
-```go
-func optimizerPerformanceCharacteristics() {
-    fmt.Println("⚡ Optimizer Performance Characteristics")
-    
-    characteristics := []struct {
-        optimizer string
-        memory string
-        speed string
-        convergence string
-        stability string
-    }{
-        {"Adam", "High", "Fast", "Fast", "High"},
-        {"SGD", "Low", "Fastest", "Slow", "Medium"},
-        {"RMSProp", "Medium", "Fast", "Medium", "High"},
-        {"AdaGrad", "Medium", "Fast", "Fast→Slow", "Medium"},
-        {"AdaDelta", "Medium", "Fast", "Steady", "Very High"},
-        {"Nadam", "High", "Fast", "Very Fast", "High"},
-        {"L-BFGS", "Very High", "Slow", "Very Fast", "Very High"},
-    }
-    
-    fmt.Printf("%-10s | %-9s | %-7s | %-11s | %-9s\n",
-               "Optimizer", "Memory", "Speed", "Convergence", "Stability")
-    fmt.Println("-----------|-----------|---------|-------------|----------")
-    
-    for _, char := range characteristics {
-        fmt.Printf("%-10s | %-9s | %-7s | %-11s | %-9s\n",
-                   char.optimizer, char.memory, char.speed, 
-                   char.convergence, char.stability)
-    }
-}
-```
+| Optimizer  | Memory    | Speed   | Convergence | Stability |
+|------------|-----------|---------|-------------|-----------|
+| Adam       | High      | Fast    | Fast        | High      |
+| SGD        | Low       | Fastest | Slow        | Medium    |
+| RMSProp    | Medium    | Fast    | Medium      | High      |
+| AdaGrad    | Medium    | Fast    | Fast→Slow   | Medium    |
+| AdaDelta   | Medium    | Fast    | Steady      | Very High |
+| Nadam      | High      | Fast    | Very Fast   | High      |
+| L-BFGS     | Very High | Slow    | Very Fast   | Very High |
 
 ## 🎯 Quick Reference
 
 ### Optimizer Quick Selection
 
+**🎯 Default Choice:**
+Adam with LR=0.001 - works for 80% of problems
+
+**🔧 Special Cases:**
+- Simple model + small data → SGD
+- RNN/LSTM → RMSProp
+- Sparse features → AdaGrad
+- No LR tuning wanted → AdaDelta
+- Need fastest convergence → Nadam
+- Small dataset + smooth loss → L-BFGS
+
+**⚙️ Configuration Template:**
 ```go
-func quickOptimizerSelection() {
-    fmt.Println("⚡ Quick Optimizer Selection")
-    
-    fmt.Println("\n🎯 Default Choice:")
-    fmt.Println("   Adam with LR=0.001 - works for 80% of problems")
-    
-    fmt.Println("\n🔧 Special Cases:")
-    fmt.Println("   • Simple model + small data → SGD")
-    fmt.Println("   • RNN/LSTM → RMSProp")  
-    fmt.Println("   • Sparse features → AdaGrad")
-    fmt.Println("   • No LR tuning wanted → AdaDelta")
-    fmt.Println("   • Need fastest convergence → Nadam")
-    fmt.Println("   • Small dataset + smooth loss → L-BFGS")
-    
-    fmt.Println("\n⚙️ Configuration Template:")
-    fmt.Println(`   config := training.TrainerConfig{
-       OptimizerType: cgo_bridge.Adam,
-       LearningRate:  0.001,
-       Beta1:         0.9,
-       Beta2:         0.999,
-       Epsilon:       1e-8,
-   }`)
+config := training.TrainerConfig{
+    OptimizerType: cgo_bridge.Adam,
+    LearningRate:  0.001,
+    Beta1:         0.9,
+    Beta2:         0.999,
+    Epsilon:       1e-8,
 }
 ```
 
