@@ -36,31 +36,98 @@ package main
 import (
     "fmt"
     "log"
+    "math/rand"
     
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
     "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    // ... your model and trainer setup ...
+    // Build model
+    inputShape := []int{32, 3, 32, 32}
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.
+        AddConv2D(32, 3, 1, 1, true, "conv1").
+        AddReLU("relu1").
+        AddDense(10, true, "output").
+        Compile()
+    
+    if err != nil {
+        log.Fatalf("Model compilation failed: %v", err)
+    }
+    
+    // Create trainer
+    config := training.TrainerConfig{
+        BatchSize:     32,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Trainer creation failed: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Enable persistent buffers for better performance
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
     
     // Enable visualization data collection
     trainer.EnableVisualization()
     trainer.EnableEvaluationMetrics()
     
     // Your training loop
-    for epoch := 1; epoch <= 100; epoch++ {
+    for epoch := 1; epoch <= 10; epoch++ {
         // Training phase
-        result, err := trainer.TrainBatch(inputData, inputShape, targetData, targetShape)
-        if err != nil {
-            log.Fatal(err)
+        for step := 1; step <= 100; step++ {
+            inputData, labelData := generateTrainingBatch()
+            
+            result, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
+            if err != nil {
+                log.Printf("Training step failed: %v", err)
+                continue
+            }
         }
         
         // Validation phase (for metrics collection)
         trainer.StartValidationPhase()
-        // ... validation code ...
+        for step := 1; step <= 20; step++ {
+            valInputData, _ := generateValidationBatch()
+            
+            inferenceResult, err := trainer.InferBatch(valInputData, inputShape)
+            if err != nil {
+                log.Printf("Inference failed: %v", err)
+                continue
+            }
+            
+            // Generate labels for metrics (in real use, these would be your actual validation labels)
+            labelData := make([]int32, 32)
+            for i := range labelData {
+                labelData[i] = int32(rand.Intn(10))
+            }
+            
+            err = trainer.UpdateMetricsFromInference(
+                inferenceResult.Predictions,
+                labelData,
+                32,
+            )
+            if err != nil {
+                log.Printf("Metrics update failed: %v", err)
+            }
+        }
         trainer.RecordMetricsForVisualization()
         
-        fmt.Printf("Epoch %d: Loss = %.6f\n", epoch, result.Loss)
+        fmt.Printf("Epoch %d completed\n", epoch)
     }
     
     // Send plots to sidecar and open dashboard
@@ -68,9 +135,45 @@ func main() {
     plottingService.Enable()
     
     if plottingService.CheckHealth() == nil {
-        plottingService.GenerateAndSendAllPlotsWithBrowser(trainer.GetVisualizationCollector())
+        results := plottingService.GenerateAndSendAllPlotsWithBrowser(trainer.GetVisualizationCollector())
+        
+        for plotType, result := range results {
+            if result.Success {
+                fmt.Printf("✅ %s: Generated successfully\n", plotType)
+            } else {
+                fmt.Printf("❌ %s: Failed - %s\n", plotType, result.Message)
+            }
+        }
         fmt.Println("🌐 Dashboard opened in browser")
+    } else {
+        fmt.Println("⚠️ Sidecar service not available")
     }
+}
+
+// Helper function to generate training batch
+func generateTrainingBatch() ([]float32, *training.Int32Labels) {
+    batchSize := 32
+    inputData := make([]float32, batchSize*3*32*32)
+    labelData := make([]int32, batchSize)
+    
+    for i := range inputData {
+        inputData[i] = rand.Float32()
+    }
+    for i := range labelData {
+        labelData[i] = int32(rand.Intn(10))
+    }
+    
+    labels, err := training.NewInt32Labels(labelData, []int{batchSize})
+    if err != nil {
+        log.Fatalf("Failed to create label tensor: %v", err)
+    }
+    
+    return inputData, labels
+}
+
+// Helper function to generate validation batch
+func generateValidationBatch() ([]float32, *training.Int32Labels) {
+    return generateTrainingBatch()
 }
 ```
 
@@ -84,17 +187,57 @@ package main
 import (
     "fmt"
     "log"
+    "math/rand"
     
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
     "github.com/tsawler/go-metal/training"
 )
 
 func main() {
     fmt.Println("🚀 Go-Metal Training with Sidecar Visualization")
     
-    // ... initialize device, create model, optimizer, criterion ...
+    // Build model
+    inputShape := []int{32, 3, 32, 32}
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.
+        AddConv2D(32, 3, 1, 1, true, "conv1").
+        AddReLU("relu1").
+        AddConv2D(64, 3, 2, 1, true, "conv2").
+        AddReLU("relu2").
+        AddDense(128, true, "fc1").
+        AddReLU("relu3").
+        AddDense(10, true, "output").
+        Compile()
+    
+    if err != nil {
+        log.Fatalf("Model compilation failed: %v", err)
+    }
     
     // Create trainer
-    trainer := training.NewTrainer(model, optimizer, criterion, config)
+    config := training.TrainerConfig{
+        BatchSize:     32,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Trainer creation failed: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Enable persistent buffers for better performance
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
     
     // Enable visualization data collection
     trainer.EnableVisualization()
@@ -102,15 +245,17 @@ func main() {
     
     // Training loop
     fmt.Println("🎬 Starting training...")
-    for epoch := 1; epoch <= config.Epochs; epoch++ {
+    epochs := 10
+    stepsPerEpoch := 100
+    validationSteps := 20
+    
+    for epoch := 1; epoch <= epochs; epoch++ {
         // Training phase
-        for batch := range dataLoader.Iterate() {
-            result, err := trainer.TrainBatch(
-                batch.Data.Data.([]float32),
-                batch.Data.Shape,
-                batch.Labels.Data.([]float32),
-                batch.Labels.Shape,
-            )
+        for step := 1; step <= stepsPerEpoch; step++ {
+            // Generate or load training data
+            inputData, labelData := generateTrainingBatch()
+            
+            result, err := trainer.TrainBatchUnified(inputData, inputShape, labelData)
             if err != nil {
                 log.Printf("Training error: %v", err)
                 continue
@@ -120,19 +265,34 @@ func main() {
         // Validation phase for metrics collection
         trainer.StartValidationPhase()
         for step := 1; step <= validationSteps; step++ {
+            // Generate or load validation data
+            valInputData, _ := generateValidationBatch()
+            
             // Run inference and update metrics
-            inferenceResult, err := trainer.InferBatch(validationData, validationShape)
-            if err == nil {
-                trainer.UpdateMetricsFromInference(
-                    inferenceResult.Predictions,
-                    validationLabels,
-                    batchSize,
-                )
+            inferenceResult, err := trainer.InferBatch(valInputData, inputShape)
+            if err != nil {
+                log.Printf("Inference error: %v", err)
+                continue
+            }
+            
+            // Generate labels for metrics (in real use, these would be your actual validation labels)
+            labelData := make([]int32, 32)
+            for i := range labelData {
+                labelData[i] = int32(rand.Intn(10))
+            }
+            
+            err = trainer.UpdateMetricsFromInference(
+                inferenceResult.Predictions,
+                labelData,
+                32,
+            )
+            if err != nil {
+                log.Printf("Metrics update error: %v", err)
             }
         }
         trainer.RecordMetricsForVisualization()
         
-        fmt.Printf("Epoch %d/%d completed\n", epoch, config.Epochs)
+        fmt.Printf("Epoch %d/%d completed\n", epoch, epochs)
     }
     
     // Send plots to sidecar service
@@ -154,6 +314,32 @@ func main() {
     } else {
         fmt.Println("⚠️ Sidecar service not available")
     }
+}
+
+// Helper function to generate training batch
+func generateTrainingBatch() ([]float32, *training.Int32Labels) {
+    batchSize := 32
+    inputData := make([]float32, batchSize*3*32*32)
+    labelData := make([]int32, batchSize)
+    
+    for i := range inputData {
+        inputData[i] = rand.Float32()
+    }
+    for i := range labelData {
+        labelData[i] = int32(rand.Intn(10))
+    }
+    
+    labels, err := training.NewInt32Labels(labelData, []int{batchSize})
+    if err != nil {
+        log.Fatalf("Failed to create label tensor: %v", err)
+    }
+    
+    return inputData, labels
+}
+
+// Helper function to generate validation batch
+func generateValidationBatch() ([]float32, *training.Int32Labels) {
+    return generateTrainingBatch()
 }
 ```
 
@@ -202,16 +388,25 @@ plottingService := training.NewPlottingService(config)
 ### Manual Plot Generation
 
 ```go
-// Generate specific plot types
-trainingCurves := trainer.GenerateTrainingCurvesPlot()
-rocCurve := trainer.GenerateROCCurvePlot()
+// Generate specific plot types using the plotting service
+plottingService := training.NewPlottingService(training.DefaultPlottingServiceConfig())
+plottingService.Enable()
 
-// Send individual plots
-resp, err := plottingService.SendPlotDataAndOpen(trainingCurves)
-if err != nil {
-    log.Printf("Failed to send plot: %v", err)
+// Check if sidecar is available
+if plottingService.CheckHealth() == nil {
+    // Generate all available plots
+    results := plottingService.GenerateAndSendAllPlotsWithBrowser(trainer.GetVisualizationCollector())
+    
+    for plotType, result := range results {
+        if result.Success {
+            fmt.Printf("✅ %s: Generated successfully\n", plotType)
+        } else {
+            fmt.Printf("❌ %s: Failed - %s\n", plotType, result.Message)
+        }
+    }
+    fmt.Println("🌐 Dashboard opened in browser")
 } else {
-    fmt.Printf("Plot available at: %s\n", resp.ViewURL)
+    fmt.Println("⚠️ Sidecar service not available")
 }
 ```
 
