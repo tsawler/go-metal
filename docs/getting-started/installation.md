@@ -160,6 +160,25 @@ Expected output:
    - Pattern: CNN=false, MLP=true
    - Selected Engine: Dynamic
 🔧 Creating Dynamic Engine (any architecture support)
+2025-07-15 11:48:55.329 readme-apps[67750:18491557] ✅ Dynamic graph built successfully with 1 layers and proper loss computation
+2025-07-15 11:48:55.329 readme-apps[67750:18491557]    - Parameters: 2 placeholders
+2025-07-15 11:48:55.329 readme-apps[67750:18491557]    - Output classes: 2
+2025-07-15 11:48:55.329 readme-apps[67750:18491557]    - Loss: CrossEntropy with automatic differentiation
+2025-07-15 11:48:55.329 readme-apps[67750:18491557] 🚀 PRODUCTION OPTIMIZATION: Caching Adam scalar tensors to eliminate allocation overhead...
+2025-07-15 11:48:55.329 readme-apps[67750:18491557] ✅ PRODUCTION OPTIMIZATION: Adam scalar tensors cached - zero scalar allocations during training
+2025-07-15 11:48:55.329 readme-apps[67750:18491557] ✅ Adam state initialized EARLY for 2 parameters
+2025-07-15 11:48:55.329 readme-apps[67750:18491557] 🔍 ADAM DEBUG: State flag set to 1
+2025-07-15 11:48:55.329 readme-apps[67750:18491557] 🚀 PRE-COMPILATION: Building gradient and Adam operations in graph...
+2025-07-15 11:48:55.329 readme-apps[67750:18491557] 🔍 ADAM GRADIENT DEBUG: About to compute gradients for 2 parameters
+2025-07-15 11:48:55.329 readme-apps[67750:18491557] 🔍 ADAM GRADIENT DEBUG: Loss output tensor (shape: (
+    1,
+    1
+))
+2025-07-15 11:48:55.330 readme-apps[67750:18491557] ✅ ADAM GRADIENT DEBUG: Successfully computed gradients dictionary with 2 entries
+2025-07-15 11:48:55.330 readme-apps[67750:18491557] ✅ PRE-COMPILATION: Successfully built gradient operations for 2 parameters
+2025-07-15 11:48:55.330 readme-apps[67750:18491557] 🚀 PRE-COMPILATION: Building Adam parameter update operations...
+2025-07-15 11:48:55.330 readme-apps[67750:18491557] ✅ PRE-COMPILATION: Successfully built Adam operations for 2 parameters
+2025-07-15 11:48:55.330 readme-apps[67750:18491557] ✅ Dynamic training engine created successfully with 1 layers
 ✅ Created engine: isDynamic=true
 ✅ Trainer created successfully!
    - Metal device initialized
