@@ -83,17 +83,20 @@ Why did I build this? I wanted to increase my knowledge in Machine Learning, and
    
    import (
        "fmt"
-       "github.com/tsawler/go-metal/tensor"
+       "github.com/tsawler/go-metal/layers"
+       "github.com/tsawler/go-metal/training"
    )
    
    func main() {
-       // Create tensors
-       a, _ := tensor.NewTensor([]int{2, 3}, tensor.Float32, tensor.CPU, []float32{1, 2, 3, 4, 5, 6})
-       b, _ := tensor.NewTensor([]int{2, 3}, tensor.Float32, tensor.CPU, []float32{6, 5, 4, 3, 2, 1})
+       // Create a simple neural network
+       builder := layers.NewModelBuilder([]int{1, 10}) // batch_size=1, features=10
+       model, _ := builder.
+           AddDense(5, true, "dense1").
+           AddReLU("relu1").
+           AddDense(1, true, "output").
+           Compile()
        
-       // GPU acceleration
-       result, _ := tensor.AddMPS(a, b)
-       fmt.Printf("Result: %v\n", result.Data)
+       fmt.Printf("Model created with %d parameters\n", model.TotalParameters)
    }
    ```
 
@@ -106,19 +109,39 @@ package main
 
 import (
     "fmt"
-    "github.com/tsawler/go-metal/tensor"
+    "math/rand"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    // Create tensors on different devices
-    cpuTensor, _ := tensor.Zeros([]int{3, 3}, tensor.Float32, tensor.CPU)
-    gpuTensor, _ := tensor.Ones([]int{3, 3}, tensor.Float32, tensor.PersistentGPU)
+    // Create synthetic data
+    batchSize := 32
+    inputData := make([]float32, batchSize*10)
+    for i := range inputData {
+        inputData[i] = rand.Float32()
+    }
     
-    // GPU-accelerated operations
-    result, _ := tensor.MatMulMPS(cpuTensor, gpuTensor)
-    activated, _ := tensor.ReLUMPS(result)
+    // Build a model
+    builder := layers.NewModelBuilder([]int{batchSize, 10})
+    model, _ := builder.
+        AddDense(16, true, "hidden").
+        AddReLU("relu").
+        AddDense(1, true, "output").
+        Compile()
     
-    fmt.Printf("Shape: %v\n", activated.Shape)
+    // Configure training
+    config := training.TrainerConfig{
+        BatchSize:     batchSize,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    fmt.Printf("Model ready for training with %d parameters\n", model.TotalParameters)
 }
 ```
 
@@ -129,59 +152,66 @@ package main
 
 import (
 	"fmt"
-	"github.com/tsawler/go-metal/tensor"
+	"log"
+	"math/rand"
+	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/layers"
 	"github.com/tsawler/go-metal/training"
 )
 
 func main() {
-	// Create dummy data for demonstration purposes
-	// In a real application, you would load your actual dataset here.
-	// For simplicity, we'll create a small, synthetic dataset.
-	numSamples := 100
-	inputFeatures := 784 // Corresponds to the input layer size
-	outputClasses := 10  // Corresponds to the output layer size
+	// Create synthetic training data
+	numSamples := 1000
+	inputFeatures := 784 // e.g., flattened 28x28 images
+	outputClasses := 10  // e.g., digits 0-9
 
-	// Generate random input data (e.g., flattened images)
+	// Generate random input data
 	trainData := make([]float32, numSamples*inputFeatures)
 	for i := range trainData {
-		trainData[i] = float32(i%256) / 255.0 // Simple pattern for demonstration
-	}
-	trainInputTensor, _ := tensor.NewTensor([]int{numSamples, inputFeatures}, tensor.Float32, tensor.CPU, trainData)
-
-	// Generate random labels (e.g., one-hot encoded)
-	trainLabels := make([]float32, numSamples*outputClasses)
-	for i := 0; i < numSamples; i++ {
-		trainLabels[i*outputClasses+(i%outputClasses)] = 1.0 // Simple one-hot encoding
-	}
-	trainLabelTensor, _ := tensor.NewTensor([]int{numSamples, outputClasses}, tensor.Float32, tensor.CPU, trainLabels)
-
-	// Create DataLoader instances
-	trainLoader := training.NewDataLoader(trainInputTensor, trainLabelTensor, 32, true)
-	validLoader := training.NewDataLoader(trainInputTensor, trainLabelTensor, 32, false) // Using same data for validation for simplicity
-
-	// Create a neural network
-	model := training.NewSequential(
-		training.NewLinear(inputFeatures, 128, true), // Input layer
-		training.NewReLU(),
-		training.NewLinear(128, 64, true), // Hidden layer
-		training.NewReLU(),
-		training.NewLinear(64, outputClasses, true), // Output layer
-	)
-
-	// Setup training components
-	optimizer := training.NewAdam(model.Parameters(), 0.001, 0.9, 0.999, 1e-8)
-	criterion := training.NewCrossEntropyLoss()
-
-	config := training.TrainingConfig{
-		Device:       tensor.PersistentGPU, // Keep model on GPU
-		LearningRate: 0.001,
-		BatchSize:    32,
-		Epochs:       10,
+		trainData[i] = rand.Float32()
 	}
 
-	// Create trainer and start training
-	trainer := training.NewTrainer(model, optimizer, criterion, config)
-	trainer.Train(trainLoader, validLoader)
+	// Generate random labels (class indices)
+	trainLabels := make([]int32, numSamples)
+	for i := range trainLabels {
+		trainLabels[i] = int32(rand.Intn(outputClasses))
+	}
+
+	// Build the model using ModelBuilder
+	builder := layers.NewModelBuilder([]int{32, inputFeatures}) // batch_size=32
+	model, err := builder.
+		AddDense(128, true, "fc1").
+		AddReLU("relu1").
+		AddDense(64, true, "fc2").
+		AddReLU("relu2").
+		AddDense(outputClasses, true, "output").
+		Compile()
+
+	if err != nil {
+		log.Fatalf("Failed to build model: %v", err)
+	}
+
+	// Configure training
+	config := training.TrainerConfig{
+		BatchSize:     32,
+		LearningRate:  0.001,
+		OptimizerType: cgo_bridge.Adam,
+		Beta1:         0.9,
+		Beta2:         0.999,
+		Epsilon:       1e-8,
+		LossFunction:  training.CrossEntropy,
+		ProblemType:   training.Classification,
+	}
+
+	// Create trainer
+	trainer, err := training.NewModelTrainer(model, config)
+	if err != nil {
+		log.Fatalf("Failed to create trainer: %v", err)
+	}
+
+	// Train the model
+	loss, accuracy := trainer.TrainStep(trainData, trainLabels)
+	fmt.Printf("Loss: %.4f, Accuracy: %.2f%%\n", loss, accuracy*100)
 
 	fmt.Println("Training complete!")
 }
@@ -193,26 +223,55 @@ func main() {
 package main
 
 import (
+    "log"
+    "github.com/tsawler/go-metal/layers"
     "github.com/tsawler/go-metal/training"
-    "github.com/tsawler/go-metal/tensor"
+    "github.com/tsawler/go-metal/cgo_bridge"
 )
 
 func main() {
-    // Create a CNN for image classification
-    model := training.NewSequential(
-        training.NewConv2D(3, 32, 3, []int{1, 1}, []int{1, 1}, true),  // Conv layer
-        training.NewReLU(),
-        training.NewMaxPool2D([]int{2, 2}, []int{2, 2}, []int{0, 0}),  // Pooling
-        training.NewConv2D(32, 64, 3, []int{1, 1}, []int{1, 1}, true), // Conv layer
-        training.NewReLU(),
-        training.NewMaxPool2D([]int{2, 2}, []int{2, 2}, []int{0, 0}),  // Pooling
-        training.NewFlatten(),                                          // Flatten for FC
-        training.NewLinear(64*7*7, 128, true),                         // Fully connected
-        training.NewReLU(),
-        training.NewLinear(128, 10, true),                             // Output
-    )
+    // Create a CNN for 32x32 RGB image classification
+    batchSize := 32
+    inputShape := []int{batchSize, 3, 32, 32} // NCHW format
     
-    // Training setup identical to above...
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.
+        // First convolutional block
+        AddConv2D(32, 3, 1, 1, true, "conv1").     // 32 filters, 3x3 kernel
+        AddReLU("relu1").
+        AddConv2D(32, 3, 2, 1, true, "conv2").     // Stride 2 for downsampling
+        AddReLU("relu2").
+        
+        // Second convolutional block
+        AddConv2D(64, 3, 1, 1, true, "conv3").     // 64 filters
+        AddReLU("relu3").
+        AddConv2D(64, 3, 2, 1, true, "conv4").     // Stride 2 for downsampling
+        AddReLU("relu4").
+        
+        // Classification head
+        AddDense(128, true, "fc1").                // Dense automatically handles flattening
+        AddReLU("relu5").
+        AddDropout(0.5, "dropout").
+        AddDense(10, true, "output").              // 10 classes
+        Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to build CNN: %v", err)
+    }
+    
+    // Configure training
+    config := training.TrainerConfig{
+        BatchSize:     batchSize,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+        LossFunction:  training.CrossEntropy,
+        ProblemType:   training.Classification,
+    }
+    
+    // Training would proceed as in the previous example...
 }
 ```
 
@@ -228,9 +287,9 @@ Go-Metal delivers exceptional performance on Apple Silicon:
 
 ### Device Types
 
-- **`tensor.CPU`**: Traditional CPU tensors for compatibility
-- **`tensor.GPU`**: Temporary GPU tensors (automatically copy back to CPU)
-- **`tensor.PersistentGPU`**: High-performance GPU-resident tensors for training
+- **`memory.CPU`** or **`cgo_bridge.CPU`**: Traditional CPU tensors for compatibility
+- **`memory.GPU`** or **`cgo_bridge.GPU`**: Temporary GPU tensors (automatically copy back to CPU)
+- **`memory.PersistentGPU`** or **`cgo_bridge.PersistentGPU`**: High-performance GPU-resident tensors for training
 
 ## 📚 Documentation
 
@@ -290,31 +349,44 @@ docker-compose up -d
 
 # Enable in your training code
 trainer.EnableVisualization()
-plottingService := training.NewPlottingService(training.DefaultPlottingServiceConfig())
-plottingService.GenerateAndSendAllPlotsWithBrowser(trainer.GetVisualizationCollector())
+trainer.EnablePlottingService()
+
+# Optional: Configure custom plotting service
+config := training.DefaultPlottingServiceConfig()
+trainer.ConfigurePlottingService(config)
 ```
 
 ### Memory Management
-Efficient GPU memory management with automatic pooling:
+The library automatically manages GPU memory with efficient buffer pooling. Memory is handled transparently when you use the high-level training API:
 
 ```go
-// Automatic buffer reuse
-config := metal_bridge.BufferAllocatorConfig{
-    MaxPoolSize:     100,
-    MaxTotalMemory:  1024 * 1024 * 1024, // 1GB
+// Memory is automatically managed by the trainer
+config := training.TrainerConfig{
+    BatchSize: 32,
+    LearningRate: 0.001,
+    OptimizerType: cgo_bridge.Adam,
+    // EngineType: training.Auto, // Auto-selects best engine
 }
-allocator := metal_bridge.NewBufferAllocator(device, config)
+
+// The trainer handles all GPU memory allocation and pooling internally
+trainer, _ := training.NewModelTrainer(model, config)
 ```
 
 ### Async GPU Operations
-Non-blocking GPU execution for maximum performance:
+The library uses asynchronous GPU execution internally for maximum performance. Operations are automatically optimized:
 
 ```go
-// Asynchronous operation chains
-graph := tensor.NewGPUComputationGraph()
-opID1, _ := graph.AddOperation("MatMul", []*tensor.Tensor{a, b}, nil, nil)
-opID2, _ := graph.AddOperation("ReLU", []*tensor.Tensor{nil}, []tensor.OperationID{opID1}, nil)
-result, _ := graph.WaitForOperation(opID2)
+// Async execution is handled automatically by the trainer
+trainer, _ := training.NewModelTrainer(model, config)
+
+// Training steps are automatically pipelined for GPU efficiency
+loss, accuracy := trainer.TrainStep(data, labels)
+
+// For custom async operations, use the async package
+import "github.com/tsawler/go-metal/async"
+
+// Create a command buffer pool for efficient GPU command submission
+pool := async.NewCommandBufferPool(device, maxBuffers)
 ```
 
 ## 🤝 Contributing
