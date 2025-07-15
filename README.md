@@ -525,7 +525,7 @@ func main() {
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+Contributions are welcome.
 
 ### Development Setup
 1. Fork the repository
