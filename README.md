@@ -84,7 +84,6 @@ Why did I build this? I wanted to increase my knowledge in Machine Learning, and
    import (
        "fmt"
        "github.com/tsawler/go-metal/layers"
-       "github.com/tsawler/go-metal/training"
    )
    
    func main() {
@@ -161,9 +160,9 @@ import (
 
 func main() {
 	// Create synthetic training data
-	numSamples := 1000
-	inputFeatures := 784 // e.g., flattened 28x28 images
-	outputClasses := 10  // e.g., digits 0-9
+	numSamples := 100  // Smaller dataset for demonstration
+	inputFeatures := 10 // Simpler input for demonstration
+	outputClasses := 2  // Binary classification
 
 	// Generate random input data
 	trainData := make([]float32, numSamples*inputFeatures)
@@ -178,12 +177,11 @@ func main() {
 	}
 
 	// Build the model using ModelBuilder
-	builder := layers.NewModelBuilder([]int{32, inputFeatures}) // batch_size=32
+	batchSize := 8  // Smaller batch size for demonstration
+	builder := layers.NewModelBuilder([]int{batchSize, inputFeatures})
 	model, err := builder.
-		AddDense(128, true, "fc1").
+		AddDense(16, true, "fc1").
 		AddReLU("relu1").
-		AddDense(64, true, "fc2").
-		AddReLU("relu2").
 		AddDense(outputClasses, true, "output").
 		Compile()
 
@@ -193,7 +191,7 @@ func main() {
 
 	// Configure training
 	config := training.TrainerConfig{
-		BatchSize:     32,
+		BatchSize:     batchSize,
 		LearningRate:  0.001,
 		OptimizerType: cgo_bridge.Adam,
 		Beta1:         0.9,
@@ -209,11 +207,12 @@ func main() {
 		log.Fatalf("Failed to create trainer: %v", err)
 	}
 
-	// Train the model
-	loss, accuracy := trainer.TrainStep(trainData, trainLabels)
-	fmt.Printf("Loss: %.4f, Accuracy: %.2f%%\n", loss, accuracy*100)
+	fmt.Printf("Model created successfully with %d parameters\n", model.TotalParameters)
+	fmt.Printf("Training configured with batch size %d and learning rate %.4f\n", config.BatchSize, config.LearningRate)
+	fmt.Println("Ready for training!")
 
-	fmt.Println("Training complete!")
+	// Cleanup
+	trainer.Cleanup()
 }
 ```
 
@@ -223,15 +222,14 @@ func main() {
 package main
 
 import (
+    "fmt"
     "log"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/training"
-    "github.com/tsawler/go-metal/cgo_bridge"
 )
 
 func main() {
     // Create a CNN for 32x32 RGB image classification
-    batchSize := 32
+    batchSize := 8
     inputShape := []int{batchSize, 3, 32, 32} // NCHW format
     
     builder := layers.NewModelBuilder(inputShape)
@@ -259,19 +257,16 @@ func main() {
         log.Fatalf("Failed to build CNN: %v", err)
     }
     
-    // Configure training
-    config := training.TrainerConfig{
-        BatchSize:     batchSize,
-        LearningRate:  0.001,
-        OptimizerType: cgo_bridge.Adam,
-        Beta1:         0.9,
-        Beta2:         0.999,
-        Epsilon:       1e-8,
-        LossFunction:  training.CrossEntropy,
-        ProblemType:   training.Classification,
+    fmt.Printf("CNN model built successfully!\n")
+    fmt.Printf("Total parameters: %d\n", model.TotalParameters)
+    fmt.Printf("Model has %d layers\n", len(model.Layers))
+    
+    // Print layer information
+    for i, layer := range model.Layers {
+        fmt.Printf("Layer %d: %s\n", i+1, layer.Name)
     }
     
-    // Training would proceed as in the previous example...
+    fmt.Println("CNN architecture ready for training!")
 }
 ```
 
@@ -342,51 +337,142 @@ go run main.go
 ### Visualization Support
 Go-Metal includes a [sidecar](https://github.com/tsawler/go-metal-sidecar-plots) service for real-time training visualization:
 
-```bash
-# Start visualization service
-cd go-metal-sidecar-plots
-docker-compose up -d
+```go
+package main
 
-# Enable in your training code
-trainer.EnableVisualization()
-trainer.EnablePlottingService()
+import (
+    "fmt"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
+)
 
-# Optional: Configure custom plotting service
-config := training.DefaultPlottingServiceConfig()
-trainer.ConfigurePlottingService(config)
+func main() {
+    // Build a simple model
+    builder := layers.NewModelBuilder([]int{8, 10})
+    model, _ := builder.
+        AddDense(16, true, "hidden").
+        AddReLU("relu").
+        AddDense(1, true, "output").
+        Compile()
+    
+    config := training.TrainerConfig{
+        BatchSize: 8,
+        LearningRate: 0.001,
+        OptimizerType: cgo_bridge.Adam,
+    }
+    
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        fmt.Printf("Error creating trainer: %v\n", err)
+        return
+    }
+    
+    fmt.Println("Model ready for visualization!")
+    fmt.Printf("Model ready with %d parameters\n", model.TotalParameters)
+    
+    // Visualization features can be enabled:
+    // trainer.EnableVisualization()
+    // trainer.EnablePlottingService()
+    
+    // Optional: Configure custom plotting service
+    // plotConfig := training.DefaultPlottingServiceConfig()
+    // trainer.ConfigurePlottingService(plotConfig)
+    
+    fmt.Println("Visualization features available!")
+    
+    // Cleanup
+    if trainer != nil {
+        trainer.Cleanup()
+    }
+}
 ```
 
 ### Memory Management
 The library automatically manages GPU memory with efficient buffer pooling. Memory is handled transparently when you use the high-level training API:
 
 ```go
-// Memory is automatically managed by the trainer
-config := training.TrainerConfig{
-    BatchSize: 32,
-    LearningRate: 0.001,
-    OptimizerType: cgo_bridge.Adam,
-    // EngineType: training.Auto, // Auto-selects best engine
-}
+package main
 
-// The trainer handles all GPU memory allocation and pooling internally
-trainer, _ := training.NewModelTrainer(model, config)
+import (
+    "fmt"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
+)
+
+func main() {
+    // Build a simple model
+    builder := layers.NewModelBuilder([]int{8, 10})
+    model, _ := builder.
+        AddDense(16, true, "hidden").
+        AddReLU("relu").
+        AddDense(1, true, "output").
+        Compile()
+    
+    // Memory is automatically managed by the trainer
+    config := training.TrainerConfig{
+        BatchSize: 8,
+        LearningRate: 0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType: training.Auto, // Auto-selects best engine
+    }
+    
+    // The trainer handles all GPU memory allocation and pooling internally
+    trainer, _ := training.NewModelTrainer(model, config)
+    
+    fmt.Println("Memory management is handled automatically!")
+    fmt.Printf("Model uses %d parameters\n", model.TotalParameters)
+    
+    // Always cleanup when done
+    trainer.Cleanup()
+}
 ```
 
 ### Async GPU Operations
 The library uses asynchronous GPU execution internally for maximum performance. Operations are automatically optimized:
 
 ```go
-// Async execution is handled automatically by the trainer
-trainer, _ := training.NewModelTrainer(model, config)
+package main
 
-// Training steps are automatically pipelined for GPU efficiency
-loss, accuracy := trainer.TrainStep(data, labels)
+import (
+    "fmt"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
+    "github.com/tsawler/go-metal/async"
+)
 
-// For custom async operations, use the async package
-import "github.com/tsawler/go-metal/async"
-
-// Create a command buffer pool for efficient GPU command submission
-pool := async.NewCommandBufferPool(device, maxBuffers)
+func main() {
+    // Build a simple model
+    builder := layers.NewModelBuilder([]int{8, 10})
+    model, _ := builder.
+        AddDense(16, true, "hidden").
+        AddReLU("relu").
+        AddDense(1, true, "output").
+        Compile()
+    
+    config := training.TrainerConfig{
+        BatchSize: 8,
+        LearningRate: 0.001,
+        OptimizerType: cgo_bridge.Adam,
+    }
+    
+    // Async execution is handled automatically by the trainer
+    trainer, _ := training.NewModelTrainer(model, config)
+    
+    fmt.Println("Async GPU operations are handled automatically!")
+    fmt.Printf("Model ready with %d parameters\n", model.TotalParameters)
+    
+    // For custom async operations, use the async package
+    // Create a command buffer pool for efficient GPU command submission
+    pool := async.NewCommandBufferPool(nil, 10)  // device and maxBuffers
+    fmt.Printf("Command buffer pool created with max buffers: %d\n", 10)
+    
+    // Cleanup
+    trainer.Cleanup()
+    _ = pool // Pool would be used for custom operations
+}
 ```
 
 ## 🤝 Contributing
