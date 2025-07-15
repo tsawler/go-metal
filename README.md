@@ -319,6 +319,7 @@ Go-Metal delivers exceptional performance on Apple Silicon:
 - **[Architecture Overview](docs/guides/architecture.md)** - Library design and components
 - **[Performance Guide](docs/guides/performance.md)** - Optimization tips and benchmarks
 - **[Memory Management Guide](docs/guides/memory-management.md)** - GPU memory optimization and best practices
+- **[Checkpoints Guide](docs/guides/checkpoints.md)** - Model saving, loading, and resume training
 
 ### Tutorials
 - **[MLP Tutorial](docs/tutorials/mlp-tutorial.md)** - Multi-layer perceptron from scratch
