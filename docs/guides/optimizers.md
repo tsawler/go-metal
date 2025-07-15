@@ -10,8 +10,6 @@ Optimizers in go-metal determine how your model learns from data by updating par
 
 ### First-Order Optimizers
 
-**✨ Newly Integrated with Unified Training System**: AdaGrad, AdaDelta, and Nadam are now fully integrated with `ModelTrainingEngine`, providing seamless GPU-resident optimization with single CGO calls and automatic MPSGraph fusion.
-
 #### Adam (Adaptive Moment Estimation)
 **Most popular and versatile optimizer for deep learning.**
 
