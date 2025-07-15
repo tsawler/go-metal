@@ -531,10 +531,13 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 1. Fork the repository
 2. Install development dependencies:
    ```bash
-   # Install task runner for documentation
+   # Install task for documentation
    go install github.com/go-task/task/v3/cmd/task@latest
+
+   # Install godocodown
+   go install github.com/robertkrimen/godocdown/godocdown@latest
    
-   # Generate documentation
+   # This generates documentation (docs.md) in every directory in go-metal
    task docs
    ```
 3. Make your changes and ensure tests pass:
@@ -545,7 +548,6 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ### Areas for Contribution
 - More neural network layers (LSTM, Transformer blocks)
 - Additional activation functions (GELU)
-- Model serialization formats
 - Performance optimizations
 - Advanced optimization techniques (learning rate scheduling, gradient clipping)
 
