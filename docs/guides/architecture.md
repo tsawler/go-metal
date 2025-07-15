@@ -224,10 +224,11 @@ ReLU    ─┘
 package main
 
 import (
-    "fmt"
-    "log"
-    
-    "github.com/tsawler/go-metal/memory"
+	"fmt"
+	"log"
+
+	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/memory"
 )
 
 func demonstrateMemoryManagement() {

@@ -34,30 +34,27 @@ package main
 import (
     "fmt"
     "log"
+    "math/rand"
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
     "github.com/tsawler/go-metal/training"
 )
 
-func demonstrateCrossEntropy() {
-    // Initialize Metal device and memory manager
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
+func main() {
+    fmt.Println("🔍 CrossEntropy Loss Demo")
     
     // Build model for 3-class classification
     inputShape := []int{8, 10}  // 8 samples, 10 features
     builder := layers.NewModelBuilder(inputShape)
-    model, _ := builder.
+    model, err := builder.
         AddDense(16, true, "hidden").
         AddReLU("relu").
         AddDense(3, true, "output").  // 3 classes, no softmax (handled by loss)
         Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     // Configure CrossEntropy loss
     config := training.TrainerConfig{
@@ -65,33 +62,63 @@ func demonstrateCrossEntropy() {
         LearningRate:  0.01,
         OptimizerType: cgo_bridge.Adam,
         EngineType:    training.Dynamic,
-        LossFunction:  training.CrossEntropy,
+        LossFunction:  training.CrossEntropy,  // CrossEntropy for integer labels
         ProblemType:   training.Classification,
         Beta1:         0.9,
         Beta2:         0.999,
         Epsilon:       1e-8,
     }
     
-    trainer, _ := training.NewModelTrainer(model, config)
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
     defer trainer.Cleanup()
     
-    // Create one-hot encoded labels
-    // For classes [0, 1, 2, 1, 0, 2, 1, 0]
-    labelData := []float32{
-        1, 0, 0,  // Class 0
-        0, 1, 0,  // Class 1  
-        0, 0, 1,  // Class 2
-        0, 1, 0,  // Class 1
-        1, 0, 0,  // Class 0
-        0, 0, 1,  // Class 2
-        0, 1, 0,  // Class 1
-        1, 0, 0,  // Class 0
+    // Enable persistent buffers for better performance
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
     }
     
-    fmt.Println("✅ CrossEntropy configured for one-hot labels")
+    // Create sample input data
+    inputData := make([]float32, 8*10)  // 8 samples, 10 features
+    for i := range inputData {
+        inputData[i] = rand.Float32() * 2.0 - 1.0  // Random values [-1, 1]
+    }
+    
+    // Create integer class labels (NOT one-hot)
+    // For classes [0, 1, 2, 1, 0, 2, 1, 0]
+    labelData := []int32{0, 1, 2, 1, 0, 2, 1, 0}
+    
+    // Convert to Int32Labels for unified API
+    labels, err := training.NewInt32Labels(labelData, []int{8})
+    if err != nil {
+        log.Fatalf("Failed to create labels: %v", err)
+    }
+    
+    fmt.Println("✅ CrossEntropy configured for integer class labels")
     fmt.Println("   Input: Raw logits from model")
-    fmt.Println("   Labels: One-hot encoded vectors")
+    fmt.Println("   Labels: Integer class indices [0, 1, 2, 1, 0, 2, 1, 0]")
     fmt.Println("   Output: Scalar loss value")
+    fmt.Println("   Note: Softmax is applied internally by the loss function")
+    
+    // Actually run training to demonstrate CrossEntropy
+    fmt.Println("\n🚀 Training with CrossEntropy loss:")
+    fmt.Println("Step | Loss")
+    fmt.Println("-----|--------")
+    
+    for step := 1; step <= 5; step++ {
+        result, err := trainer.TrainBatchUnified(inputData, inputShape, labels)
+        if err != nil {
+            log.Fatalf("Training step %d failed: %v", step, err)
+        }
+        fmt.Printf("%4d | %.4f\n", step, result.Loss)
+    }
+    
+    fmt.Println("\n✅ Successfully demonstrated CrossEntropy loss!")
+    fmt.Println("   The loss decreases as the model learns to predict class indices")
+    fmt.Println("   CrossEntropy automatically applies softmax to convert logits to probabilities")
 }
 ```
 
