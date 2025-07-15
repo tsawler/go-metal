@@ -150,7 +150,18 @@ SparseCrossEntropy = -log(softmax(y_pred)[y_true])
 **Example usage:**
 ```go
 func demonstrateSparseCrossEntropy() {
-    // ... (same setup as CrossEntropy)
+    // Build model for 3-class classification
+    inputShape := []int{8, 10}  // 8 samples, 10 features
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.
+        AddDense(16, true, "hidden").
+        AddReLU("relu").
+        AddDense(3, true, "output").  // 3 classes
+        Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     // Configure SparseCrossEntropy loss
     config := training.TrainerConfig{
@@ -165,16 +176,45 @@ func demonstrateSparseCrossEntropy() {
         Epsilon:       1e-8,
     }
     
-    trainer, _ := training.NewModelTrainer(model, config)
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
     defer trainer.Cleanup()
+    
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
+    
+    // Create sample input data
+    inputData := make([]float32, 8*10)
+    for i := range inputData {
+        inputData[i] = rand.Float32() * 2.0 - 1.0
+    }
     
     // Create integer class labels (much simpler!)
     labelData := []int32{0, 1, 2, 1, 0, 2, 1, 0}  // Direct class indices
+    
+    labels, err := training.NewInt32Labels(labelData, []int{8})
+    if err != nil {
+        log.Fatalf("Failed to create labels: %v", err)
+    }
     
     fmt.Println("✅ SparseCrossEntropy configured for integer labels")
     fmt.Println("   Input: Raw logits from model")
     fmt.Println("   Labels: Integer class indices")
     fmt.Println("   Advantage: No need to one-hot encode")
+    
+    // Test with actual training
+    for step := 1; step <= 3; step++ {
+        result, err := trainer.TrainBatchUnified(inputData, inputShape, labels)
+        if err != nil {
+            log.Fatalf("Training step %d failed: %v", step, err)
+        }
+        fmt.Printf("Step %d: Loss = %.4f\n", step, result.Loss)
+    }
 }
 ```
 
@@ -209,12 +249,16 @@ func demonstrateBinaryCrossEntropy() {
     // Build model for binary classification
     inputShape := []int{16, 8}
     builder := layers.NewModelBuilder(inputShape)
-    model, _ := builder.
+    model, err := builder.
         AddDense(16, true, "hidden").
         AddReLU("relu").
         AddDense(1, true, "output").     // Single output
         AddSigmoid("sigmoid").           // Convert to probability
         Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     config := training.TrainerConfig{
         BatchSize:     16,
@@ -228,13 +272,45 @@ func demonstrateBinaryCrossEntropy() {
         Epsilon:       1e-8,
     }
     
-    // Binary labels (0 or 1)
-    labelData := []float32{1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0}
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
+    
+    // Create sample input data
+    inputData := make([]float32, 16*8)
+    for i := range inputData {
+        inputData[i] = rand.Float32() * 2.0 - 1.0
+    }
+    
+    // Binary labels as integers (0 or 1)
+    labelData := []int32{1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0}
+    
+    labels, err := training.NewInt32Labels(labelData, []int{16})
+    if err != nil {
+        log.Fatalf("Failed to create labels: %v", err)
+    }
     
     fmt.Println("✅ BinaryCrossEntropy configured")
     fmt.Println("   Input: Probabilities (0-1) after sigmoid")
-    fmt.Println("   Labels: Binary values (0 or 1)")
+    fmt.Println("   Labels: Binary values (0 or 1) as integers")
     fmt.Println("   Use case: Binary classification")
+    
+    // Test with actual training
+    for step := 1; step <= 3; step++ {
+        result, err := trainer.TrainBatchUnified(inputData, inputShape, labels)
+        if err != nil {
+            log.Fatalf("Training step %d failed: %v", step, err)
+        }
+        fmt.Printf("Step %d: Loss = %.4f\n", step, result.Loss)
+    }
 }
 ```
 
@@ -269,12 +345,16 @@ func demonstrateBCEWithLogits() {
     // Build model for binary classification
     inputShape := []int{16, 8}
     builder := layers.NewModelBuilder(inputShape)
-    model, _ := builder.
+    model, err := builder.
         AddDense(16, true, "hidden").
         AddReLU("relu").
         AddDense(1, true, "output").     // Single output (raw logits)
         // No sigmoid - BCEWithLogits handles it internally
         Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     config := training.TrainerConfig{
         BatchSize:     16,
@@ -288,10 +368,45 @@ func demonstrateBCEWithLogits() {
         Epsilon:       1e-8,
     }
     
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
+    
+    // Create sample input data
+    inputData := make([]float32, 16*8)
+    for i := range inputData {
+        inputData[i] = rand.Float32() * 2.0 - 1.0
+    }
+    
+    // Binary labels as integers (0 or 1)
+    labelData := []int32{1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0}
+    
+    labels, err := training.NewInt32Labels(labelData, []int{16})
+    if err != nil {
+        log.Fatalf("Failed to create labels: %v", err)
+    }
+    
     fmt.Println("✅ BCEWithLogits configured")
     fmt.Println("   Input: Raw logits (any real number)")
     fmt.Println("   Labels: Binary values (0 or 1)")
     fmt.Println("   Advantage: Numerically stable")
+    
+    // Test with actual training
+    for step := 1; step <= 3; step++ {
+        result, err := trainer.TrainBatchUnified(inputData, inputShape, labels)
+        if err != nil {
+            log.Fatalf("Training step %d failed: %v", step, err)
+        }
+        fmt.Printf("Step %d: Loss = %.4f\n", step, result.Loss)
+    }
 }
 ```
 
@@ -341,19 +456,10 @@ MSE = (1/n) * ∑(y_true - y_pred)²
 **Example usage:**
 ```go
 func demonstrateMSE() {
-    // Initialize Metal device and memory manager
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
-    
     // Build regression model
     inputShape := []int{32, 10}  // 32 samples, 10 features
     builder := layers.NewModelBuilder(inputShape)
-    model, _ := builder.
+    model, err := builder.
         AddDense(64, true, "hidden1").
         AddReLU("relu1").
         AddDense(32, true, "hidden2").
@@ -361,6 +467,10 @@ func demonstrateMSE() {
         AddDense(1, true, "output").     // Single continuous output
         // No activation - raw output for regression
         Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     // Configure MSE loss
     config := training.TrainerConfig{
@@ -375,14 +485,49 @@ func demonstrateMSE() {
         Epsilon:       1e-8,
     }
     
-    trainer, _ := training.NewModelTrainer(model, config)
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
     defer trainer.Cleanup()
+    
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
+    
+    // Create sample input data
+    inputData := make([]float32, 32*10)
+    for i := range inputData {
+        inputData[i] = rand.Float32() * 2.0 - 1.0
+    }
+    
+    // Create regression targets
+    labelData := make([]float32, 32)
+    for i := range labelData {
+        labelData[i] = rand.Float32() * 100.0  // Target values 0-100
+    }
+    
+    labels, err := training.NewFloat32Labels(labelData, []int{32, 1})
+    if err != nil {
+        log.Fatalf("Failed to create labels: %v", err)
+    }
     
     fmt.Println("✅ MSE configured for regression")
     fmt.Println("   Input: Continuous predictions")
     fmt.Println("   Targets: Continuous ground truth")
     fmt.Println("   Output: Mean squared difference")
     fmt.Println("   Use case: Standard regression")
+    
+    // Test with actual training
+    for step := 1; step <= 3; step++ {
+        result, err := trainer.TrainBatchUnified(inputData, inputShape, labels)
+        if err != nil {
+            log.Fatalf("Training step %d failed: %v", step, err)
+        }
+        fmt.Printf("Step %d: Loss = %.4f\n", step, result.Loss)
+    }
 }
 ```
 
@@ -416,7 +561,20 @@ MAE = (1/n) * ∑|y_true - y_pred|
 **Example usage:**
 ```go
 func demonstrateMAE() {
-    // ... (same model setup as MSE)
+    // Build regression model (same as MSE)
+    inputShape := []int{32, 10}  // 32 samples, 10 features
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.
+        AddDense(64, true, "hidden1").
+        AddReLU("relu1").
+        AddDense(32, true, "hidden2").
+        AddReLU("relu2").
+        AddDense(1, true, "output").     // Single continuous output
+        Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     // Configure MAE loss
     config := training.TrainerConfig{
@@ -431,11 +589,49 @@ func demonstrateMAE() {
         Epsilon:       1e-8,
     }
     
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
+    
+    // Create sample input data
+    inputData := make([]float32, 32*10)
+    for i := range inputData {
+        inputData[i] = rand.Float32() * 2.0 - 1.0
+    }
+    
+    // Create regression targets
+    labelData := make([]float32, 32)
+    for i := range labelData {
+        labelData[i] = rand.Float32() * 100.0  // Target values 0-100
+    }
+    
+    labels, err := training.NewFloat32Labels(labelData, []int{32, 1})
+    if err != nil {
+        log.Fatalf("Failed to create labels: %v", err)
+    }
+    
     fmt.Println("✅ MAE configured for robust regression")
     fmt.Println("   Input: Continuous predictions")
     fmt.Println("   Targets: Continuous ground truth")
     fmt.Println("   Output: Mean absolute difference")
     fmt.Println("   Advantage: Less sensitive to outliers")
+    
+    // Test with actual training
+    for step := 1; step <= 3; step++ {
+        result, err := trainer.TrainBatchUnified(inputData, inputShape, labels)
+        if err != nil {
+            log.Fatalf("Training step %d failed: %v", step, err)
+        }
+        fmt.Printf("Step %d: Loss = %.4f\n", step, result.Loss)
+    }
 }
 ```
 
@@ -472,7 +668,20 @@ Huber(δ) = {
 **Example usage:**
 ```go
 func demonstrateHuber() {
-    // ... (same model setup as MSE)
+    // Build regression model (same as MSE)
+    inputShape := []int{32, 10}  // 32 samples, 10 features
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.
+        AddDense(64, true, "hidden1").
+        AddReLU("relu1").
+        AddDense(32, true, "hidden2").
+        AddReLU("relu2").
+        AddDense(1, true, "output").     // Single continuous output
+        Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     // Configure Huber loss
     config := training.TrainerConfig{
@@ -487,11 +696,19 @@ func demonstrateHuber() {
         Epsilon:       1e-8,
     }
     
+    // Note: Huber loss may have gradient computation issues in current version
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
+    defer trainer.Cleanup()
+    
     fmt.Println("✅ Huber loss configured")
     fmt.Println("   Input: Continuous predictions")
     fmt.Println("   Targets: Continuous ground truth")
     fmt.Println("   Behavior: MSE for small errors, MAE for large errors")
     fmt.Println("   Advantage: Best of both worlds")
+    fmt.Println("   Note: Currently may have gradient computation issues")
 }
 ```
 
@@ -634,18 +851,22 @@ func datasetSizeConsiderations() {
 #### Image Classification Example
 ```go
 func imageClassificationExample() {
-    // ... (device setup)
-    
     // CNN for image classification
     inputShape := []int{32, 3, 32, 32}  // CIFAR-10 style
     builder := layers.NewModelBuilder(inputShape)
-    model, _ := builder.
-        AddConv2D(32, 3, "conv1").AddReLU("relu1").
-        AddConv2D(64, 3, "conv2").AddReLU("relu2").
-        AddFlatten("flatten").
-        AddDense(128, true, "dense").AddReLU("relu3").
+    model, err := builder.
+        AddConv2D(32, 3, 1, 1, true, "conv1").
+        AddReLU("relu1").
+        AddConv2D(64, 3, 1, 1, true, "conv2").
+        AddReLU("relu2").
+        AddDense(128, true, "dense").  // Dense automatically handles flattening
+        AddReLU("relu3").
         AddDense(10, true, "output").  // 10 classes
         Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     // SparseCrossEntropy for integer labels
     config := training.TrainerConfig{
@@ -660,57 +881,95 @@ func imageClassificationExample() {
         Epsilon:       1e-8,
     }
     
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
+    defer trainer.Cleanup()
+    
     fmt.Println("✅ Image classification with SparseCrossEntropy")
+    fmt.Printf("   Model: CNN with %d parameters\n", model.TotalParameters)
+    fmt.Printf("   Input: %v (CIFAR-10 style)\n", inputShape)
+    fmt.Printf("   Output: 10 classes\n")
 }
 ```
 
 #### House Price Regression Example
 ```go
 func housePriceRegressionExample() {
-    // ... (device setup)
-    
     // MLP for house price prediction
     inputShape := []int{100, 20}  // 100 houses, 20 features
     builder := layers.NewModelBuilder(inputShape)
-    model, _ := builder.
-        AddDense(128, true, "dense1").AddReLU("relu1").
-        AddDense(64, true, "dense2").AddReLU("relu2").
-        AddDense(32, true, "dense3").AddReLU("relu3").
+    model, err := builder.
+        AddDense(128, true, "dense1").
+        AddReLU("relu1").
+        AddDense(64, true, "dense2").
+        AddReLU("relu2").
+        AddDense(32, true, "dense3").
+        AddReLU("relu3").
         AddDense(1, true, "output").  // Price prediction
         Compile()
     
-    // Huber loss for robust price prediction
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
+    
+    // MSE loss for price prediction (Huber has current issues)
     config := training.TrainerConfig{
         BatchSize:     100,
         LearningRate:  0.001,
         OptimizerType: cgo_bridge.Adam,
         EngineType:    training.Dynamic,
-        LossFunction:  training.Huber,  // Robust to outlier prices
+        LossFunction:  training.MeanSquaredError,  // Standard regression loss
         ProblemType:   training.Regression,
         Beta1:         0.9,
         Beta2:         0.999,
         Epsilon:       1e-8,
     }
     
-    fmt.Println("✅ House price regression with Huber loss")
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    fmt.Println("✅ House price regression with MSE loss")
+    fmt.Printf("   Model: MLP with %d parameters\n", model.TotalParameters)
+    fmt.Printf("   Input: %v (100 houses, 20 features)\n", inputShape)
+    fmt.Printf("   Output: Price prediction\n")
 }
 ```
 
 #### Binary Sentiment Classification
 ```go
+package main
+
+import (
+    "fmt"
+    "log"
+    "math/rand"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
+)
+
 func sentimentClassificationExample() {
-    // ... (device setup)
+    fmt.Println("🔍 Binary Sentiment Classification Demo")
     
     // Text classification model
     inputShape := []int{64, 512}  // 64 reviews, 512 features
     builder := layers.NewModelBuilder(inputShape)
-    model, _ := builder.
-        AddDense(256, true, "dense1").AddReLU("relu1").
-        AddDropout(0.5, "dropout1").
-        AddDense(128, true, "dense2").AddReLU("relu2").
-        AddDropout(0.3, "dropout2").
+    model, err := builder.
+        AddDense(256, true, "dense1").
+        AddReLU("relu1").
+        AddDense(128, true, "dense2").
+        AddReLU("relu2").
         AddDense(1, true, "output").  // Binary sentiment (raw logits)
         Compile()
+    
+    if err != nil {
+        log.Fatalf("Failed to create model: %v", err)
+    }
     
     // BCEWithLogits for stable binary classification
     config := training.TrainerConfig{
@@ -725,7 +984,52 @@ func sentimentClassificationExample() {
         Epsilon:       1e-8,
     }
     
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
+    
+    // Create sample input data
+    inputData := make([]float32, 64*512)
+    for i := range inputData {
+        inputData[i] = rand.Float32() * 2.0 - 1.0
+    }
+    
+    // Create binary sentiment labels (0 = negative, 1 = positive)
+    labelData := make([]int32, 64)
+    for i := range labelData {
+        labelData[i] = int32(rand.Intn(2))  // Random 0 or 1
+    }
+    
+    labels, err := training.NewInt32Labels(labelData, []int{64})
+    if err != nil {
+        log.Fatalf("Failed to create labels: %v", err)
+    }
+    
     fmt.Println("✅ Sentiment classification with BCEWithLogits")
+    fmt.Printf("   Input: %v (64 reviews, 512 features)\n", inputShape)
+    fmt.Printf("   Output: Binary sentiment (logits)\n")
+    fmt.Printf("   Loss: BCEWithLogits (numerically stable)\n")
+    
+    // Test with actual training
+    for step := 1; step <= 3; step++ {
+        result, err := trainer.TrainBatchUnified(inputData, inputShape, labels)
+        if err != nil {
+            log.Fatalf("Training step %d failed: %v", step, err)
+        }
+        fmt.Printf("Step %d: Loss = %.4f\n", step, result.Loss)
+    }
+}
+
+func main() {
+    sentimentClassificationExample()
 }
 ```
 
