@@ -16,6 +16,8 @@ Go-metal implements a sophisticated GPU memory management system designed for Ap
 
 ## 🚀 Quick Start
 
+> **⚠️ Important Note**: The global memory manager must be initialized before any memory operations can be performed. This is automatically done when you create a `ModelTrainer`, which initializes the Metal device and memory system. All examples in this guide include proper initialization.
+
 ### Basic Memory Management
 
 ```go
@@ -124,11 +126,45 @@ package main
 
 import (
     "fmt"
+    "log"
     "github.com/tsawler/go-metal/memory"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    // Get the global memory manager
+    // Initialize the global memory manager by creating a trainer
+    // This properly initializes the Metal device and memory system
+    inputShape := []int{1, 10}
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.
+        AddDense(5, true, "dense1").
+        Compile()
+    
+    if err != nil {
+        log.Fatalf("Model compilation failed: %v", err)
+    }
+    
+    config := training.TrainerConfig{
+        BatchSize:     1,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Trainer creation failed: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Now we can safely use the global memory manager
     memManager := memory.GetGlobalMemoryManager()
     
     // Get buffer statistics
@@ -157,10 +193,39 @@ import (
     "fmt"
     "log"
     "github.com/tsawler/go-metal/memory"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    // Create a tensor on GPU
+    // Initialize the global memory manager by creating a trainer
+    inputShape := []int{1, 10}
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.AddDense(5, true, "dense1").Compile()
+    if err != nil {
+        log.Fatalf("Model compilation failed: %v", err)
+    }
+    
+    config := training.TrainerConfig{
+        BatchSize:     1,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Trainer creation failed: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Now we can create tensors - the memory manager is initialized
     shape := []int{4, 3, 32, 32}
     tensor, err := memory.NewTensor(shape, memory.Float32, memory.GPU)
     if err != nil {
@@ -215,9 +280,38 @@ import (
     "fmt"
     "log"
     "github.com/tsawler/go-metal/memory"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
 )
 
 func main() {
+    // Initialize the global memory manager by creating a trainer
+    inputShape := []int{1, 10}
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.AddDense(5, true, "dense1").Compile()
+    if err != nil {
+        log.Fatalf("Model compilation failed: %v", err)
+    }
+    
+    config := training.TrainerConfig{
+        BatchSize:     1,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Trainer creation failed: %v", err)
+    }
+    defer trainer.Cleanup()
+    
     // Create tensor
     tensor, err := memory.NewTensor([]int{10, 10}, memory.Float32, memory.GPU)
     if err != nil {
@@ -630,10 +724,39 @@ import (
     "fmt"
     "log"
     "github.com/tsawler/go-metal/memory"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
 )
 
 func main() {
     fmt.Println("=== Custom Buffer Pool ===")
+    
+    // Initialize the global memory manager by creating a trainer
+    inputShape := []int{1, 10}
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.AddDense(5, true, "dense1").Compile()
+    if err != nil {
+        log.Fatalf("Model compilation failed: %v", err)
+    }
+    
+    config := training.TrainerConfig{
+        BatchSize:     1,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Trainer creation failed: %v", err)
+    }
+    defer trainer.Cleanup()
     
     // Create custom buffer pool
     bufferSize := 1024 * 1024 // 1MB buffers
@@ -679,10 +802,39 @@ import (
     "fmt"
     "log"
     "github.com/tsawler/go-metal/memory"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/training"
 )
 
 func main() {
     fmt.Println("=== Efficient Tensor Operations ===")
+    
+    // Initialize the global memory manager by creating a trainer
+    inputShape := []int{1, 10}
+    builder := layers.NewModelBuilder(inputShape)
+    model, err := builder.AddDense(5, true, "dense1").Compile()
+    if err != nil {
+        log.Fatalf("Model compilation failed: %v", err)
+    }
+    
+    config := training.TrainerConfig{
+        BatchSize:     1,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("Trainer creation failed: %v", err)
+    }
+    defer trainer.Cleanup()
     
     // Create source tensor
     srcTensor, err := memory.NewTensor([]int{4, 4}, memory.Float32, memory.GPU)
