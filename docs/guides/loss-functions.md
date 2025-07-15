@@ -658,12 +658,8 @@ config := training.TrainerConfig{
 ```
 
 **Mathematical definition:**
-```
-Huber(δ) = {
-    0.5 * (y_true - y_pred)²           if |y_true - y_pred| ≤ δ
-    δ * |y_true - y_pred| - 0.5 * δ²   otherwise
-}
-```
+- **Huber(δ) = 0.5 × (y_true - y_pred)²** if |y_true - y_pred| ≤ δ
+- **Huber(δ) = δ × |y_true - y_pred| - 0.5 × δ²** otherwise
 
 **Example usage:**
 ```go
@@ -785,64 +781,25 @@ config := training.TrainerConfig{
 ### Data Format Considerations
 
 #### Label Format Decision Tree
-```go
-func labelFormatDecision() {
-    fmt.Println("🎯 Label Format Decision Tree")
-    
-    fmt.Println("\n📊 Classification:")
-    fmt.Println("   Have integer labels (0, 1, 2, ...) → SparseCrossEntropy")
-    fmt.Println("   Have one-hot labels ([1,0,0], [0,1,0], ...) → CrossEntropy")
-    fmt.Println("   Binary problem → BCEWithLogits")
-    
-    fmt.Println("\n📈 Regression:")
-    fmt.Println("   Standard problem → MeanSquaredError")
-    fmt.Println("   Have outliers → MeanAbsoluteError or Huber")
-    fmt.Println("   Need robustness → Huber")
-}
-```
+
+**📊 Classification:**
+- Have integer labels (0, 1, 2, ...) → **SparseCrossEntropy**
+- Have one-hot labels ([1,0,0], [0,1,0], ...) → **CrossEntropy**
+- Binary problem → **BCEWithLogits**
+
+**📈 Regression:**
+- Standard problem → **MeanSquaredError**
+- Have outliers → **MeanAbsoluteError** or **Huber**
+- Need robustness → **Huber**
 
 ### Dataset Size Considerations
 
-```go
-func datasetSizeConsiderations() {
-    fmt.Println("📊 Dataset Size Considerations")
-    
-    considerations := []struct {
-        size string
-        recommendation string
-        reasoning string
-    }{
-        {
-            "Small (< 1K samples)",
-            "MSE/CrossEntropy",
-            "Simple losses, avoid overfitting",
-        },
-        {
-            "Medium (1K - 100K)",
-            "Standard choices",
-            "SparseCrossEntropy, MSE work well",
-        },
-        {
-            "Large (> 100K)",
-            "Robust losses",
-            "Huber, MAE handle outliers better",
-        },
-        {
-            "Noisy labels",
-            "Robust losses",
-            "MAE, Huber less sensitive to noise",
-        },
-    }
-    
-    fmt.Printf("%-20s | %-20s | %-30s\n", "Dataset Size", "Recommendation", "Reasoning")
-    fmt.Println("---------------------|----------------------|------------------------------")
-    
-    for _, cons := range considerations {
-        fmt.Printf("%-20s | %-20s | %-30s\n", 
-                   cons.size, cons.recommendation, cons.reasoning)
-    }
-}
-```
+| Dataset Size         | Recommendation     | Reasoning                      |
+|----------------------|--------------------|--------------------------------|
+| Small (< 1K samples) | MSE/CrossEntropy   | Simple losses, avoid overfitting |
+| Medium (1K - 100K)   | Standard choices   | SparseCrossEntropy, MSE work well |
+| Large (> 100K)       | Robust losses      | Huber, MAE handle outliers better |
+| Noisy labels         | Robust losses      | MAE, Huber less sensitive to noise |
 
 ## 🔧 Practical Examples
 
