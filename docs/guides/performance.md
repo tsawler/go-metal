@@ -16,23 +16,15 @@ package main
 import (
     "fmt"
     "log"
+    "math/rand"
     "time"
     
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
     "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    // Initialize Metal device
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
     
     // Create a simple MLP for benchmarking
     inputShape := []int{32, 784} // Batch size 32, 784 features (28x28)
@@ -52,8 +44,12 @@ func main() {
     
     // Create trainer
     trainerConfig := training.TrainerConfig{
-        OptimizerType: cgo_bridge.Adam,
+        BatchSize:     32,
         LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
         Beta1:         0.9,
         Beta2:         0.999,
         Epsilon:       1e-8,
@@ -65,6 +61,12 @@ func main() {
     }
     defer trainer.Cleanup()
     
+    // Enable persistent buffers for better performance
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Fatalf("Failed to enable persistent buffers: %v", err)
+    }
+    
     // Generate sample data
     batchSize := 32
     inputSize := 784
@@ -75,10 +77,15 @@ func main() {
     
     // Fill with random data
     for i := range inputs {
-        inputs[i] = float32(i%100) / 100.0
+        inputs[i] = rand.Float32()
     }
     for i := range labels {
-        labels[i] = int32(i % numClasses)
+        labels[i] = int32(rand.Intn(numClasses))
+    }
+    
+    labelTensor, err := training.NewInt32Labels(labels, []int{batchSize})
+    if err != nil {
+        log.Fatalf("Failed to create label tensor: %v", err)
     }
     
     // Measure throughput
@@ -89,7 +96,7 @@ func main() {
     startTime := time.Now()
     
     for i := 0; i < numIterations; i++ {
-        result, err := trainer.TrainBatch(inputs, inputShape, labels, []int{batchSize})
+        result, err := trainer.TrainBatchUnified(inputs, inputShape, labelTensor)
         if err != nil {
             log.Printf("Training step %d failed: %v", i, err)
             continue
@@ -119,23 +126,15 @@ package main
 import (
     "fmt"
     "log"
+    "math/rand"
     "runtime"
-    "time"
     
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
     "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
     
     fmt.Println("💾 Memory Usage Analysis")
     fmt.Println("========================")
@@ -170,13 +169,28 @@ func main() {
         }
         
         trainerConfig := training.TrainerConfig{
-            OptimizerType: cgo_bridge.Adam,
+            BatchSize:     batchSize,
             LearningRate:  0.001,
+            OptimizerType: cgo_bridge.Adam,
+            EngineType:    training.Dynamic,
+            LossFunction:  training.SparseCrossEntropy,
+            ProblemType:   training.Classification,
+            Beta1:         0.9,
+            Beta2:         0.999,
+            Epsilon:       1e-8,
         }
         
         trainer, err := training.NewModelTrainer(model, trainerConfig)
         if err != nil {
             log.Printf("Failed to create trainer: %v", err)
+            continue
+        }
+        
+        // Enable persistent buffers
+        err = trainer.EnablePersistentBuffers(inputShape)
+        if err != nil {
+            log.Printf("Failed to enable persistent buffers: %v", err)
+            trainer.Cleanup()
             continue
         }
         
@@ -190,8 +204,26 @@ func main() {
         inputs := make([]float32, batchSize*784)
         labels := make([]int32, batchSize)
         
+        for i := range inputs {
+            inputs[i] = rand.Float32()
+        }
+        for i := range labels {
+            labels[i] = int32(rand.Intn(10))
+        }
+        
+        labelTensor, err := training.NewInt32Labels(labels, []int{batchSize})
+        if err != nil {
+            log.Printf("Failed to create label tensor: %v", err)
+            trainer.Cleanup()
+            continue
+        }
+        
         for i := 0; i < 10; i++ {
-            trainer.TrainBatch(inputs, inputShape, labels, []int{batchSize})
+            _, err := trainer.TrainBatchUnified(inputs, inputShape, labelTensor)
+            if err != nil {
+                log.Printf("Training step %d failed: %v", i, err)
+                break
+            }
         }
         
         var memPeak runtime.MemStats
@@ -218,23 +250,16 @@ package main
 import (
     "fmt"
     "log"
+    "math/rand"
     "runtime"
     "time"
     
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
     "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
     
     fmt.Println("📦 Optimal Batch Size Finder")
     fmt.Println("=============================")
@@ -299,8 +324,15 @@ func benchmarkBatchSize(batchSize int) (throughput float64, memUsage float64, su
     }
     
     trainerConfig := training.TrainerConfig{
-        OptimizerType: cgo_bridge.Adam,
+        BatchSize:     batchSize,
         LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
     }
     
     trainer, err := training.NewModelTrainer(model, trainerConfig)
@@ -308,6 +340,12 @@ func benchmarkBatchSize(batchSize int) (throughput float64, memUsage float64, su
         return 0, 0, false
     }
     defer trainer.Cleanup()
+    
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        return 0, 0, false
+    }
     
     // Measure memory usage
     var memAfter runtime.MemStats
@@ -319,10 +357,15 @@ func benchmarkBatchSize(batchSize int) (throughput float64, memUsage float64, su
     labels := make([]int32, batchSize)
     
     for i := range inputs {
-        inputs[i] = float32(i%100) / 100.0
+        inputs[i] = rand.Float32()
     }
     for i := range labels {
-        labels[i] = int32(i % 10)
+        labels[i] = int32(rand.Intn(10))
+    }
+    
+    labelTensor, err := training.NewInt32Labels(labels, []int{batchSize})
+    if err != nil {
+        return 0, memUsage, false
     }
     
     // Benchmark throughput
@@ -330,7 +373,7 @@ func benchmarkBatchSize(batchSize int) (throughput float64, memUsage float64, su
     startTime := time.Now()
     
     for i := 0; i < numIterations; i++ {
-        _, err := trainer.TrainBatch(inputs, inputShape, labels, []int{batchSize})
+        _, err := trainer.TrainBatchUnified(inputs, inputShape, labelTensor)
         if err != nil {
             return 0, memUsage, false
         }
@@ -362,8 +405,15 @@ func demonstrateOptimalPerformance(batchSize int) {
     }
     
     trainerConfig := training.TrainerConfig{
-        OptimizerType: cgo_bridge.Adam,
+        BatchSize:     batchSize,
         LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
     }
     
     trainer, err := training.NewModelTrainer(model, trainerConfig)
@@ -373,15 +423,28 @@ func demonstrateOptimalPerformance(batchSize int) {
     }
     defer trainer.Cleanup()
     
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        log.Printf("Failed to enable persistent buffers: %v", err)
+        return
+    }
+    
     // Generate data
     inputs := make([]float32, batchSize*784)
     labels := make([]int32, batchSize)
     
     for i := range inputs {
-        inputs[i] = float32(i%100) / 100.0
+        inputs[i] = rand.Float32()
     }
     for i := range labels {
-        labels[i] = int32(i % 10)
+        labels[i] = int32(rand.Intn(10))
+    }
+    
+    labelTensor, err := training.NewInt32Labels(labels, []int{batchSize})
+    if err != nil {
+        log.Printf("Failed to create label tensor: %v", err)
+        return
     }
     
     // Train for several epochs
@@ -390,7 +453,7 @@ func demonstrateOptimalPerformance(batchSize int) {
     for epoch := 1; epoch <= 10; epoch++ {
         epochStart := time.Now()
         
-        result, err := trainer.TrainBatch(inputs, inputShape, labels, []int{batchSize})
+        result, err := trainer.TrainBatchUnified(inputs, inputShape, labelTensor)
         if err != nil {
             log.Printf("Training failed at epoch %d: %v", epoch, err)
             continue
@@ -414,23 +477,15 @@ package main
 
 import (
     "fmt"
-    "log"
+    "math/rand"
     "time"
     
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
     "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
     
     fmt.Println("🏗️ Architecture Performance Comparison")
     fmt.Println("======================================")
@@ -520,8 +575,15 @@ func benchmarkArchitecture(buildFunc func([]int) (*layers.ModelSpec, error), bat
     }
     
     trainerConfig := training.TrainerConfig{
-        OptimizerType: cgo_bridge.Adam,
+        BatchSize:     batchSize,
         LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
     }
     
     trainer, err := training.NewModelTrainer(model, trainerConfig)
@@ -530,20 +592,34 @@ func benchmarkArchitecture(buildFunc func([]int) (*layers.ModelSpec, error), bat
     }
     defer trainer.Cleanup()
     
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        return 0, 0
+    }
+    
     // Generate test data
     inputs := make([]float32, batchSize*784)
     labels := make([]int32, batchSize)
     
     for i := range inputs {
-        inputs[i] = float32(i%100) / 100.0
+        inputs[i] = rand.Float32()
     }
     for i := range labels {
-        labels[i] = int32(i % 10)
+        labels[i] = int32(rand.Intn(10))
+    }
+    
+    labelTensor, err := training.NewInt32Labels(labels, []int{batchSize})
+    if err != nil {
+        return 0, 0
     }
     
     // Warmup
     for i := 0; i < 5; i++ {
-        trainer.TrainBatch(inputs, inputShape, labels, []int{batchSize})
+        _, err := trainer.TrainBatchUnified(inputs, inputShape, labelTensor)
+        if err != nil {
+            return 0, 0
+        }
     }
     
     // Benchmark
@@ -551,7 +627,7 @@ func benchmarkArchitecture(buildFunc func([]int) (*layers.ModelSpec, error), bat
     startTime := time.Now()
     
     for i := 0; i < numIterations; i++ {
-        _, err := trainer.TrainBatch(inputs, inputShape, labels, []int{batchSize})
+        _, err := trainer.TrainBatchUnified(inputs, inputShape, labelTensor)
         if err != nil {
             return 0, 0
         }
@@ -576,23 +652,15 @@ package main
 
 import (
     "fmt"
-    "log"
+    "math/rand"
     "time"
     
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
     "github.com/tsawler/go-metal/training"
 )
 
 func main() {
-    device, err := cgo_bridge.CreateMetalDevice()
-    if err != nil {
-        log.Fatalf("Failed to create Metal device: %v", err)
-    }
-    defer cgo_bridge.DestroyMetalDevice(device)
-    
-    memory.InitializeGlobalMemoryManager(device)
     
     fmt.Println("⚡ Optimizer Performance Comparison")
     fmt.Println("===================================")
@@ -648,8 +716,15 @@ func benchmarkOptimizer(optimizerType cgo_bridge.OptimizerType, lr float32, inpu
     }
     
     trainerConfig := training.TrainerConfig{
-        OptimizerType: optimizerType,
+        BatchSize:     inputShape[0],
         LearningRate:  lr,
+        OptimizerType: optimizerType,
+        EngineType:    training.Dynamic,
+        LossFunction:  training.SparseCrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
     }
     
     trainer, err := training.NewModelTrainer(model, trainerConfig)
@@ -658,6 +733,12 @@ func benchmarkOptimizer(optimizerType cgo_bridge.OptimizerType, lr float32, inpu
     }
     defer trainer.Cleanup()
     
+    // Enable persistent buffers
+    err = trainer.EnablePersistentBuffers(inputShape)
+    if err != nil {
+        return 0, 0, false
+    }
+    
     batchSize := inputShape[0]
     
     // Generate test data
@@ -665,10 +746,15 @@ func benchmarkOptimizer(optimizerType cgo_bridge.OptimizerType, lr float32, inpu
     labels := make([]int32, batchSize)
     
     for i := range inputs {
-        inputs[i] = float32(i%100) / 100.0
+        inputs[i] = rand.Float32()
     }
     for i := range labels {
-        labels[i] = int32(i % 10)
+        labels[i] = int32(rand.Intn(10))
+    }
+    
+    labelTensor, err := training.NewInt32Labels(labels, []int{batchSize})
+    if err != nil {
+        return 0, 0, false
     }
     
     // Train and measure performance
@@ -679,15 +765,15 @@ func benchmarkOptimizer(optimizerType cgo_bridge.OptimizerType, lr float32, inpu
     initialLoss := float64(0)
     
     for i := 0; i < numIterations; i++ {
-        result, err := trainer.TrainBatch(inputs, inputShape, labels, []int{batchSize})
+        result, err := trainer.TrainBatchUnified(inputs, inputShape, labelTensor)
         if err != nil {
             return 0, 0, false
         }
         
         if i == 0 {
-            initialLoss = result.Loss
+            initialLoss = float64(result.Loss)
         }
-        finalLoss = result.Loss
+        finalLoss = float64(result.Loss)
     }
     
     elapsed := time.Since(startTime)
