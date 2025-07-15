@@ -605,7 +605,7 @@ func main() {
     
     // Create model and trainer
     inputShape := []int{32, 3, 32, 32}
-    model, trainer := createModelAndTrainer(inputShape)
+    _, trainer := createModelAndTrainer(inputShape)
     defer trainer.Cleanup()
     
     // Enable persistent buffers
@@ -804,7 +804,7 @@ func main() {
 
 ### 2. Tensor Operations with Memory Management
 
-Efficient tensor operations that respect memory management:
+Efficient tensor operations demonstrating GPU-to-GPU memory transfers and different data types:
 
 ```go
 package main
@@ -887,15 +887,44 @@ func main() {
     fmt.Printf("Original data: %v\n", data[:8])
     fmt.Printf("Copied data: %v\n", copiedData[:8])
     
-    // Type conversion
-    int32Tensor, err := srcTensor.ConvertTo(memory.Int32)
+    // Verify the copy was successful
+    dataMatches := true
+    for i := 0; i < len(data); i++ {
+        if data[i] != copiedData[i] {
+            dataMatches = false
+            break
+        }
+    }
+    
+    if dataMatches {
+        fmt.Printf("✅ GPU-to-GPU copy successful!\n")
+    } else {
+        fmt.Printf("❌ GPU-to-GPU copy failed!\n")
+    }
+    
+    // Show tensor information
+    fmt.Printf("Source tensor info: %s\n", srcTensor.String())
+    fmt.Printf("Destination tensor info: %s\n", dstTensor.String())
+    
+    // Create an Int32 tensor separately to show different data types
+    int32Data := make([]int32, 16)
+    for i := range int32Data {
+        int32Data[i] = int32(i)
+    }
+    
+    int32Tensor, err := memory.NewTensor([]int{4, 4}, memory.Int32, memory.GPU)
     if err != nil {
-        log.Fatalf("Failed to convert tensor: %v", err)
+        log.Fatalf("Failed to create Int32 tensor: %v", err)
     }
     defer int32Tensor.Release()
     
-    fmt.Printf("Converted tensor type: %v\n", int32Tensor.DType())
-    fmt.Printf("Converted tensor shape: %v\n", int32Tensor.Shape())
+    err = int32Tensor.CopyInt32Data(int32Data)
+    if err != nil {
+        log.Fatalf("Failed to copy Int32 data: %v", err)
+    }
+    
+    fmt.Printf("Int32 tensor type: %v\n", int32Tensor.DType())
+    fmt.Printf("Int32 tensor shape: %v\n", int32Tensor.Shape())
 }
 ```
 
