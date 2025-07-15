@@ -254,7 +254,6 @@ package main
 import (
     "fmt"
     "log"
-    "math/rand"
     
     "github.com/tsawler/go-metal/cgo_bridge"
     "github.com/tsawler/go-metal/layers"

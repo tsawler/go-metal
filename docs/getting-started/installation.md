@@ -73,13 +73,15 @@ import (
     "log"
     
     "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/memory"
+    "github.com/tsawler/go-metal/training"
+    "github.com/tsawler/go-metal/cgo_bridge"
 )
 
 func main() {
     fmt.Println("🧪 Testing go-metal installation...")
     
-    // Test basic functionality
+    // Test 1: Basic model creation
+    fmt.Println("\n1. Testing model creation...")
     inputShape := []int{1, 4}
     builder := layers.NewModelBuilder(inputShape)
     model, err := builder.
@@ -87,15 +89,47 @@ func main() {
         Compile()
     
     if err != nil {
-        log.Fatalf("❌ Installation test failed: %v", err)
+        log.Fatalf("❌ Model creation failed: %v", err)
     }
     
-    fmt.Printf("✅ Go-Metal installed successfully!\n")
-    fmt.Printf("   - Model created with %d layers\n", len(model.Layers))
+    fmt.Printf("✅ Model created successfully!\n")
+    fmt.Printf("   - Layers: %d\n", len(model.Layers))
     fmt.Printf("   - Input shape: %v\n", inputShape)
-    fmt.Printf("   - Metal device available: %v\n", memory.GetDevice() != nil)
+    fmt.Printf("   - Parameters: %d\n", model.TotalParameters)
     
-    fmt.Println("\n🚀 Ready to build ML models with go-metal!")
+    // Test 2: Training configuration
+    fmt.Println("\n2. Testing training configuration...")
+    config := training.TrainerConfig{
+        BatchSize:     1,
+        LearningRate:  0.01,
+        OptimizerType: cgo_bridge.Adam,
+        LossFunction:  training.CrossEntropy,
+        ProblemType:   training.Classification,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+    }
+    
+    fmt.Printf("✅ Training configuration created!\n")
+    fmt.Printf("   - Optimizer: Adam\n")
+    fmt.Printf("   - Learning rate: %.4f\n", config.LearningRate)
+    fmt.Printf("   - Batch size: %d\n", config.BatchSize)
+    
+    // Test 3: Trainer creation (this will initialize Metal device)
+    fmt.Println("\n3. Testing trainer creation...")
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        log.Fatalf("❌ Trainer creation failed: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    fmt.Printf("✅ Trainer created successfully!\n")
+    fmt.Printf("   - Metal device initialized\n")
+    fmt.Printf("   - GPU-resident training ready\n")
+    
+    fmt.Println("\n🎉 Go-Metal installation test PASSED!")
+    fmt.Println("✅ All components working correctly")
+    fmt.Println("🚀 Ready to build ML models with go-metal!")
 }
 EOF
 
@@ -106,11 +140,33 @@ go run test_installation.go
 Expected output:
 ```
 🧪 Testing go-metal installation...
-✅ Go-Metal installed successfully!
-   - Model created with 1 layers
-   - Input shape: [1 4]
-   - Metal device available: true
 
+1. Testing model creation...
+✅ Model created successfully!
+   - Layers: 1
+   - Input shape: [1 4]
+   - Parameters: 10
+
+2. Testing training configuration...
+✅ Training configuration created!
+   - Optimizer: Adam
+   - Learning rate: 0.0100
+   - Batch size: 1
+
+3. Testing trainer creation...
+🧠 Smart Routing Analysis:
+   - Input: 2D [1 4]
+   - Architecture: Simple (1 layers, 10 params)
+   - Pattern: CNN=false, MLP=true
+   - Selected Engine: Dynamic
+🔧 Creating Dynamic Engine (any architecture support)
+✅ Created engine: isDynamic=true
+✅ Trainer created successfully!
+   - Metal device initialized
+   - GPU-resident training ready
+
+🎉 Go-Metal installation test PASSED!
+✅ All components working correctly
 🚀 Ready to build ML models with go-metal!
 ```
 
