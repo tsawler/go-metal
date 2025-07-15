@@ -6,7 +6,7 @@ Interactive visualization for go-metal models using the integrated sidecar plott
 
 This guide shows how to use the [**go-metal sidecar service**](https://github.com/tsawler/go-metal-sidecar-plots) for interactive visualization of your training progress, model metrics, and data analysis. The sidecar provides professional Plotly-based charts that open automatically in your browser.
 
-The sidecar service is included with go-metal and provides seamless integration for all your visualization needs.
+The sidecar service is in its own [repository](https://github.com/tsawler/go-metal-sidecar-plots).
 
 ## 🚀 Quick Start
 
