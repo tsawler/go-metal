@@ -360,6 +360,9 @@ func main() {
         BatchSize: 8,
         LearningRate: 0.001,
         OptimizerType: cgo_bridge.Adam,
+        Beta1: 0.9,
+        Beta2: 0.999,
+        Epsilon: 1e-8,
     }
     
     trainer, err := training.NewModelTrainer(model, config)
@@ -415,17 +418,26 @@ func main() {
         BatchSize: 8,
         LearningRate: 0.001,
         OptimizerType: cgo_bridge.Adam,
+        Beta1: 0.9,
+        Beta2: 0.999,
+        Epsilon: 1e-8,
         EngineType: training.Auto, // Auto-selects best engine
     }
     
     // The trainer handles all GPU memory allocation and pooling internally
-    trainer, _ := training.NewModelTrainer(model, config)
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        fmt.Printf("Error creating trainer: %v\n", err)
+        return
+    }
     
     fmt.Println("Memory management is handled automatically!")
     fmt.Printf("Model uses %d parameters\n", model.TotalParameters)
     
     // Always cleanup when done
-    trainer.Cleanup()
+    if trainer != nil {
+        trainer.Cleanup()
+    }
 }
 ```
 
@@ -456,22 +468,30 @@ func main() {
         BatchSize: 8,
         LearningRate: 0.001,
         OptimizerType: cgo_bridge.Adam,
+        Beta1: 0.9,
+        Beta2: 0.999,
+        Epsilon: 1e-8,
     }
     
     // Async execution is handled automatically by the trainer
-    trainer, _ := training.NewModelTrainer(model, config)
+    trainer, err := training.NewModelTrainer(model, config)
+    if err != nil {
+        fmt.Printf("Error creating trainer: %v\n", err)
+        return
+    }
     
     fmt.Println("Async GPU operations are handled automatically!")
     fmt.Printf("Model ready with %d parameters\n", model.TotalParameters)
     
     // For custom async operations, use the async package
-    // Create a command buffer pool for efficient GPU command submission
-    pool := async.NewCommandBufferPool(nil, 10)  // device and maxBuffers
-    fmt.Printf("Command buffer pool created with max buffers: %d\n", 10)
+    // Note: Command buffer pool requires a valid Metal command queue
+    // which would be provided by the training engine in real usage
+    fmt.Println("Command buffer pool would be created with a valid Metal command queue")
     
     // Cleanup
-    trainer.Cleanup()
-    _ = pool // Pool would be used for custom operations
+    if trainer != nil {
+        trainer.Cleanup()
+    }
 }
 ```
 
