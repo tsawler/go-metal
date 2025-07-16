@@ -440,6 +440,81 @@ int execute_nadam_step_mpsgraph(
     float weight_decay,
     int step_count
 );
+
+// Dedicated inference engine configuration
+typedef struct {
+    float precision_threshold;    // Float16 conversion threshold
+    int max_batch_size;          // Maximum supported batch size
+    int optimization_level;      // 0=Conservative, 1=Balanced, 2=Aggressive
+    int memory_strategy;         // 0=Minimal, 1=Balanced, 2=PreAllocated
+    int enable_telemetry;        // 0=disabled, 1=enabled
+    int cache_compiled_graphs;   // 0=disabled, 1=enabled
+} inference_config_t;
+
+// Inference result structure
+typedef struct {
+    float* predictions;              // Output predictions (GPU -> CPU copied)
+    int* output_shape;               // Shape of output tensor
+    int output_shape_len;            // Number of dimensions in output shape
+    float confidence_score;          // Maximum confidence/probability
+    int predicted_class;             // Predicted class index (for classification)
+    double inference_time_ms;        // Time taken for this inference
+    size_t memory_used_bytes;        // GPU memory used for this inference
+} inference_result_t;
+
+// Performance telemetry for inference operations
+typedef struct {
+    uint64_t total_inferences;   // Total inference calls
+    double total_time_ms;        // Total inference time in milliseconds
+    double avg_latency_ms;       // Average inference latency
+    double peak_throughput;      // Peak throughput (inferences/second)
+    size_t peak_memory_usage;    // Peak GPU memory usage
+    uint64_t cache_hits;         // Graph compilation cache hits
+    uint64_t cache_misses;       // Graph compilation cache misses
+} inference_telemetry_t;
+
+// Core dedicated inference engine functions
+uintptr_t create_inference_engine_optimized(
+    uintptr_t device,
+    inference_config_t config,
+    layer_spec_c_t* layers,
+    int layer_count,
+    float** parameters,
+    int* parameter_sizes,
+    int parameter_count
+);
+
+// Batch inference with single CGO call
+int execute_inference_batch_optimized(
+    uintptr_t engine,
+    float* input_data,
+    int* input_shape,
+    int input_shape_len,
+    float* output_data,
+    int* output_shape,
+    int* output_shape_len,
+    int batch_size,
+    inference_result_t* results
+);
+
+// Single inference call
+int execute_inference_single_optimized(
+    uintptr_t engine,
+    float* input_data,
+    int* input_shape,
+    int input_shape_len,
+    inference_result_t* result
+);
+
+// Memory and performance management
+int preallocate_inference_buffers(uintptr_t engine, int max_batch_size);
+void get_inference_telemetry(uintptr_t engine, inference_telemetry_t* telemetry);
+void reset_inference_telemetry(uintptr_t engine);
+
+// Resource management
+void retain_inference_engine(uintptr_t engine);
+void release_inference_engine(uintptr_t engine);
+void destroy_inference_engine_optimized(uintptr_t engine);
 */
 import "C"
 import (
@@ -1168,6 +1243,64 @@ type InferenceResult struct {
 	BatchSize   int       // Actual batch size processed
 	OutputShape []int     // Shape of prediction tensor [batch_size, num_classes]
 	Success     bool      // Inference execution status
+}
+
+// Dedicated inference engine types
+
+// OptimizationLevel controls the level of optimizations applied to the inference engine
+type OptimizationLevel int
+
+const (
+	Conservative OptimizationLevel = iota // Safe optimizations only
+	Balanced                              // Standard inference optimizations
+	Aggressive                            // Maximum performance optimizations
+)
+
+// MemoryStrategy controls how the inference engine manages GPU memory
+type MemoryStrategy int
+
+const (
+	Minimal      MemoryStrategy = iota // Minimal memory usage
+	BalancedMem                       // Balanced memory vs performance
+	PreAllocated                      // Pre-allocate buffers for maximum performance
+)
+
+// DedicatedInferenceConfig holds configuration for the dedicated inference engine
+type DedicatedInferenceConfig struct {
+	PrecisionThreshold   float32           // Float16 conversion threshold
+	MaxBatchSize         int               // Maximum supported batch size
+	OptimizationLevel    OptimizationLevel // Optimization aggressiveness
+	MemoryStrategy       MemoryStrategy    // Memory management approach
+	EnableTelemetry      bool              // Enable performance monitoring
+	CacheCompiledGraphs  bool              // Cache compiled MPSGraph executables
+}
+
+// DedicatedInferenceResult contains comprehensive inference results and metadata
+type DedicatedInferenceResult struct {
+	Predictions      []float32 // Output predictions (GPU -> CPU copied)
+	OutputShape      []int     // Shape of output tensor
+	ConfidenceScore  float32   // Maximum confidence/probability
+	PredictedClass   int       // Predicted class index (for classification)
+	InferenceTimeMs  float64   // Time taken for this inference
+	MemoryUsedBytes  uint64    // GPU memory used for this inference
+}
+
+// InferenceTelemetry provides performance metrics for the inference engine
+type InferenceTelemetry struct {
+	TotalInferences  uint64  // Total inference calls
+	TotalTimeMs      float64 // Total inference time in milliseconds
+	AvgLatencyMs     float64 // Average inference latency
+	PeakThroughput   float64 // Peak throughput (inferences/second)
+	PeakMemoryUsage  uint64  // Peak GPU memory usage
+	CacheHits        uint64  // Graph compilation cache hits
+	CacheMisses      uint64  // Graph compilation cache misses
+}
+
+// DedicatedInferenceEngine represents a GPU-resident inference engine optimized for forward pass only
+type DedicatedInferenceEngine struct {
+	engine    unsafe.Pointer           // Pointer to C inference engine
+	config    DedicatedInferenceConfig // Engine configuration
+	isDestroyed bool                   // Track destruction state
 }
 
 // ExecuteInference performs forward-only pass and returns predictions
@@ -2498,4 +2631,281 @@ func WaitForBufferCopyCompletion(commandQueue unsafe.Pointer) error {
 	}
 	
 	return nil
+}
+
+// Dedicated Inference Engine Implementation
+
+// NewDedicatedInferenceEngine creates a new dedicated inference engine optimized for forward pass only
+func NewDedicatedInferenceEngine(
+	device unsafe.Pointer,
+	config DedicatedInferenceConfig,
+	layers []LayerSpecC,
+	parameters [][]float32,
+) (*DedicatedInferenceEngine, error) {
+	if device == nil {
+		return nil, fmt.Errorf("device cannot be nil")
+	}
+	
+	if len(layers) == 0 {
+		return nil, fmt.Errorf("at least one layer must be provided")
+	}
+	
+	// Convert Go config to C config
+	cConfig := C.inference_config_t{
+		precision_threshold:    C.float(config.PrecisionThreshold),
+		max_batch_size:        C.int(config.MaxBatchSize),
+		optimization_level:    C.int(config.OptimizationLevel),
+		memory_strategy:       C.int(config.MemoryStrategy),
+		enable_telemetry:      boolToInt(config.EnableTelemetry),
+		cache_compiled_graphs: boolToInt(config.CacheCompiledGraphs),
+	}
+	
+	// Convert Go layers to C layer specifications
+	cLayers := make([]C.layer_spec_c_t, len(layers))
+	for i, layer := range layers {
+		cLayers[i] = convertLayerSpecToC(layer)
+	}
+	
+	// Prepare parameters for C interface
+	cParameters := make([]*C.float, len(parameters))
+	cParameterSizes := make([]C.int, len(parameters))
+	
+	for i, param := range parameters {
+		if len(param) > 0 {
+			cParameters[i] = (*C.float)(&param[0])
+			cParameterSizes[i] = C.int(len(param))
+		}
+	}
+	
+	// Create dedicated inference engine
+	enginePtr := C.create_inference_engine_optimized(
+		C.uintptr_t(uintptr(device)),
+		cConfig,
+		&cLayers[0],
+		C.int(len(layers)),
+		(**C.float)(&cParameters[0]),
+		&cParameterSizes[0],
+		C.int(len(parameters)),
+	)
+	
+	if enginePtr == 0 {
+		return nil, fmt.Errorf("failed to create dedicated inference engine")
+	}
+	
+	return &DedicatedInferenceEngine{
+		engine:      unsafe.Pointer(uintptr(enginePtr)),
+		config:      config,
+		isDestroyed: false,
+	}, nil
+}
+
+// InferBatch performs batch inference with optimized GPU execution
+func (e *DedicatedInferenceEngine) InferBatch(
+	inputData []float32,
+	inputShape []int,
+	batchSize int,
+) (*DedicatedInferenceResult, error) {
+	if e.isDestroyed {
+		return nil, fmt.Errorf("inference engine has been destroyed")
+	}
+	
+	if len(inputData) == 0 {
+		return nil, fmt.Errorf("input data cannot be empty")
+	}
+	
+	if batchSize <= 0 || batchSize > e.config.MaxBatchSize {
+		return nil, fmt.Errorf("batch size %d must be between 1 and %d", batchSize, e.config.MaxBatchSize)
+	}
+	
+	// Prepare input shape for C interface
+	cInputShape := make([]C.int, len(inputShape))
+	for i, dim := range inputShape {
+		cInputShape[i] = C.int(dim)
+	}
+	
+	// Allocate output buffers
+	maxOutputSize := batchSize * 1000 // Reasonable default, will be adjusted by C function
+	outputData := make([]float32, maxOutputSize)
+	outputShape := make([]C.int, 4) // Max 4 dimensions
+	outputShapeLen := C.int(0)
+	
+	// Prepare result structure for C interface
+	var cResult C.inference_result_t
+	
+	// Execute batch inference with single CGO call
+	result := C.execute_inference_batch_optimized(
+		C.uintptr_t(uintptr(e.engine)),
+		(*C.float)(&inputData[0]),
+		&cInputShape[0],
+		C.int(len(inputShape)),
+		(*C.float)(&outputData[0]),
+		&outputShape[0],
+		&outputShapeLen,
+		C.int(batchSize),
+		&cResult,
+	)
+	
+	if result != 0 {
+		return nil, fmt.Errorf("batch inference failed with error code: %d", result)
+	}
+	
+	// Convert C result to Go result
+	goOutputShape := make([]int, int(outputShapeLen))
+	for i := 0; i < int(outputShapeLen); i++ {
+		goOutputShape[i] = int(outputShape[i])
+	}
+	
+	// Calculate actual output size
+	actualOutputSize := 1
+	for _, dim := range goOutputShape {
+		actualOutputSize *= dim
+	}
+	
+	return &DedicatedInferenceResult{
+		Predictions:     outputData[:actualOutputSize],
+		OutputShape:     goOutputShape,
+		ConfidenceScore: float32(cResult.confidence_score),
+		PredictedClass:  int(cResult.predicted_class),
+		InferenceTimeMs: float64(cResult.inference_time_ms),
+		MemoryUsedBytes: uint64(cResult.memory_used_bytes),
+	}, nil
+}
+
+// InferSingle performs single sample inference
+func (e *DedicatedInferenceEngine) InferSingle(
+	inputData []float32,
+	inputShape []int,
+) (*DedicatedInferenceResult, error) {
+	return e.InferBatch(inputData, inputShape, 1)
+}
+
+// PreallocateBuffers pre-allocates GPU buffers for optimal performance
+func (e *DedicatedInferenceEngine) PreallocateBuffers(maxBatchSize int) error {
+	if e.isDestroyed {
+		return fmt.Errorf("inference engine has been destroyed")
+	}
+	
+	result := C.preallocate_inference_buffers(
+		C.uintptr_t(uintptr(e.engine)),
+		C.int(maxBatchSize),
+	)
+	
+	if result != 0 {
+		return fmt.Errorf("buffer preallocation failed with error code: %d", result)
+	}
+	
+	return nil
+}
+
+// GetTelemetry returns performance telemetry data
+func (e *DedicatedInferenceEngine) GetTelemetry() (*InferenceTelemetry, error) {
+	if e.isDestroyed {
+		return nil, fmt.Errorf("inference engine has been destroyed")
+	}
+	
+	var cTelemetry C.inference_telemetry_t
+	C.get_inference_telemetry(
+		C.uintptr_t(uintptr(e.engine)),
+		&cTelemetry,
+	)
+	
+	return &InferenceTelemetry{
+		TotalInferences: uint64(cTelemetry.total_inferences),
+		TotalTimeMs:     float64(cTelemetry.total_time_ms),
+		AvgLatencyMs:    float64(cTelemetry.avg_latency_ms),
+		PeakThroughput:  float64(cTelemetry.peak_throughput),
+		PeakMemoryUsage: uint64(cTelemetry.peak_memory_usage),
+		CacheHits:       uint64(cTelemetry.cache_hits),
+		CacheMisses:     uint64(cTelemetry.cache_misses),
+	}, nil
+}
+
+// ResetTelemetry clears all telemetry counters
+func (e *DedicatedInferenceEngine) ResetTelemetry() error {
+	if e.isDestroyed {
+		return fmt.Errorf("inference engine has been destroyed")
+	}
+	
+	C.reset_inference_telemetry(C.uintptr_t(uintptr(e.engine)))
+	return nil
+}
+
+// Destroy properly cleans up the inference engine resources
+func (e *DedicatedInferenceEngine) Destroy() error {
+	if e.isDestroyed {
+		return nil // Already destroyed
+	}
+	
+	C.destroy_inference_engine_optimized(C.uintptr_t(uintptr(e.engine)))
+	e.isDestroyed = true
+	e.engine = nil
+	
+	return nil
+}
+
+// Helper function to convert Go LayerSpecC to C layer_spec_c_t
+func convertLayerSpecToC(layer LayerSpecC) C.layer_spec_c_t {
+	var cLayer C.layer_spec_c_t
+	
+	// Basic layer information
+	cLayer.layer_type = C.int(layer.LayerType)
+	
+	// Copy layer name (truncate if necessary to fit buffer)
+	nameBytes := layer.Name[:]
+	nameLen := len(nameBytes)
+	if nameLen >= 64 {
+		nameLen = 63
+	}
+	copy((*[64]C.char)(unsafe.Pointer(&cLayer.name[0]))[:nameLen], (*[64]C.char)(unsafe.Pointer(&nameBytes[0]))[:nameLen])
+	
+	// Input shape
+	for i := 0; i < len(layer.InputShape) && i < 4; i++ {
+		cLayer.input_shape[i] = C.int(layer.InputShape[i])
+	}
+	cLayer.input_shape_len = C.int(len(layer.InputShape))
+	
+	// Output shape
+	for i := 0; i < len(layer.OutputShape) && i < 4; i++ {
+		cLayer.output_shape[i] = C.int(layer.OutputShape[i])
+	}
+	cLayer.output_shape_len = C.int(len(layer.OutputShape))
+	
+	// Integer parameters
+	for i := 0; i < len(layer.ParamInt) && i < 8; i++ {
+		cLayer.param_int[i] = C.int(layer.ParamInt[i])
+	}
+	cLayer.param_int_count = C.int(len(layer.ParamInt))
+	
+	// Float parameters
+	for i := 0; i < len(layer.ParamFloat) && i < 8; i++ {
+		cLayer.param_float[i] = C.float(layer.ParamFloat[i])
+	}
+	cLayer.param_float_count = C.int(len(layer.ParamFloat))
+	
+	// Running statistics (for BatchNorm layers)
+	if len(layer.RunningMean) > 0 {
+		cLayer.running_mean = (*C.float)(&layer.RunningMean[0])
+		cLayer.running_stats_size = C.int(len(layer.RunningMean))
+		cLayer.has_running_stats = 1
+	} else {
+		cLayer.running_mean = nil
+		cLayer.running_stats_size = 0
+		cLayer.has_running_stats = 0
+	}
+	
+	if len(layer.RunningVar) > 0 {
+		cLayer.running_var = (*C.float)(&layer.RunningVar[0])
+	} else {
+		cLayer.running_var = nil
+	}
+	
+	return cLayer
+}
+
+// Helper function to convert bool to int for C interface
+func boolToInt(b bool) C.int {
+	if b {
+		return 1
+	}
+	return 0
 }
