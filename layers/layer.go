@@ -230,6 +230,7 @@ type ModelBuilder struct {
 	layers     []LayerSpec
 	inputShape []int
 	compiled   bool
+	err        error
 }
 
 // NewModelBuilder creates a new model builder
@@ -325,6 +326,12 @@ func (mb *ModelBuilder) AddDropout(rate float32, name string) *ModelBuilder {
 // affine: whether to use learnable scale and shift parameters (default: true)
 // track_running_stats: whether to track running statistics during training (default: true)
 func (mb *ModelBuilder) AddBatchNorm(numFeatures int, eps float32, momentum float32, affine bool, name string) *ModelBuilder {
+	// Validate numFeatures
+	if numFeatures <= 0 {
+		mb.err = fmt.Errorf("BatchNorm num_features must be positive, got: %d", numFeatures)
+		return mb
+	}
+	
 	layer := LayerSpec{
 		Type: BatchNorm,
 		Name: name,
@@ -401,6 +408,11 @@ func (mb *ModelBuilder) AddSwish(name string) *ModelBuilder {
 
 // Compile compiles the model and computes shapes and parameter counts
 func (mb *ModelBuilder) Compile() (*ModelSpec, error) {
+	// Check for any errors that occurred during model building
+	if mb.err != nil {
+		return nil, mb.err
+	}
+	
 	if len(mb.layers) == 0 {
 		return nil, fmt.Errorf("cannot compile empty model")
 	}

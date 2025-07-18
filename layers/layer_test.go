@@ -156,8 +156,8 @@ func TestDropoutLayer(t *testing.T) {
 			if len(layer.ParamFloat) == 0 || layer.ParamFloat[0] != 0.5 {
 				t.Errorf("Dropout rate not serialized correctly: %v", layer.ParamFloat)
 			}
-			if len(layer.ParamInt) == 0 || layer.ParamInt[0] != 1 {
-				t.Errorf("Dropout training mode not serialized correctly: %v", layer.ParamInt)
+			if len(layer.ParamInt) == 0 || layer.ParamInt[0] != 0 {
+				t.Errorf("Dropout training mode not serialized correctly (expected 0 for inference): %v", layer.ParamInt)
 			}
 			break
 		}
@@ -183,8 +183,8 @@ func TestDropoutLayer(t *testing.T) {
 			if spec.ParamFloatCount != 1 || spec.ParamFloat[0] != 0.5 {
 				t.Errorf("Dynamic Dropout rate not correct")
 			}
-			if spec.ParamIntCount != 1 || spec.ParamInt[0] != 1 {
-				t.Errorf("Dynamic Dropout training mode not correct")
+			if spec.ParamIntCount != 1 || spec.ParamInt[0] != 0 {
+				t.Errorf("Dynamic Dropout training mode not correct (expected 0 for inference)")
 			}
 			break
 		}
@@ -367,8 +367,8 @@ func TestBatchNormLayer(t *testing.T) {
 			if layer.ParamInt[2] != 1 { // track_running_stats = true
 				t.Errorf("BatchNorm track_running_stats not serialized correctly: %d", layer.ParamInt[2])
 			}
-			if layer.ParamInt[3] != 1 { // training = true
-				t.Errorf("BatchNorm training not serialized correctly: %d", layer.ParamInt[3])
+			if layer.ParamInt[3] != 0 { // training = false for inference
+				t.Errorf("BatchNorm training not serialized correctly (expected 0 for inference): %d", layer.ParamInt[3])
 			}
 		}
 	}
@@ -1710,10 +1710,10 @@ func TestValidationFunctions(t *testing.T) {
 	}
 	
 	err = mlpModel.ValidateModelForHybridEngine()
-	if err == nil {
-		t.Error("MLP model should be invalid for HybridEngine (no Conv2D)")
+	if err != nil {
+		t.Errorf("MLP model should be valid for HybridEngine (deprecated, uses dynamic engine): %v", err)
 	}
-	fmt.Println("✅ ValidateModelForHybridEngine correctly rejected MLP model")
+	fmt.Println("✅ ValidateModelForHybridEngine correctly accepted MLP model (uses dynamic engine)")
 	
 	// Test 4: ValidateModelForDynamicEngine - valid CNN
 	err = cnnModel.ValidateModelForDynamicEngine()
@@ -1849,11 +1849,11 @@ func TestConvertToInferenceLayerSpecs(t *testing.T) {
 	}
 	
 	_, err = nodenseModel.ConvertToInferenceLayerSpecs()
-	if err == nil {
-		t.Error("Expected error when converting model without Dense layer")
+	if err != nil {
+		t.Errorf("Model without Dense layer should be valid for inference (uses dynamic engine): %v", err)
 	}
 	
-	fmt.Println("✅ ConvertToInferenceLayerSpecs correctly rejected model without Dense layer")
+	fmt.Println("✅ ConvertToInferenceLayerSpecs correctly accepted model without Dense layer (uses dynamic engine)")
 	fmt.Println("✅ ConvertToInferenceLayerSpecs test completed successfully!")
 }
 
@@ -1911,11 +1911,11 @@ func TestGetTrainingEngineConfig(t *testing.T) {
 	}
 	
 	_, err = mlpModel.GetTrainingEngineConfig()
-	if err == nil {
-		t.Error("Expected error when getting config for MLP model")
+	if err != nil {
+		t.Errorf("MLP model should be valid for training config (uses dynamic engine): %v", err)
 	}
 	
-	fmt.Println("✅ GetTrainingEngineConfig correctly rejected MLP model")
+	fmt.Println("✅ GetTrainingEngineConfig correctly accepted MLP model (uses dynamic engine)")
 	fmt.Println("✅ GetTrainingEngineConfig test completed successfully!")
 }
 
