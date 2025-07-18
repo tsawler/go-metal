@@ -595,6 +595,10 @@ type InferenceConfig struct {
 	LayerSpecs      []LayerSpecC     // Layer specifications
 	LayerSpecsLen   int32           // Number of layer specs
 	
+	// Problem type and loss function (CRITICAL FIX for regression inference)
+	ProblemType     int              // 0 = Classification, 1 = Regression
+	LossFunction    int              // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = MSE, 3 = MAE, 4 = Huber
+	
 	// Performance settings
 	UseCommandPooling bool           // Enable command buffer pooling
 	OptimizeForSingleBatch bool     // Optimize for batch size 1
@@ -751,6 +755,10 @@ func CreateInferenceEngine(device unsafe.Pointer, config InferenceConfig) (unsaf
 		Momentum:      0.0,   // Not used for inference
 		Centered:      false, // Not used for inference
 		OptimizerType: SGD,   // Not used for inference
+		
+		// CRITICAL FIX: Set problem type and loss function for correct inference behavior
+		ProblemType:   config.ProblemType,  // Pass through the problem type (0=Classification, 1=Regression)
+		LossFunction:  config.LossFunction, // Pass through the loss function (0=CrossEntropy, 1=SparseCrossEntropy, 2=MSE, etc.)
 	}
 	
 	if config.UseDynamicEngine {
