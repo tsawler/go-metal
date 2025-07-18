@@ -32,17 +32,15 @@ func TestLBFGSConfig_Default(t *testing.T) {
 }
 
 func TestLBFGSOptimizer_Creation(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping L-BFGS creation test - requires stable Metal buffer allocation")
-	
-	// Initialize Metal device for testing
+	// Initialize Metal device
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
-		t.Skipf("Metal device not available: %v", err)
+		t.Skipf("Metal device not available for L-BFGS creation test: %v", err)
 	}
 	defer cgo_bridge.DestroyMetalDevice(device)
-	
+
 	memory.InitializeGlobalMemoryManager(device)
+	memoryManager := memory.GetGlobalMemoryManager()
 	
 	config := DefaultLBFGSConfig()
 	config.HistorySize = 5 // Small history for testing
@@ -56,7 +54,7 @@ func TestLBFGSOptimizer_Creation(t *testing.T) {
 	optimizer, err := NewLBFGSOptimizer(
 		config,
 		paramShapes,
-		memory.GetGlobalMemoryManager(),
+		memoryManager,
 		device,
 	)
 	
@@ -131,16 +129,15 @@ func TestLBFGSOptimizer_InvalidConfig(t *testing.T) {
 }
 
 func TestLBFGSOptimizer_InvalidInputs(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping L-BFGS invalid inputs test - requires stable Metal buffer allocation")
-	
+	// Initialize Metal device
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
-		t.Skipf("Metal device not available: %v", err)
+		t.Skipf("Metal device not available for L-BFGS invalid inputs test: %v", err)
 	}
 	defer cgo_bridge.DestroyMetalDevice(device)
-	
+
 	memory.InitializeGlobalMemoryManager(device)
+	memoryManager := memory.GetGlobalMemoryManager()
 	
 	config := DefaultLBFGSConfig()
 	paramShapes := [][]int{{10, 5}}
@@ -152,13 +149,13 @@ func TestLBFGSOptimizer_InvalidInputs(t *testing.T) {
 	}
 	
 	// Test nil device
-	_, err = NewLBFGSOptimizer(config, paramShapes, memory.GetGlobalMemoryManager(), nil)
+	_, err = NewLBFGSOptimizer(config, paramShapes, memoryManager, nil)
 	if err == nil {
 		t.Error("Expected error for nil device, got nil")
 	}
 	
 	// Test empty parameter shapes
-	_, err = NewLBFGSOptimizer(config, [][]int{}, memory.GetGlobalMemoryManager(), device)
+	_, err = NewLBFGSOptimizer(config, [][]int{}, memoryManager, device)
 	if err == nil {
 		t.Error("Expected error for empty parameter shapes, got nil")
 	}

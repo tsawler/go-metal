@@ -3,12 +3,125 @@ package optimizer
 import (
 	"testing"
 	"unsafe"
+
+	"github.com/tsawler/go-metal/cgo_bridge"
+	"github.com/tsawler/go-metal/memory"
 )
 
 // TestAdamOptimizer tests the Adam optimizer implementation
 func TestAdamOptimizer(t *testing.T) {
-	// Skip this test for now as it requires Metal device integration
-	t.Skip("Skipping Adam optimizer test - requires Metal CGO integration")
+	// Initialize Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Metal device not available for Adam optimizer test: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+
+	memory.InitializeGlobalMemoryManager(device)
+	memoryManager := memory.GetGlobalMemoryManager()
+
+	// Test configuration
+	config := AdamConfig{
+		LearningRate: 0.001,
+		Beta1:        0.9,
+		Beta2:        0.999,
+		Epsilon:      1e-8,
+		WeightDecay:  0.001,
+	}
+
+	// Test weight shapes
+	weightShapes := [][]int{
+		{10, 5},
+		{5},
+		{5, 3},
+		{3},
+	}
+
+	// Create optimizer
+	optimizer, err := NewAdamOptimizer(config, weightShapes, memoryManager, device)
+	if err != nil {
+		t.Fatalf("Failed to create Adam optimizer: %v", err)
+	}
+	defer optimizer.Cleanup()
+
+	// Verify initial state
+	if optimizer.GetStep() != 0 {
+		t.Errorf("Expected initial step count to be 0, got %d", optimizer.GetStep())
+	}
+
+	// Create weight buffers
+	weightBuffers := make([]unsafe.Pointer, len(weightShapes))
+	for i, shape := range weightShapes {
+		size := calculateTensorSize(shape) * 4 // 4 bytes per float32
+		buffer := memoryManager.AllocateBuffer(size)
+		if buffer == nil {
+			t.Fatalf("Failed to allocate weight buffer %d", i)
+		}
+		defer memoryManager.ReleaseBuffer(buffer)
+		weightBuffers[i] = buffer
+	}
+
+	// Set weight buffers
+	err = optimizer.SetWeightBuffers(weightBuffers)
+	if err != nil {
+		t.Fatalf("Failed to set weight buffers: %v", err)
+	}
+
+	// Create gradient buffers
+	gradientBuffers := make([]unsafe.Pointer, len(weightShapes))
+	for i, shape := range weightShapes {
+		size := calculateTensorSize(shape) * 4
+		buffer := memoryManager.AllocateBuffer(size)
+		if buffer == nil {
+			t.Fatalf("Failed to allocate gradient buffer %d", i)
+		}
+		defer memoryManager.ReleaseBuffer(buffer)
+		gradientBuffers[i] = buffer
+	}
+
+	// Test optimization steps
+	for step := 1; step <= 3; step++ {
+		err = optimizer.Step(gradientBuffers)
+		if err != nil {
+			t.Fatalf("Adam step %d failed: %v", step, err)
+		}
+
+		if optimizer.GetStep() != uint64(step) {
+			t.Errorf("Expected step count to be %d, got %d", step, optimizer.GetStep())
+		}
+	}
+
+	// Test stats
+	stats := optimizer.GetStats()
+	if stats.StepCount != 3 {
+		t.Errorf("Expected step count in stats to be 3, got %d", stats.StepCount)
+	}
+	if stats.LearningRate != config.LearningRate {
+		t.Errorf("Expected learning rate in stats to be %f, got %f", config.LearningRate, stats.LearningRate)
+	}
+
+	// Test learning rate update
+	newLR := float32(0.0005)
+	optimizer.UpdateLearningRate(newLR)
+	stats = optimizer.GetStats()
+	if stats.LearningRate != newLR {
+		t.Errorf("Expected updated learning rate to be %f, got %f", newLR, stats.LearningRate)
+	}
+
+	// Test state save/restore
+	state, err := optimizer.GetState()
+	if err != nil {
+		t.Fatalf("Failed to get optimizer state: %v", err)
+	}
+	if state.Type != "Adam" {
+		t.Errorf("Expected state type 'Adam', got '%s'", state.Type)
+	}
+
+	// Test loading state
+	err = optimizer.LoadState(state)
+	if err != nil {
+		t.Fatalf("Failed to load optimizer state: %v", err)
+	}
 }
 
 // TestAdamConfig tests the Adam configuration

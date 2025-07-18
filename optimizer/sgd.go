@@ -73,6 +73,20 @@ func NewSGDOptimizer(
 		return nil, fmt.Errorf("no weight shapes provided")
 	}
 
+	// Validate configuration parameters
+	if config.LearningRate < 0 {
+		return nil, fmt.Errorf("learning rate cannot be negative: %f", config.LearningRate)
+	}
+	if config.Momentum < 0 {
+		return nil, fmt.Errorf("momentum cannot be negative: %f", config.Momentum)
+	}
+	if config.Momentum > 1.0 {
+		return nil, fmt.Errorf("momentum cannot be greater than 1.0: %f", config.Momentum)
+	}
+	if config.WeightDecay < 0 {
+		return nil, fmt.Errorf("weight decay cannot be negative: %f", config.WeightDecay)
+	}
+
 	numWeights := len(weightShapes)
 
 	sgd := &SGDOptimizerState{
@@ -166,6 +180,11 @@ func (sgd *SGDOptimizerState) UpdateLearningRate(newLR float32) {
 func (sgd *SGDOptimizerState) SetCommandPool(commandPool unsafe.Pointer) {
 	sgd.commandPool = commandPool
 	sgd.usePooling = (commandPool != nil)
+}
+
+// GetStep returns the current optimization step count
+func (sgd *SGDOptimizerState) GetStep() uint64 {
+	return sgd.StepCount
 }
 
 // GetStepCount returns the current step count

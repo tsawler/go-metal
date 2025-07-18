@@ -4,6 +4,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -50,7 +51,15 @@ func TestDefaultRMSPropConfig(t *testing.T) {
 }
 
 func TestNewRMSPropOptimizer(t *testing.T) {
-	t.Skip("Skipping RMSProp optimizer test - requires Metal CGO integration")
+	// Initialize Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Metal device not available for RMSProp optimizer test: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+
+	memory.InitializeGlobalMemoryManager(device)
+	memoryManager := memory.GetGlobalMemoryManager()
 	
 	// Test configurations
 	config := DefaultRMSPropConfig()
@@ -61,6 +70,18 @@ func TestNewRMSPropOptimizer(t *testing.T) {
 		{10},        // Bias vector
 		{64, 100},   // Another weight matrix
 		{64},        // Another bias vector
+	}
+	
+	// Test basic creation
+	optimizer, err := NewRMSPropOptimizer(config, weightShapes, memoryManager, device)
+	if err != nil {
+		t.Fatalf("Failed to create RMSProp optimizer: %v", err)
+	}
+	defer optimizer.Cleanup()
+	
+	// Test initial state
+	if optimizer.GetStep() != 0 {
+		t.Errorf("Expected initial step count 0, got %d", optimizer.GetStep())
 	}
 	
 	t.Run("NilMemoryManager", func(t *testing.T) {

@@ -10,13 +10,10 @@ import (
 )
 
 func TestAdaGradOptimizer(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping AdaGrad optimizer test - requires stable Metal buffer allocation")
-	
-	// Initialize device and memory manager
+	// Initialize Metal device
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
-		t.Fatalf("Failed to create Metal device: %v", err)
+		t.Skipf("Metal device not available for AdaGrad optimizer test: %v", err)
 	}
 	defer cgo_bridge.DestroyMetalDevice(device)
 
@@ -115,17 +112,49 @@ func TestAdaGradOptimizer(t *testing.T) {
 }
 
 func TestAdaGradOptimizerWithCommandPool(t *testing.T) {
-	// Skip command pool test for now since pooling is not yet implemented
-	t.Skip("Command buffer pooling not yet implemented for AdaGrad")
+	// Initialize Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Metal device not available for AdaGrad command pool test: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+
+	memory.InitializeGlobalMemoryManager(device)
+	memoryManager := memory.GetGlobalMemoryManager()
+
+	config := DefaultAdaGradConfig()
+	weightShapes := [][]int{{10, 5}, {5}}
+
+	optimizer, err := NewAdaGradOptimizer(config, weightShapes, memoryManager, device)
+	if err != nil {
+		t.Fatalf("Failed to create AdaGrad optimizer: %v", err)
+	}
+	defer optimizer.Cleanup()
+
+	// Test setting command pool
+	mockPool := unsafe.Pointer(uintptr(0x2000))
+	optimizer.SetCommandPool(mockPool)
+	
+	if optimizer.commandPool != mockPool {
+		t.Errorf("Expected commandPool %p, got %p", mockPool, optimizer.commandPool)
+	}
+	
+	if !optimizer.usePooling {
+		t.Error("Expected usePooling to be true")
+	}
+	
+	// Test setting nil pool
+	optimizer.SetCommandPool(nil)
+	if optimizer.usePooling {
+		t.Error("Expected usePooling to be false after setting nil pool")
+	}
 }
 
 func TestAdaGradOptimizerInvalidInputs(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping AdaGrad invalid inputs test - requires stable Metal buffer allocation")
-	
+	// Initialize Metal device
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
-		t.Fatalf("Failed to create Metal device: %v", err)
+		t.Skipf("Metal device not available for AdaGrad invalid inputs test: %v", err)
 	}
 	defer cgo_bridge.DestroyMetalDevice(device)
 

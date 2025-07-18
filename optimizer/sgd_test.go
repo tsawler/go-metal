@@ -39,12 +39,10 @@ func TestDefaultSGDConfig(t *testing.T) {
 
 // TestSGDOptimizerCreation tests SGD optimizer creation
 func TestSGDOptimizerCreation(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping SGD optimizer creation test - requires stable Metal buffer allocation")
-	
+	// Initialize Metal device
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
-		t.Fatalf("Failed to create Metal device: %v", err)
+		t.Skipf("Metal device not available for SGD optimizer test: %v", err)
 	}
 	defer cgo_bridge.DestroyMetalDevice(device)
 
@@ -94,12 +92,10 @@ func TestSGDOptimizerCreation(t *testing.T) {
 
 // TestSGDOptimizerInvalidInputs tests SGD optimizer with invalid inputs
 func TestSGDOptimizerInvalidInputs(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping SGD optimizer invalid inputs test - requires stable Metal buffer allocation")
-	
+	// Initialize Metal device
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
-		t.Fatalf("Failed to create Metal device: %v", err)
+		t.Skipf("Metal device not available for SGD invalid inputs test: %v", err)
 	}
 	defer cgo_bridge.DestroyMetalDevice(device)
 
