@@ -146,7 +146,7 @@ func main() {
     
     // Process results
     fmt.Printf("Predictions: %v\n", result.Predictions)
-    fmt.Printf("Raw logits: %v\n", result.RawLogits)
+    fmt.Printf("Output shape: %v\n", result.OutputShape)
     
     // For classification, find the predicted class
     if config.ProblemType == 0 {

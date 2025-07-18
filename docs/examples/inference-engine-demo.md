@@ -265,6 +265,7 @@ func runInference() error {
         // Display results
         fmt.Printf("%s: features=%v\n", test.name, test.features)
         fmt.Printf("  Predicted class: %d (confidence: %.1f%%)\n", maxIdx, maxProb*100)
+        fmt.Printf("  Output shape: %v\n", result.OutputShape)
         fmt.Printf("  Class probabilities: [")
         for i, prob := range result.Predictions {
             if i > 0 {
@@ -360,23 +361,27 @@ Class 1 features: high x1 + low x2,x3 + high x4
 Class 2 features: medium all features
 
 Class 0 sample: features=[0.1 0.2 0.8 0.9]
-  Predicted class: 0 (confidence: 61.5%)
-  Class probabilities: [61.5%, 13.9%, 24.7%]
-  ✓ Correct prediction
+  Predicted class: 2 (confidence: 43.3%)
+  Output shape: [1 3]
+  Class probabilities: [33.5%, 23.1%, 43.3%]
+  ✗ Expected class 0
 
 Class 1 sample: features=[0.9 0.1 0.2 0.8]
-  Predicted class: 0 (confidence: 44.1%)
-  Class probabilities: [44.1%, 42.8%, 13.1%]
+  Predicted class: 2 (confidence: 50.2%)
+  Output shape: [1 3]
+  Class probabilities: [22.1%, 27.6%, 50.2%]
   ✗ Expected class 1
 
 Class 2 sample: features=[0.5 0.5 0.5 0.5]
-  Predicted class: 0 (confidence: 54.8%)
-  Class probabilities: [54.8%, 21.7%, 23.5%]
-  ✗ Expected class 2
+  Predicted class: 2 (confidence: 42.1%)
+  Output shape: [1 3]
+  Class probabilities: [37.2%, 20.7%, 42.1%]
+  ✓ Correct prediction
 
 Ambiguous sample: features=[0.4 0.3 0.6 0.7]
-  Predicted class: 0 (confidence: 58.8%)
-  Class probabilities: [58.8%, 18.2%, 23.0%]
+  Predicted class: 2 (confidence: 42.2%)
+  Output shape: [1 3]
+  Class probabilities: [33.7%, 24.1%, 42.2%]
 
 Demo completed successfully!
 ```
@@ -393,7 +398,7 @@ Note: The accuracy may vary as this is a simple demonstration with minimal train
 6. **Model Loading**: Loading the saved model for inference
 7. **Inference Engine Setup**: Configuring and creating the inference engine
 8. **Making Predictions**: Running inference on new data
-9. **Result Interpretation**: Processing and understanding predictions
+9. **Result Interpretation**: Processing and understanding predictions with output shape information
 
 ## Important Notes
 
