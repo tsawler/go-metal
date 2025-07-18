@@ -55,8 +55,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
         for (int layerIdx = 0; layerIdx < numLayers; layerIdx++) {
             layer_spec_c_t* layer = &layers[layerIdx];
             
-            // DEBUG: Log layer type for debugging layer 8 issue
-            NSLog(@"🔍 Processing layer %d: type=%d", layerIdx, layer->layer_type);
+            // Debug output disabled
+            // NSLog(@"🔍 Processing layer %d: type=%d", layerIdx, layer->layer_type);
             
             // Process layer by type
             
@@ -93,7 +93,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                         NSLog(@"❌ Dense layer %d returned nil tensor", layerIdx);
                         return NO;
                     }
-                    NSLog(@"✅ Dense layer %d processed successfully", layerIdx);
+                    // Debug output disabled
+                    // NSLog(@"✅ Dense layer %d processed successfully", layerIdx);
                     break;
                     
                 case 1: // Conv2D
@@ -134,7 +135,8 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                         NSLog(@"❌ ReLU layer %d returned nil tensor", layerIdx);
                         return NO;
                     }
-                    NSLog(@"✅ ReLU layer %d processed successfully", layerIdx);
+                    // Debug output disabled
+                    // NSLog(@"✅ ReLU layer %d processed successfully", layerIdx);
                     break;
                     
                 case 3: // Softmax

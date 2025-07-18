@@ -119,14 +119,16 @@ func NewModelTrainer(
 	
 	// Determine optimal engine type using smart routing
 	selectedEngine := SelectOptimalEngine(modelSpec, config)
-	archInfo := AnalyzeModelArchitecture(modelSpec)
+	// Debug analysis disabled
+	// archInfo := AnalyzeModelArchitecture(modelSpec)
 	
-	fmt.Printf("🧠 Smart Routing Analysis:\n")
-	fmt.Printf("   - Input: %dD %v\n", archInfo.InputDimensions, modelSpec.InputShape)
-	fmt.Printf("   - Architecture: %s (%d layers, %d params)\n", 
-		archInfo.Complexity, archInfo.LayerCount, archInfo.ParameterCount)
-	fmt.Printf("   - Pattern: CNN=%v, MLP=%v\n", archInfo.IsCNNPattern, archInfo.IsMLPOnly)
-	fmt.Printf("   - Selected Engine: %s\n", selectedEngine.String())
+	// Debug output disabled
+	// fmt.Printf("🧠 Smart Routing Analysis:\n")
+	// fmt.Printf("   - Input: %dD %v\n", archInfo.InputDimensions, modelSpec.InputShape)
+	// fmt.Printf("   - Architecture: %s (%d layers, %d params)\n", 
+	//	archInfo.Complexity, archInfo.LayerCount, archInfo.ParameterCount)
+	// fmt.Printf("   - Pattern: CNN=%v, MLP=%v\n", archInfo.IsCNNPattern, archInfo.IsMLPOnly)
+	// fmt.Printf("   - Selected Engine: %s\n", selectedEngine.String())
 	
 	// Create engine based on smart routing decision
 	switch selectedEngine {
@@ -135,7 +137,8 @@ func NewModelTrainer(
 		// - Supports 2D, 4D, or any dimensional input
 		// - Supports any layer combination (Dense, Conv2D, etc.)
 		// - MPSGraph-centric architecture with automatic kernel fusion
-		fmt.Printf("🔧 Creating Dynamic Engine (any architecture support)\n")
+		// Debug output disabled
+		// fmt.Printf("🔧 Creating Dynamic Engine (any architecture support)\n")
 		modelEngine, err = engine.NewModelTrainingEngineDynamic(modelSpec, bridgeConfig)
 		
 	case Hybrid:
@@ -185,8 +188,8 @@ func NewModelTrainer(
 		return nil, fmt.Errorf("failed to create model training engine: %v", err)
 	}
 	
-	// Debug: Show which engine type was actually created
-	fmt.Printf("✅ Created engine: isDynamic=%t\n", modelEngine.IsDynamicEngine())
+	// Debug output disabled
+	// fmt.Printf("✅ Created engine: isDynamic=%t\n", modelEngine.IsDynamicEngine())
 	
 	// RESOURCE LEAK FIX: Initialize command buffer pool for Metal resource management
 	// This prevents MTLCommandBuffer and MPSImage accumulation that causes 34% performance degradation

@@ -1,6 +1,6 @@
 # Go-Metal
 
-A high-performance deep learning library for Go that leverages Apple's Metal Performance Shaders (specifically MPSGraph) for GPU acceleration on Apple Silicon.
+A high-performance deep learning library for Go that leverages Apple's Metal Performance Shaders (specifically [MPSGraph](https://developer.apple.com/documentation/metalperformanceshadersgraph?language=objc) for GPU acceleration on Apple Silicon.
 
 [![Go Version](https://img.shields.io/badge/Go-1.21+-blue.svg)](https://golang.org)
 [![Platform](https://img.shields.io/badge/Platform-Apple%20Silicon-brightgreen.svg)](https://developer.apple.com/metal/)

@@ -208,8 +208,9 @@ func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor)
 		}
 	}
 	
-	fmt.Printf("Total weights: %d, Learnable: %d, Running stats: %d, Expected parameters: %d\n", 
-		len(weights), len(learnableWeights), len(runningStatsWeights), len(mie.parameterTensors))
+	// Debug output disabled
+	// fmt.Printf("Total weights: %d, Learnable: %d, Running stats: %d, Expected parameters: %d\n", 
+	//	len(weights), len(learnableWeights), len(runningStatsWeights), len(mie.parameterTensors))
 	
 	if len(learnableWeights) != len(mie.parameterTensors) {
 		return fmt.Errorf("weight count mismatch: %d weights, %d tensors", 
@@ -227,25 +228,26 @@ func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor)
 			continue
 		}
 		
-		// DEBUG: Check weight values
-		weightSum := float32(0.0)
-		weightMax := float32(-999999.0)
-		weightMin := float32(999999.0)
-		for _, val := range weight.Data {
-			weightSum += val
-			if val > weightMax {
-				weightMax = val
-			}
-			if val < weightMin {
-				weightMin = val
-			}
-		}
-		weightAvg := weightSum / float32(len(weight.Data))
+		// Debug weight calculation disabled
+		// weightSum := float32(0.0)
+		// weightMax := float32(-999999.0)
+		// weightMin := float32(999999.0)
+		// for _, val := range weight.Data {
+		//	weightSum += val
+		//	if val > weightMax {
+		//		weightMax = val
+		//	}
+		//	if val < weightMin {
+		//		weightMin = val
+		//	}
+		// }
+		// weightAvg := weightSum / float32(len(weight.Data))
 		
-		fmt.Printf("DEBUG: Loading weight[%d] %s: shape %v, data size %d\n", 
-			i, weight.Name, weight.Shape, len(weight.Data))
-		fmt.Printf("DEBUG: Weight[%d] %s stats: min=%.6f, max=%.6f, avg=%.6f\n", 
-			i, weight.Name, weightMin, weightMax, weightAvg)
+		// Debug output disabled
+		// fmt.Printf("DEBUG: Loading weight[%d] %s: shape %v, data size %d\n", 
+		//	i, weight.Name, weight.Shape, len(weight.Data))
+		// fmt.Printf("DEBUG: Weight[%d] %s stats: min=%.6f, max=%.6f, avg=%.6f\n", 
+		//	i, weight.Name, weightMin, weightMax, weightAvg)
 		
 		// Copy weights to GPU tensor (minimal CPU-GPU transfers)
 		err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(
@@ -315,15 +317,15 @@ func (mie *ModelInferenceEngine) executeInference(
 	inputTensor *memory.Tensor,
 	batchSize int,
 ) (*cgo_bridge.InferenceResult, error) {
-	// DEBUG: Log inference preparation
-	fmt.Printf("\n=== ModelInferenceEngine.executeInference Debug ===\n")
-	fmt.Printf("Model compiled: %v\n", mie.compiledForModel)
-	fmt.Printf("Input tensor shape: %v\n", inputTensor.Shape())
-	fmt.Printf("Input tensor buffer: %p\n", inputTensor.MetalBuffer())
-	fmt.Printf("Batch size: %d\n", batchSize)
-	fmt.Printf("Using dynamic engine architecture\n")
-	fmt.Printf("Batch norm inference mode: %v\n", mie.batchNormInferenceMode)
-	fmt.Printf("Number of parameter tensors: %d\n", len(mie.parameterTensors))
+	// Debug output disabled
+	// fmt.Printf("\n=== ModelInferenceEngine.executeInference Debug ===\n")
+	// fmt.Printf("Model compiled: %v\n", mie.compiledForModel)
+	// fmt.Printf("Input tensor shape: %v\n", inputTensor.Shape())
+	// fmt.Printf("Input tensor buffer: %p\n", inputTensor.MetalBuffer())
+	// fmt.Printf("Batch size: %d\n", batchSize)
+	// fmt.Printf("Using dynamic engine architecture\n")
+	// fmt.Printf("Batch norm inference mode: %v\n", mie.batchNormInferenceMode)
+	// fmt.Printf("Number of parameter tensors: %d\n", len(mie.parameterTensors))
 	
 	// Validate model is compiled
 	if !mie.compiledForModel {
@@ -344,9 +346,11 @@ func (mie *ModelInferenceEngine) executeInference(
 	for i, tensor := range mie.parameterTensors {
 		if tensor != nil {
 			weightBuffers[i] = tensor.MetalBuffer()
-			fmt.Printf("Parameter tensor[%d]: shape=%v, buffer=%p\n", i, tensor.Shape(), tensor.MetalBuffer())
+			// Debug output disabled
+			// fmt.Printf("Parameter tensor[%d]: shape=%v, buffer=%p\n", i, tensor.Shape(), tensor.MetalBuffer())
 		} else {
-			fmt.Printf("Parameter tensor[%d]: nil\n", i)
+			// Debug output disabled
+			// fmt.Printf("Parameter tensor[%d]: nil\n", i)
 		}
 	}
 	
@@ -357,9 +361,10 @@ func (mie *ModelInferenceEngine) executeInference(
 	}
 	numClasses := outputShape[len(outputShape)-1] // Last dimension is number of classes
 	
-	fmt.Printf("Model output shape: %v\n", outputShape)
-	fmt.Printf("Number of classes: %d\n", numClasses)
-	fmt.Printf("About to call ExecuteInferenceOnly...\n")
+	// Debug output disabled
+	// fmt.Printf("Model output shape: %v\n", outputShape)
+	// fmt.Printf("Number of classes: %d\n", numClasses)
+	// fmt.Printf("About to call ExecuteInferenceOnly...\n")
 	
 	// Single CGO call for complete inference using dynamic engine architecture
 	result, err := cgo_bridge.ExecuteInferenceOnly(
@@ -373,12 +378,14 @@ func (mie *ModelInferenceEngine) executeInference(
 	)
 	
 	if err != nil {
-		fmt.Printf("ERROR: ExecuteInferenceOnly failed: %v\n", err)
+		// Debug output disabled
+		// fmt.Printf("ERROR: ExecuteInferenceOnly failed: %v\n", err)
 		return nil, fmt.Errorf("inference execution failed: %v", err)
 	}
 	
-	fmt.Printf("ExecuteInferenceOnly succeeded, result: %+v\n", result)
-	fmt.Printf("=== End ModelInferenceEngine.executeInference Debug ===\n\n")
+	// Debug output disabled
+	// fmt.Printf("ExecuteInferenceOnly succeeded, result: %+v\n", result)
+	// fmt.Printf("=== End ModelInferenceEngine.executeInference Debug ===\n\n")
 	
 	return result, nil
 }

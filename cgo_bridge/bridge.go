@@ -800,8 +800,8 @@ func ExecuteInferenceOnly(
 	isDynamic bool,
 	batchNormInferenceMode bool,
 ) (*InferenceResult, error) {
-	fmt.Printf("DEBUG: ExecuteInferenceOnly called with batchSize=%d, numClasses=%d, numWeights=%d\n", 
-		batchSize, numClasses, len(weightBuffers))
+	// fmt.Printf("DEBUG: ExecuteInferenceOnly called with batchSize=%d, numClasses=%d, numWeights=%d\n", 
+	// 	batchSize, numClasses, len(weightBuffers))
 	
 	// Test debug output
 	C.test_debug_output()

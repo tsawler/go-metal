@@ -1332,13 +1332,14 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 		// Set input shape
 		spec.InputShape, spec.InputShapeLen = copyShapeToArray(currentShape)
 
-		// DEBUG: Log all layer conversions to debug indexing
-		fmt.Printf("🔍 Converting layer %d: name=%s, type=%d (%s) → spec.LayerType will be: ", i, layer.Name, int(layer.Type), layer.Type.String())
+		// Debug output disabled
+		// fmt.Printf("🔍 Converting layer %d: name=%s, type=%d (%s) → spec.LayerType will be: ", i, layer.Name, int(layer.Type), layer.Type.String())
 
 		switch layer.Type {
 		case Dense:
 			spec.LayerType = 0 // Dense = 0 in C
-			fmt.Printf("0 (Dense)\n")
+			// Debug output disabled
+			// fmt.Printf("0 (Dense)\n")
 			
 			inputSize := getIntParam(layer.Parameters, "input_size", 0)
 			outputSize := getIntParam(layer.Parameters, "output_size", 0)

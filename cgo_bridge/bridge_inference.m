@@ -1774,8 +1774,9 @@ int execute_inference_optimized_buffers(
     return status;
 }
 
-// Test function
+// Test function - debug output disabled
 void test_debug_output() {
-    printf("TEST: Debug output is working!\n");
-    NSLog(@"TEST: NSLog output is working!");
+    // Debug output disabled
+    // printf("TEST: Debug output is working!\n");
+    // NSLog(@"TEST: NSLog output is working!");
 }
