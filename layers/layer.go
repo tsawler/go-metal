@@ -1219,7 +1219,8 @@ func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
 		case Dropout:
 			// Dropout parameters: rate, training
 			rate := getFloatParam(layer.Parameters, "rate", 0.5)
-			training := getBoolParam(layer.Parameters, "training", true)
+			// CRITICAL FIX: For inference, always set training=false (disables dropout)
+			training := false // Force inference mode - dropout disabled
 			
 			cLayer.ParamFloat = []float32{rate}
 			cLayer.ParamInt = []int32{boolToInt32(training)}
@@ -1231,7 +1232,8 @@ func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
 			momentum := getFloatParam(layer.Parameters, "momentum", 0.1)
 			affine := getBoolParam(layer.Parameters, "affine", true)
 			trackRunningStats := getBoolParam(layer.Parameters, "track_running_stats", true)
-			training := getBoolParam(layer.Parameters, "training", true)
+			// CRITICAL FIX: For inference, always set training=false regardless of stored value
+			training := false // Force inference mode
 			
 			cLayer.ParamFloat = []float32{eps, momentum}
 			cLayer.ParamInt = []int32{int32(numFeatures), boolToInt32(affine), boolToInt32(trackRunningStats), boolToInt32(training)}
@@ -1431,7 +1433,8 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.LayerType = 5 // Dropout = 5 in Go enum
 			
 			rate := getFloatParam(layer.Parameters, "rate", 0.5)
-			training := getBoolParam(layer.Parameters, "training", true)
+			// CRITICAL FIX: For inference, always set training=false (disables dropout)
+			training := false // Force inference mode - dropout disabled
 			
 			spec.ParamFloat[0] = rate
 			spec.ParamInt[0] = boolToInt32(training)
@@ -1507,7 +1510,9 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			momentum := getFloatParam(layer.Parameters, "momentum", 0.1)
 			affine := getBoolParam(layer.Parameters, "affine", true)
 			trackRunningStats := getBoolParam(layer.Parameters, "track_running_stats", true)
-			training := getBoolParam(layer.Parameters, "training", true)
+			// CRITICAL FIX: For inference, always set training=false regardless of stored value
+			// This ensures BatchNorm uses running statistics instead of batch statistics
+			training := false // Force inference mode
 			
 			// Pack parameters: [eps, momentum] in floats, [num_features, affine, track_running_stats, training] in ints
 			spec.ParamFloat[0] = eps
@@ -1515,7 +1520,7 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamInt[0] = int32(numFeatures)
 			spec.ParamInt[1] = boolToInt32(affine)
 			spec.ParamInt[2] = boolToInt32(trackRunningStats)
-			spec.ParamInt[3] = boolToInt32(training)
+			spec.ParamInt[3] = boolToInt32(training) // This will now be 0 (false)
 			spec.ParamFloatCount = 2
 			spec.ParamIntCount = 4
 			

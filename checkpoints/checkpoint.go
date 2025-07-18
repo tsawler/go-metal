@@ -364,8 +364,7 @@ func LoadWeightsIntoTensors(weights []WeightTensor, tensors []*memory.Tensor) er
 		}
 	}
 	
-	fmt.Printf("🔧 Loading weights: Total=%d, Learnable=%d, Running stats=%d, Parameter tensors=%d\n", 
-		len(weights), len(learnableWeights), len(runningStatsWeights), len(tensors))
+	// DEBUG removed: Weight loading progress
 	
 	// Create a map for quick weight lookup
 	weightMap := make(map[string]WeightTensor)
@@ -390,25 +389,7 @@ func LoadWeightsIntoTensors(weights []WeightTensor, tensors []*memory.Tensor) er
 		// Verify tensor and weight compatibility
 		tensorShape := tensor.Shape()
 		
-		// DEBUG: Check weight values to see if they're reasonable
-		weightSum := float32(0.0)
-		weightMax := float32(-999999.0)
-		weightMin := float32(999999.0)
-		for _, val := range weight.Data {
-			weightSum += val
-			if val > weightMax {
-				weightMax = val
-			}
-			if val < weightMin {
-				weightMin = val
-			}
-		}
-		weightAvg := weightSum / float32(len(weight.Data))
-		
-		fmt.Printf("DEBUG: Loading weight %s: tensor shape %v, weight shape %v, weight data size %d\n", 
-			weight.Name, tensorShape, weight.Shape, len(weight.Data))
-		fmt.Printf("DEBUG: Weight %s stats: min=%.6f, max=%.6f, avg=%.6f, sum=%.6f\n", 
-			weight.Name, weightMin, weightMax, weightAvg, weightSum)
+		// Verify tensor and weight compatibility
 		if len(tensorShape) != len(weight.Shape) {
 			return fmt.Errorf("shape mismatch for weight %s: tensor %v vs weight %v", 
 				weight.Name, tensorShape, weight.Shape)
@@ -527,11 +508,33 @@ func generateIntelligentRunningStats(layerName string, numFeatures int, layerSpe
 	runningMean := make([]float32, numFeatures)
 	runningVar := make([]float32, numFeatures)
 	
-	// CRITICAL TEST: Use same values as ONNX model to debug identical predictions
-	// ONNX models work with mean=0, var=1, so let's test with those exact values
-	for i := 0; i < numFeatures; i++ {
-		runningMean[i] = 0.0 // Same as ONNX
-		runningVar[i] = 1.0  // Same as ONNX
+	// CRITICAL FIX: Check if the layer already has running statistics stored
+	// This happens when the model was trained and the statistics were saved
+	if layerSpec.RunningStatistics != nil {
+		if existingMean, hasMean := layerSpec.RunningStatistics["running_mean"]; hasMean && len(existingMean) == numFeatures {
+			copy(runningMean, existingMean)
+		} else {
+			// Default mean = 0
+			for i := 0; i < numFeatures; i++ {
+				runningMean[i] = 0.0
+			}
+		}
+		
+		if existingVar, hasVar := layerSpec.RunningStatistics["running_var"]; hasVar && len(existingVar) == numFeatures {
+			copy(runningVar, existingVar)
+		} else {
+			// Default variance = 1
+			for i := 0; i < numFeatures; i++ {
+				runningVar[i] = 1.0
+			}
+		}
+	} else {
+		// No existing statistics - use defaults
+		// ONNX standard defaults: mean=0, var=1
+		for i := 0; i < numFeatures; i++ {
+			runningMean[i] = 0.0
+			runningVar[i] = 1.0
+		}
 	}
 	
 	return runningMean, runningVar
