@@ -374,3 +374,27 @@ func TestAdaGradBasicStructures(t *testing.T) {
 
 	t.Log("AdaGrad basic structures test passed")
 }
+
+// TestAdaGradGetStepCount tests the GetStepCount method
+func TestAdaGradGetStepCount(t *testing.T) {
+	adagrad := MockAdaGradOptimizer()
+	
+	// Test initial step count
+	if adagrad.GetStepCount() != 0 {
+		t.Errorf("Expected initial step count 0, got %d", adagrad.GetStepCount())
+	}
+	
+	// Test after incrementing step count
+	adagrad.currentStep = 25
+	if adagrad.GetStepCount() != 25 {
+		t.Errorf("Expected step count 25, got %d", adagrad.GetStepCount())
+	}
+	
+	// Test that GetStep and GetStepCount return same value
+	if adagrad.GetStep() != adagrad.GetStepCount() {
+		t.Errorf("GetStep() and GetStepCount() should return same value: %d != %d", 
+			adagrad.GetStep(), adagrad.GetStepCount())
+	}
+	
+	t.Log("AdaGrad GetStepCount test passed")
+}

@@ -304,14 +304,16 @@ func (adam *AdamOptimizerState) getTotalBufferSize() int {
 
 // Cleanup releases all GPU buffers
 func (adam *AdamOptimizerState) Cleanup() {
-	for i := range adam.MomentumBuffers {
-		if adam.MomentumBuffers[i] != nil {
-			adam.memoryManager.ReleaseBuffer(adam.MomentumBuffers[i])
-			adam.MomentumBuffers[i] = nil
-		}
-		if adam.VarianceBuffers[i] != nil {
-			adam.memoryManager.ReleaseBuffer(adam.VarianceBuffers[i])
-			adam.VarianceBuffers[i] = nil
+	if adam.memoryManager != nil {
+		for i := range adam.MomentumBuffers {
+			if adam.MomentumBuffers[i] != nil {
+				adam.memoryManager.ReleaseBuffer(adam.MomentumBuffers[i])
+				adam.MomentumBuffers[i] = nil
+			}
+			if adam.VarianceBuffers[i] != nil {
+				adam.memoryManager.ReleaseBuffer(adam.VarianceBuffers[i])
+				adam.VarianceBuffers[i] = nil
+			}
 		}
 	}
 	

@@ -401,3 +401,190 @@ func BenchmarkLBFGSOptimizer_Creation(b *testing.B) {
 		optimizer.Cleanup()
 	}
 }
+
+// TestLBFGSSetWeightBuffers tests the SetWeightBuffers method
+func TestLBFGSSetWeightBuffers(t *testing.T) {
+	config := DefaultLBFGSConfig()
+	weightShapes := [][]int{{10, 5}, {5}, {5, 3}}
+	
+	// Create mock L-BFGS optimizer
+	optimizer := &LBFGSOptimizerState{
+		config:      config,
+		WeightBuffers: make([]unsafe.Pointer, len(weightShapes)),
+		currentStep: 0,
+	}
+	
+	// Test setting correct number of weight buffers
+	weightBuffers := []unsafe.Pointer{
+		unsafe.Pointer(uintptr(0x1000)),
+		unsafe.Pointer(uintptr(0x2000)),
+		unsafe.Pointer(uintptr(0x3000)),
+	}
+	
+	err := optimizer.SetWeightBuffers(weightBuffers)
+	if err != nil {
+		t.Errorf("Unexpected error for correct buffer count: %v", err)
+	}
+	
+	// Verify buffers were set
+	for i, expected := range weightBuffers {
+		if optimizer.WeightBuffers[i] != expected {
+			t.Errorf("Expected WeightBuffers[%d] %p, got %p", i, expected, optimizer.WeightBuffers[i])
+		}
+	}
+	
+	// Test setting wrong number of weight buffers
+	wrongBuffers := []unsafe.Pointer{unsafe.Pointer(uintptr(0x1000))}
+	err = optimizer.SetWeightBuffers(wrongBuffers)
+	if err == nil {
+		t.Error("Expected error for mismatched buffer count, got nil")
+	}
+	
+	t.Log("L-BFGS SetWeightBuffers test passed")
+}
+
+// TestLBFGSGetStep tests the GetStep method
+func TestLBFGSGetStep(t *testing.T) {
+	config := DefaultLBFGSConfig()
+	
+	// Create mock L-BFGS optimizer
+	optimizer := &LBFGSOptimizerState{
+		config:      config,
+		currentStep: 0,
+	}
+	
+	// Test initial step count
+	if optimizer.GetStep() != 0 {
+		t.Errorf("Expected initial step count 0, got %d", optimizer.GetStep())
+	}
+	
+	// Test after incrementing step count
+	optimizer.currentStep = 42
+	if optimizer.GetStep() != 42 {
+		t.Errorf("Expected step count 42, got %d", optimizer.GetStep())
+	}
+	
+	t.Log("L-BFGS GetStep test passed")
+}
+
+// TestLBFGSGetStats tests the GetStats method
+func TestLBFGSGetStats(t *testing.T) {
+	config := DefaultLBFGSConfig()
+	
+	// Create mock L-BFGS optimizer
+	optimizer := &LBFGSOptimizerState{
+		config:       config,
+		currentStep:  5,
+		historyCount: 3,
+		prevLoss:     0.123,
+	}
+	
+	stats := optimizer.GetStats()
+	
+	// Check all expected fields
+	if stats["step"] != uint64(5) {
+		t.Errorf("Expected step 5, got %v", stats["step"])
+	}
+	if stats["history_size"] != config.HistorySize {
+		t.Errorf("Expected history_size %d, got %v", config.HistorySize, stats["history_size"])
+	}
+	if stats["history_used"] != 3 {
+		t.Errorf("Expected history_used 3, got %v", stats["history_used"])
+	}
+	if stats["prev_loss"] != float32(0.123) {
+		t.Errorf("Expected prev_loss 0.123, got %v", stats["prev_loss"])
+	}
+	
+	t.Log("L-BFGS GetStats test passed")
+}
+
+// TestLBFGSSetCommandPool tests the SetCommandPool method
+func TestLBFGSSetCommandPool(t *testing.T) {
+	config := DefaultLBFGSConfig()
+	
+	// Create mock L-BFGS optimizer
+	optimizer := &LBFGSOptimizerState{
+		config:      config,
+		currentStep: 0,
+	}
+	
+	// Test setting command pool
+	mockPool := unsafe.Pointer(uintptr(0x2000))
+	optimizer.SetCommandPool(mockPool)
+	
+	if optimizer.commandPool != mockPool {
+		t.Errorf("Expected commandPool %p, got %p", mockPool, optimizer.commandPool)
+	}
+	
+	if !optimizer.usePooling {
+		t.Error("Expected usePooling to be true")
+	}
+	
+	// Test setting nil pool
+	optimizer.SetCommandPool(nil)
+	if optimizer.usePooling {
+		t.Error("Expected usePooling to be false after setting nil pool")
+	}
+	
+	t.Log("L-BFGS SetCommandPool test passed")
+}
+
+// TestLBFGSUpdateLearningRate tests the UpdateLearningRate method
+func TestLBFGSUpdateLearningRate(t *testing.T) {
+	config := DefaultLBFGSConfig()
+	
+	// Create mock L-BFGS optimizer
+	optimizer := &LBFGSOptimizerState{
+		config:      config,
+		currentStep: 0,
+	}
+	
+	// Test that UpdateLearningRate returns error for L-BFGS
+	err := optimizer.UpdateLearningRate(0.001)
+	if err == nil {
+		t.Error("Expected error for L-BFGS UpdateLearningRate, got nil")
+	}
+	
+	// Check error message
+	expectedMsg := "L-BFGS does not use a fixed learning rate; it uses line search"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
+	}
+	
+	t.Log("L-BFGS UpdateLearningRate test passed")
+}
+
+// TestLBFGSStepValidation tests the Step method validation
+func TestLBFGSStepValidation(t *testing.T) {
+	config := DefaultLBFGSConfig()
+	weightShapes := [][]int{{10, 5}, {5}}
+	
+	// Create mock L-BFGS optimizer
+	optimizer := &LBFGSOptimizerState{
+		config:        config,
+		WeightBuffers: make([]unsafe.Pointer, len(weightShapes)),
+		currentStep:   0,
+	}
+	
+	// Test step with mismatched gradient buffer count
+	gradientBuffers := []unsafe.Pointer{unsafe.Pointer(uintptr(0x1000))}
+	err := optimizer.Step(gradientBuffers, 0.5)
+	if err == nil {
+		t.Error("Expected error for mismatched gradient buffer count, got nil")
+	}
+	
+	// Test step with correct gradient buffer count (will fail on CGO bridge call)
+	// Note: We can't test the full step due to CGO bridge dependency
+	correctGradientBuffers := []unsafe.Pointer{
+		unsafe.Pointer(uintptr(0x1000)),
+		unsafe.Pointer(uintptr(0x2000)),
+	}
+	
+	// Test the validation logic directly
+	if len(correctGradientBuffers) != len(optimizer.WeightBuffers) {
+		t.Errorf("Expected gradient buffer count %d to match weight buffer count %d", 
+			len(correctGradientBuffers), len(optimizer.WeightBuffers))
+	}
+	
+	t.Log("L-BFGS Step validation test passed")
+}

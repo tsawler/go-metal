@@ -445,3 +445,40 @@ func TestAdaDeltaConfigValidation(t *testing.T) {
 
 	t.Log("AdaDelta config validation test passed")
 }
+
+// TestAdaDeltaUpdateLearningRate tests the UpdateLearningRate method
+func TestAdaDeltaUpdateLearningRate(t *testing.T) {
+	adadelta := MockAdaDeltaOptimizer()
+	
+	// Test that UpdateLearningRate is a no-op for AdaDelta
+	adadelta.UpdateLearningRate(0.001)
+	
+	// Should not affect any state since AdaDelta doesn't use fixed learning rate
+	// Just verify the method doesn't panic or error
+	
+	t.Log("AdaDelta UpdateLearningRate test passed")
+}
+
+// TestAdaDeltaGetStepCount tests the GetStepCount method
+func TestAdaDeltaGetStepCount(t *testing.T) {
+	adadelta := MockAdaDeltaOptimizer()
+	
+	// Test initial step count
+	if adadelta.GetStepCount() != 0 {
+		t.Errorf("Expected initial step count 0, got %d", adadelta.GetStepCount())
+	}
+	
+	// Test after incrementing step count
+	adadelta.currentStep = 15
+	if adadelta.GetStepCount() != 15 {
+		t.Errorf("Expected step count 15, got %d", adadelta.GetStepCount())
+	}
+	
+	// Test that GetStep and GetStepCount return same value
+	if adadelta.GetStep() != adadelta.GetStepCount() {
+		t.Errorf("GetStep() and GetStepCount() should return same value: %d != %d", 
+			adadelta.GetStep(), adadelta.GetStepCount())
+	}
+	
+	t.Log("AdaDelta GetStepCount test passed")
+}

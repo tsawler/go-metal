@@ -194,7 +194,7 @@ func (sgd *SGDOptimizerState) GetStepCount() uint64 {
 
 // Cleanup releases all GPU buffers
 func (sgd *SGDOptimizerState) Cleanup() {
-	if sgd.MomentumBuffers != nil {
+	if sgd.MomentumBuffers != nil && sgd.memoryManager != nil {
 		for i := range sgd.MomentumBuffers {
 			if sgd.MomentumBuffers[i] != nil {
 				sgd.memoryManager.ReleaseBuffer(sgd.MomentumBuffers[i])

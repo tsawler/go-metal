@@ -661,3 +661,28 @@ func TestNadamComparisonWithAdam(t *testing.T) {
 
 	t.Log("Nadam vs Adam comparison test passed")
 }
+
+// TestNadamCleanupMethod tests the cleanup method
+func TestNadamCleanupMethod(t *testing.T) {
+	nadam := MockNadamOptimizer()
+	
+	// Mock Nadam has nil memory manager, so we can only test the slice clearing
+	// Test cleanup
+	nadam.Cleanup()
+	
+	// Verify buffers were cleared
+	if nadam.momentumBuffers != nil {
+		t.Error("Expected momentumBuffers to be nil after cleanup")
+	}
+	if nadam.varianceBuffers != nil {
+		t.Error("Expected varianceBuffers to be nil after cleanup")
+	}
+	if nadam.WeightBuffers != nil {
+		t.Error("Expected WeightBuffers to be nil after cleanup")
+	}
+	if nadam.bufferSizes != nil {
+		t.Error("Expected bufferSizes to be nil after cleanup")
+	}
+	
+	t.Log("Nadam cleanup method test passed")
+}

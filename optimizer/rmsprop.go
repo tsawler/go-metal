@@ -307,18 +307,20 @@ func (rmsprop *RMSPropOptimizerState) getTotalBufferSize() int {
 
 // Cleanup releases all GPU buffers
 func (rmsprop *RMSPropOptimizerState) Cleanup() {
-	for i := range rmsprop.SquaredGradAvgBuffers {
-		if rmsprop.SquaredGradAvgBuffers[i] != nil {
-			rmsprop.memoryManager.ReleaseBuffer(rmsprop.SquaredGradAvgBuffers[i])
-			rmsprop.SquaredGradAvgBuffers[i] = nil
-		}
-		if rmsprop.MomentumBuffers[i] != nil {
-			rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
-			rmsprop.MomentumBuffers[i] = nil
-		}
-		if rmsprop.GradientAvgBuffers[i] != nil {
-			rmsprop.memoryManager.ReleaseBuffer(rmsprop.GradientAvgBuffers[i])
-			rmsprop.GradientAvgBuffers[i] = nil
+	if rmsprop.memoryManager != nil {
+		for i := range rmsprop.SquaredGradAvgBuffers {
+			if rmsprop.SquaredGradAvgBuffers[i] != nil {
+				rmsprop.memoryManager.ReleaseBuffer(rmsprop.SquaredGradAvgBuffers[i])
+				rmsprop.SquaredGradAvgBuffers[i] = nil
+			}
+			if rmsprop.MomentumBuffers[i] != nil {
+				rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
+				rmsprop.MomentumBuffers[i] = nil
+			}
+			if rmsprop.GradientAvgBuffers[i] != nil {
+				rmsprop.memoryManager.ReleaseBuffer(rmsprop.GradientAvgBuffers[i])
+				rmsprop.GradientAvgBuffers[i] = nil
+			}
 		}
 	}
 
