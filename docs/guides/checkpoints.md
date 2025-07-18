@@ -1239,4 +1239,12 @@ Go-metal checkpoints provide:
 4. **Export to ONNX** for deployment
 5. **Clean up old checkpoints** to manage storage
 
+### Inference and Deployment
+
+For using saved models in production, see the [Inference Engine Guide](inference-engine.md) which covers:
+- Loading checkpoints for inference
+- Configuring the high-performance inference engine
+- Running predictions on new data
+- Optimizing inference performance
+
 *Proper checkpointing ensures your training progress is never lost and enables flexible model management workflows.*

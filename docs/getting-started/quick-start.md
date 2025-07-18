@@ -227,6 +227,7 @@ Congratulations! You've successfully trained your first neural network with go-m
 ### Immediate Next Steps
 - **[Basic Concepts](basic-concepts.md)** - Understand layers, optimizers, and loss functions
 - **[MLP Tutorial](../tutorials/mlp-tutorial.md)** - Build more complex neural networks
+- **[Inference Engine Guide](../guides/inference-engine.md)** - Deploy models for prediction
 - **[Performance Guide](../guides/performance.md)** - Optimize training speed
 
 ### Advanced Features to Explore
@@ -238,6 +239,7 @@ Congratulations! You've successfully trained your first neural network with go-m
 ### Example Projects
 - **[Cats & Dogs Classification](../examples/cats-dogs-classification.md)** - Complete CNN example
 - **[House Price Regression](../examples/house-price-regression.md)** - Regression with visualization
+- **[Inference Engine Demo](../examples/inference-engine-demo.md)** - Complete training to inference workflow
 
 ## 💡 Pro Tips
 

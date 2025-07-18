@@ -36,6 +36,7 @@ Go-Metal is a native Go machine learning framework that leverages Apple's Metal 
 - **[Layers](guides/layers.md)** - Complete layer reference and usage
 - **[Optimizers](guides/optimizers.md)** - Optimizer selection and configuration
 - **[Loss Functions](guides/loss-functions.md)** - Loss function reference
+- **[Inference Engine](guides/inference-engine.md)** - High-performance model inference
 - **[Performance](guides/performance.md)** - Optimization techniques and mixed precision
 - **[Memory Management](guides/memory-management.md)** - GPU memory optimization and best practices
 - **[Checkpoints](guides/checkpoints.md)** - Model saving, loading, and resume training
@@ -52,6 +53,7 @@ Go-Metal is a native Go machine learning framework that leverages Apple's Metal 
 - **[Cats & Dogs Classification](examples/cats-dogs-classification.md)** - Complete CNN example
 - **[House Price Regression](examples/house-price-regression.md)** - Regression with visualization
 - **[SparseCrossEntropy Demo](examples/sparse-cross-entropy.md)** - Integer label classification
+- **[Inference Engine Demo](examples/inference-engine-demo.md)** - Complete inference workflow example
 
 ### 📋 Reference
 - **[API Overview](reference/api-overview.md)** - High-level API tour

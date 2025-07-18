@@ -708,6 +708,10 @@ type InferenceConfig struct {
 	LayerSpecs    []LayerSpecC // Layer specifications
 	LayerSpecsLen int32        // Number of layer specs
 
+	// Problem type and loss function (CRITICAL FIX for regression inference)
+	ProblemType  int // 0 = Classification, 1 = Regression
+	LossFunction int // 0 = CrossEntropy, 1 = SparseCrossEntropy, 2 = MSE, 3 = MAE, 4 = Huber
+
 	// Performance settings
 	UseCommandPooling      bool // Enable command buffer pooling
 	OptimizeForSingleBatch bool // Optimize for batch size 1
