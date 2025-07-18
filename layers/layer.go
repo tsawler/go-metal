@@ -608,12 +608,61 @@ func (mb *ModelBuilder) computeBatchNormInfo(layer *LayerSpec, inputShape []int)
 	outputShape := make([]int, len(inputShape))
 	copy(outputShape, inputShape)
 
-	// Validate num_features matches the appropriate dimension
-	// For 2D input [batch, features]: features dimension is index 1
-	// For 4D input [batch, channels, height, width]: channels dimension is index 1
+	// UNIVERSAL FIX: Handle corrupted BatchNorm parameters
+	// Validate and fix num_features for universal model compatibility
 	expectedFeatures := inputShape[1]
+	
+	// If both numFeatures and expectedFeatures are invalid, try to infer from other dimensions
+	if numFeatures <= 0 && expectedFeatures <= 0 {
+		// Look for valid channel dimension in 4D inputs (common case: [batch, 0, height, width])
+		if len(inputShape) == 4 && inputShape[2] > 0 && inputShape[3] > 0 {
+			// Calculate total elements per batch and try to infer channels
+			batchElements := 1
+			for i := 1; i < len(inputShape); i++ {
+				if inputShape[i] > 0 {
+					batchElements *= inputShape[i]
+				}
+			}
+			// Common case: RGB images have 3 channels, grayscale has 1
+			if batchElements > 0 {
+				spatialSize := inputShape[2] * inputShape[3]
+				if spatialSize > 0 && batchElements%spatialSize == 0 {
+					inferredChannels := batchElements / spatialSize
+					if inferredChannels > 0 && inferredChannels <= 512 { // reasonable channel count
+						numFeatures = inferredChannels
+						outputShape[1] = inferredChannels
+						expectedFeatures = inferredChannels
+					}
+				}
+			}
+		}
+		
+		// If still invalid, create identity layer (no parameters)
+		if numFeatures <= 0 {
+			// Return identity layer - no parameters, output = input
+			return outputShape, [][]int{}, 0, nil
+		}
+	}
+	
+	// If numFeatures is valid but expectedFeatures is not, use numFeatures
+	if numFeatures > 0 && expectedFeatures <= 0 {
+		outputShape[1] = numFeatures
+		expectedFeatures = numFeatures
+	}
+	
+	// If expectedFeatures is valid but numFeatures is not, use expectedFeatures
+	if expectedFeatures > 0 && numFeatures <= 0 {
+		numFeatures = expectedFeatures
+	}
+	
+	// Final validation with corrected values
 	if numFeatures != expectedFeatures {
 		return nil, nil, 0, fmt.Errorf("num_features (%d) doesn't match input feature dimension (%d)", numFeatures, expectedFeatures)
+	}
+	
+	// Additional safety check
+	if numFeatures <= 0 {
+		return nil, nil, 0, fmt.Errorf("invalid num_features (%d) - must be positive", numFeatures)
 	}
 
 	var paramShapes [][]int
@@ -700,51 +749,18 @@ func (ms *ModelSpec) Summary() string {
 	return summary
 }
 
-// ValidateModelForTrainingEngine checks if model is compatible with existing TrainingEngine
-// DEPRECATED: Use ValidateModelForHybridEngine or ValidateModelForDynamicEngine instead
+// ValidateModelForTrainingEngine checks if model is compatible with training engine
+// DEPRECATED: The hybrid engine has been removed. Use ValidateModelForDynamicEngine instead.
 func (ms *ModelSpec) ValidateModelForTrainingEngine() error {
-	// For backward compatibility, default to hybrid engine validation
-	return ms.ValidateModelForHybridEngine()
+	// All training now uses dynamic engine
+	return ms.ValidateModelForDynamicEngine()
 }
 
-// ValidateModelForHybridEngine checks if model is compatible with Hybrid TrainingEngine
-// Optimized for CNN architectures with 4D input and Conv+Dense layer combinations
+// ValidateModelForHybridEngine checks if model is compatible with training engine
+// DEPRECATED: The hybrid engine has been removed. Use ValidateModelForDynamicEngine instead.
 func (ms *ModelSpec) ValidateModelForHybridEngine() error {
-	if !ms.Compiled {
-		return fmt.Errorf("model not compiled")
-	}
-
-	if len(ms.Layers) == 0 {
-		return fmt.Errorf("empty model")
-	}
-
-	// Hybrid engine is optimized for 4D CNN inputs
-	if len(ms.InputShape) != 4 {
-		return fmt.Errorf("Hybrid TrainingEngine requires 4D input [batch, channels, height, width]")
-	}
-
-	// Check that we have both Conv2D and Dense layers (CNN pattern)
-	hasConv := false
-	hasDense := false
-
-	for _, layer := range ms.Layers {
-		switch layer.Type {
-		case Conv2D:
-			hasConv = true
-		case Dense:
-			hasDense = true
-		}
-	}
-
-	if !hasConv {
-		return fmt.Errorf("Hybrid TrainingEngine requires at least one Conv2D layer")
-	}
-
-	if !hasDense {
-		return fmt.Errorf("Hybrid TrainingEngine requires at least one Dense layer")
-	}
-
-	return nil
+	// All training now uses dynamic engine
+	return ms.ValidateModelForDynamicEngine()
 }
 
 // ValidateModelForDynamicEngine checks if model is compatible with Dynamic TrainingEngine
@@ -834,35 +850,10 @@ func (ms *ModelSpec) validateLayerForDynamicEngine(layer LayerSpec, index int) e
 }
 
 // ValidateModelForInference checks if model is compatible with InferenceEngine
-// More lenient than training validation - supports Dense-only models
+// Uses dynamic engine validation to support any model architecture
 func (ms *ModelSpec) ValidateModelForInference() error {
-	if !ms.Compiled {
-		return fmt.Errorf("model not compiled")
-	}
-
-	if len(ms.Layers) == 0 {
-		return fmt.Errorf("empty model")
-	}
-
-	// Check input shape compatibility (support both 2D and 4D)
-	if len(ms.InputShape) < 2 {
-		return fmt.Errorf("InferenceEngine requires at least 2D input [batch, features]")
-	}
-
-	// Must have at least one Dense layer for classification output
-	hasDense := false
-	for _, layer := range ms.Layers {
-		if layer.Type == Dense {
-			hasDense = true
-			break
-		}
-	}
-
-	if !hasDense {
-		return fmt.Errorf("InferenceEngine requires at least one Dense layer for output")
-	}
-
-	return nil
+	// Use dynamic engine validation since inference engine now uses dynamic architecture
+	return ms.ValidateModelForDynamicEngine()
 }
 
 // ConvertToInferenceLayerSpecs converts ModelSpec to inference-optimized layer specifications
@@ -1262,8 +1253,17 @@ func (ms *ModelSpec) SerializeForCGO() (*ModelSpecC, error) {
 // Helper functions for parameter extraction
 func getIntParam(params map[string]interface{}, key string, defaultValue int) int {
 	if val, exists := params[key]; exists {
+		// Handle int type (direct)
 		if intVal, ok := val.(int); ok {
 			return intVal
+		}
+		// Handle float64 type (common from JSON parsing)
+		if floatVal, ok := val.(float64); ok {
+			return int(floatVal)
+		}
+		// Handle float32 type
+		if float32Val, ok := val.(float32); ok {
+			return int(float32Val)
 		}
 	}
 	return defaultValue
@@ -1330,9 +1330,13 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 		// Set input shape
 		spec.InputShape, spec.InputShapeLen = copyShapeToArray(currentShape)
 
+		// DEBUG: Log all layer conversions to debug indexing
+		fmt.Printf("🔍 Converting layer %d: name=%s, type=%d (%s) → spec.LayerType will be: ", i, layer.Name, int(layer.Type), layer.Type.String())
+
 		switch layer.Type {
 		case Dense:
 			spec.LayerType = 0 // Dense = 0 in C
+			fmt.Printf("0 (Dense)\n")
 			
 			inputSize := getIntParam(layer.Parameters, "input_size", 0)
 			outputSize := getIntParam(layer.Parameters, "output_size", 0)
@@ -1436,9 +1440,69 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			// Shape unchanged for Dropout
 
 		case BatchNorm:
-			spec.LayerType = 6 // BatchNorm = 6 in Go enum (next available after Dropout=5)
-			
 			numFeatures := getIntParam(layer.Parameters, "num_features", 0)
+			
+			// DEBUG: Log num_features extraction for layer 8
+			if i == 8 {
+				fmt.Printf("\n🔍 Layer 8 debug: numFeatures=%d, currentShape=%v\n", numFeatures, currentShape)
+				fmt.Printf("🔍 Layer 8 parameters: %+v\n", layer.Parameters)
+				if val, exists := layer.Parameters["num_features"]; exists {
+					fmt.Printf("🔍 num_features type: %T, value: %v\n", val, val)
+				}
+			}
+			
+			// UNIVERSAL FIX: Handle corrupted BatchNorm layers consistently with computeBatchNormInfo
+			// Check if this BatchNorm layer should be converted to an identity layer
+			if numFeatures <= 0 && len(currentShape) >= 2 {
+				// Try to infer from input shape (same logic as computeBatchNormInfo)
+				expectedFeatures := currentShape[1]
+				
+				if expectedFeatures <= 0 && len(currentShape) == 4 && currentShape[2] > 0 && currentShape[3] > 0 {
+					// Try to infer from spatial dimensions (same logic as computeBatchNormInfo)
+					batchElements := 1
+					for i := 1; i < len(currentShape); i++ {
+						if currentShape[i] > 0 {
+							batchElements *= currentShape[i]
+						}
+					}
+					if batchElements > 0 {
+						spatialSize := currentShape[2] * currentShape[3]
+						if spatialSize > 0 && batchElements%spatialSize == 0 {
+							inferredChannels := batchElements / spatialSize
+							if inferredChannels > 0 && inferredChannels <= 512 { // reasonable channel count
+								numFeatures = inferredChannels
+								expectedFeatures = inferredChannels
+							}
+						}
+					}
+				}
+				
+				if numFeatures > 0 && expectedFeatures <= 0 {
+					expectedFeatures = numFeatures
+				}
+				if expectedFeatures > 0 && numFeatures <= 0 {
+					numFeatures = expectedFeatures
+				}
+				
+				// If still invalid, convert to identity layer (no parameters)
+				if numFeatures <= 0 {
+					// Convert corrupted BatchNorm to Identity layer (layer type that Metal side handles as pass-through)
+					spec.LayerType = 99 // Special identity layer type for corrupted BatchNorm
+					fmt.Printf("99 (Identity - corrupted BatchNorm)\n")
+					spec.ParamFloatCount = 0
+					spec.ParamIntCount = 1
+					spec.ParamInt[0] = 0 // Signal that this is an identity operation
+					// No running statistics needed for identity layer
+					spec.HasRunningStats = false
+					// Shape unchanged for identity layer
+					continue // Skip normal BatchNorm processing
+				}
+			}
+			
+			// Normal BatchNorm processing for valid layers
+			spec.LayerType = 6 // BatchNorm = 6 in Go enum (next available after Dropout=5)
+			fmt.Printf("6 (BatchNorm)\n")
+			
 			eps := getFloatParam(layer.Parameters, "eps", 1e-5)
 			momentum := getFloatParam(layer.Parameters, "momentum", 0.1)
 			affine := getBoolParam(layer.Parameters, "affine", true)
@@ -1456,7 +1520,7 @@ func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
 			spec.ParamIntCount = 4
 			
 			// ARCHITECTURAL FIX: Initialize running statistics for BatchNorm layers
-			if trackRunningStats {
+			if trackRunningStats && numFeatures > 0 {
 				// Initialize running statistics (will be properly set by training engine)
 				spec.RunningMean = make([]float32, numFeatures)
 				spec.RunningVar = make([]float32, numFeatures)

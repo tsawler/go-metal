@@ -50,8 +50,7 @@ func main() {
 		BatchSize:        baseBatchSize,
 		LearningRate:     0.01,
 		OptimizerType:    cgo_bridge.Adam,
-		UseDynamicEngine: true,   // Use dynamic engine for dynamic batch support
-		UseHybridEngine:  false,
+		UseDynamicEngine: true,   // Dynamic engine is now the default and only option
 		Beta1:            0.9,
 		Beta2:            0.999,
 		WeightDecay:      0.0001,

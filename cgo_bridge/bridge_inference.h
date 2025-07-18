@@ -105,7 +105,7 @@ void* create_inference_engine_optimized(
 
 // Batch inference with single CGO call
 int execute_inference_batch_optimized(
-    void* engine,
+    uintptr_t engine,
     float* input_data,
     int* input_shape,
     int input_shape_len,
@@ -118,7 +118,7 @@ int execute_inference_batch_optimized(
 
 // Single inference call
 int execute_inference_single_optimized(
-    void* engine,
+    uintptr_t engine,
     float* input_data,
     int* input_shape,
     int input_shape_len,

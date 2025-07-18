@@ -51,7 +51,7 @@ func runTrainingWithProgress() error {
 		BatchSize:       32,
 		LearningRate:    0.001,
 		OptimizerType:   cgo_bridge.Adam,
-		UseHybridEngine: true,
+		UseDynamicEngine: true, // Dynamic engine is now the default
 		Beta1:           0.9,
 		Beta2:           0.999,
 		Epsilon:         1e-8,

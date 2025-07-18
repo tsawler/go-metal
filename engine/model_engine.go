@@ -28,7 +28,7 @@ type ModelTrainingEngine struct {
 	parameterTensors []*memory.Tensor
 	gradientTensors  []*memory.Tensor // Pre-allocated gradient tensors for performance
 	compiledForModel bool
-	isDynamicEngine  bool // True if using dynamic graph engine, false if using hybrid fallback
+	isDynamicEngine  bool // Always true for dynamic graph engine
 }
 
 // NewModelTrainingEngineDynamic creates a model-based training engine with dynamic graph support
@@ -359,7 +359,7 @@ func NewModelTrainingEngineDynamic(
 		parameterTensors:  paramTensors,
 		gradientTensors:   gradTensors,
 		compiledForModel:  true, // Dynamic engine compiles during creation
-		isDynamicEngine:   true, // Flag to identify dynamic engines
+		isDynamicEngine:   true, // Always dynamic engine
 	}
 	
 	// CRITICAL FIX: Initialize parameters with proper values for gradient flow
@@ -372,69 +372,14 @@ func NewModelTrainingEngineDynamic(
 	return modelEngine, nil
 }
 
-// NewModelTrainingEngine creates a model-based training engine
-// This integrates with the existing high-performance TrainingEngine architecture
+// NewModelTrainingEngine creates a model-based training engine using dynamic engine by default
+// This integrates with the high-performance dynamic TrainingEngine architecture
 func NewModelTrainingEngine(
 	modelSpec *layers.ModelSpec,
 	config cgo_bridge.TrainingConfig,
 ) (*ModelTrainingEngine, error) {
-	// Validate model compatibility with Hybrid TrainingEngine
-	if err := modelSpec.ValidateModelForHybridEngine(); err != nil {
-		return nil, fmt.Errorf("model validation failed: %v", err)
-	}
-	
-	// Create model configuration from model specification
-	modelConfig, err := createModelConfigFromSpec(modelSpec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create model configuration: %v", err)
-	}
-	
-	// DEBUG: Log the generated model configuration
-	fmt.Printf("🔧 Generated Model Configuration:\n")
-	fmt.Printf("  Input: %dx%dx%d (batch: %d)\n", modelConfig.InputChannels, modelConfig.InputHeight, modelConfig.InputWidth, modelConfig.BatchSize)
-	fmt.Printf("  Conv1: %d filters, %dx%d → %dx%dx%d\n", modelConfig.Conv1OutChannels, modelConfig.Conv1KernelSize, modelConfig.Conv1KernelSize, 
-		modelConfig.Conv1OutChannels, modelConfig.Conv1OutHeight, modelConfig.Conv1OutWidth)
-	fmt.Printf("  Conv2: %d filters, %dx%d → %dx%dx%d\n", modelConfig.Conv2OutChannels, modelConfig.Conv2KernelSize, modelConfig.Conv2KernelSize,
-		modelConfig.Conv2OutChannels, modelConfig.Conv2OutHeight, modelConfig.Conv2OutWidth)
-	fmt.Printf("  Conv3: %d filters, %dx%d → %dx%dx%d\n", modelConfig.Conv3OutChannels, modelConfig.Conv3KernelSize, modelConfig.Conv3KernelSize,
-		modelConfig.Conv3OutChannels, modelConfig.Conv3OutHeight, modelConfig.Conv3OutWidth)
-	fmt.Printf("  FC1: %d → %d\n", modelConfig.FC1InputSize, modelConfig.FC1OutputSize)
-	fmt.Printf("  FC2: %d → %d\n", modelConfig.FC1OutputSize, modelConfig.FC2OutputSize)
-	
-	// Create base training engine using proven hybrid approach
-	baseEngine, err := NewMPSTrainingEngineHybrid(config, modelConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create base training engine: %v", err)
-	}
-	
-	// Create parameter tensors for the model
-	paramTensors, err := modelSpec.CreateParameterTensors()
-	if err != nil {
-		baseEngine.Cleanup()
-		return nil, fmt.Errorf("failed to create parameter tensors: %v", err)
-	}
-	
-	modelEngine := &ModelTrainingEngine{
-		MPSTrainingEngine: baseEngine,
-		modelSpec:         modelSpec,
-		parameterTensors:  paramTensors,
-		compiledForModel:  false,
-		isDynamicEngine:   false, // Using hybrid fallback engine
-	}
-	
-	// Initialize parameters with proper values
-	if err := modelEngine.initializeModelParameters(); err != nil {
-		modelEngine.Cleanup()
-		return nil, fmt.Errorf("failed to initialize model parameters: %v", err)
-	}
-	
-	// Compile model for execution (configure the TrainingEngine)
-	if err := modelEngine.compileForExecution(); err != nil {
-		modelEngine.Cleanup()
-		return nil, fmt.Errorf("failed to compile model for execution: %v", err)
-	}
-	
-	return modelEngine, nil
+	// Use dynamic engine by default for universal architecture support
+	return NewModelTrainingEngineDynamic(modelSpec, config)
 }
 
 // NewModelTrainingEngineWithAdam creates a model-based training engine with Adam optimizer
@@ -443,57 +388,8 @@ func NewModelTrainingEngineWithAdam(
 	config cgo_bridge.TrainingConfig,
 	adamConfig map[string]interface{},
 ) (*ModelTrainingEngine, error) {
-	// Validate model compatibility with Hybrid TrainingEngine
-	if err := modelSpec.ValidateModelForHybridEngine(); err != nil {
-		return nil, fmt.Errorf("model validation failed: %v", err)
-	}
-	
-	// Convert adamConfig to proper AdamConfig struct
-	optAdamConfig := optimizer.AdamConfig{
-		LearningRate: config.LearningRate,
-		Beta1:        config.Beta1,
-		Beta2:        config.Beta2,
-		Epsilon:      config.Epsilon,
-		WeightDecay:  config.WeightDecay,
-	}
-	
-	// Get only FC layer parameter shapes for Adam (hybrid architecture)
-	fcParameterShapes := getFCParameterShapes(modelSpec)
-	
-	// Create base training engine with Adam for FC parameters only
-	baseEngine, err := NewMPSTrainingEngineWithAdam(config, optAdamConfig, fcParameterShapes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Adam training engine: %v", err)
-	}
-	
-	// Create parameter tensors for the model
-	paramTensors, err := modelSpec.CreateParameterTensors()
-	if err != nil {
-		baseEngine.Cleanup()
-		return nil, fmt.Errorf("failed to create parameter tensors: %v", err)
-	}
-	
-	modelEngine := &ModelTrainingEngine{
-		MPSTrainingEngine: baseEngine,
-		modelSpec:         modelSpec,
-		parameterTensors:  paramTensors,
-		compiledForModel:  false,
-		isDynamicEngine:   false, // Using hybrid fallback engine
-	}
-	
-	// Initialize parameters with proper values
-	if err := modelEngine.initializeModelParameters(); err != nil {
-		modelEngine.Cleanup()
-		return nil, fmt.Errorf("failed to initialize model parameters: %v", err)
-	}
-	
-	// Compile model for execution
-	if err := modelEngine.compileForExecution(); err != nil {
-		modelEngine.Cleanup()
-		return nil, fmt.Errorf("failed to compile model for execution: %v", err)
-	}
-	
-	return modelEngine, nil
+	// Create dynamic engine with Adam optimizer
+	return NewModelTrainingEngineDynamic(modelSpec, config)
 }
 
 // initializeModelParameters initializes all model parameters with appropriate values
@@ -540,7 +436,12 @@ func (mte *ModelTrainingEngine) initializeDenseParameters(
 ) error {
 	inputSize, ok := layerSpec.Parameters["input_size"].(int)
 	if !ok {
-		return fmt.Errorf("missing input_size parameter")
+		// Try float64 conversion (common with JSON deserialization)
+		if inputSizeFloat, ok := layerSpec.Parameters["input_size"].(float64); ok {
+			inputSize = int(inputSizeFloat)
+		} else {
+			return fmt.Errorf("missing input_size parameter")
+		}
 	}
 	
 	useBias := true
@@ -579,7 +480,10 @@ func (mte *ModelTrainingEngine) initializeBatchNormParameters(
 	// Get BatchNorm parameters - just validate num_features exists
 	_, ok := layerSpec.Parameters["num_features"].(int)
 	if !ok {
-		return fmt.Errorf("missing num_features parameter")
+		// Try float64 conversion (common with JSON deserialization)
+		if _, ok := layerSpec.Parameters["num_features"].(float64); !ok {
+			return fmt.Errorf("missing num_features parameter")
+		}
 	}
 	
 	affine := true
@@ -617,12 +521,22 @@ func (mte *ModelTrainingEngine) initializeConv2DParameters(
 ) error {
 	inputChannels, ok := layerSpec.Parameters["input_channels"].(int)
 	if !ok {
-		return fmt.Errorf("missing input_channels parameter")
+		// Try float64 conversion (common with JSON deserialization)
+		if inputChannelsFloat, ok := layerSpec.Parameters["input_channels"].(float64); ok {
+			inputChannels = int(inputChannelsFloat)
+		} else {
+			return fmt.Errorf("missing input_channels parameter")
+		}
 	}
 	
 	kernelSize, ok := layerSpec.Parameters["kernel_size"].(int)
 	if !ok {
-		return fmt.Errorf("missing kernel_size parameter")
+		// Try float64 conversion (common with JSON deserialization)
+		if kernelSizeFloat, ok := layerSpec.Parameters["kernel_size"].(float64); ok {
+			kernelSize = int(kernelSizeFloat)
+		} else {
+			return fmt.Errorf("missing kernel_size parameter")
+		}
 	}
 	
 	useBias := true
@@ -723,24 +637,8 @@ func (mte *ModelTrainingEngine) initializeNormal(tensor *memory.Tensor, mean, st
 }
 
 // compileForExecution configures the TrainingEngine for this specific model
-// This method adapts to any model architecture using dynamic or hybrid engines
+// Dynamic engines support any model architecture
 func (mte *ModelTrainingEngine) compileForExecution() error {
-	// Use dynamic architecture-aware compilation based on engine type
-	if mte.isDynamicEngine {
-		// Dynamic Engine: Supports any model architecture
-		// The engine is already configured with the model specification
-		// through the dynamic layer specs in the constructor
-		return mte.compileForDynamicEngine()
-	} else {
-		// Hybrid Engine: Optimized for CNN patterns but with validation
-		// Validate compatibility and configure for hybrid execution
-		return mte.compileForHybridEngine()
-	}
-}
-
-// compileForDynamicEngine configures the engine for any model architecture
-// Dynamic engines are pre-configured during creation and support arbitrary architectures
-func (mte *ModelTrainingEngine) compileForDynamicEngine() error {
 	// Dynamic engines are already configured with model specifications during creation
 	// We just need to validate that the model parameters match the engine setup
 	
@@ -761,56 +659,8 @@ func (mte *ModelTrainingEngine) compileForDynamicEngine() error {
 	return nil
 }
 
-// compileForHybridEngine configures the engine for optimized CNN architectures
-// Hybrid engines require specific patterns for optimal performance
-func (mte *ModelTrainingEngine) compileForHybridEngine() error {
-	// Validate that the model is compatible with hybrid CNN optimizations
-	if err := mte.validateHybridCNNCompatibility(); err != nil {
-		return fmt.Errorf("model not compatible with hybrid CNN engine: %v", err)
-	}
-	
-	// Additional hybrid engine setup could go here
-	// For now, the validation is sufficient
-	mte.compiledForModel = true
-	return nil
-}
 
-// validateHybridCNNCompatibility ensures model works with existing TrainingEngine
-func (mte *ModelTrainingEngine) validateHybridCNNCompatibility() error {
-	// The existing TrainingEngine expects:
-	// 1. Conv2D layer (handled by MPS)
-	// 2. ReLU activation
-	// 3. Dense layer (handled by MPSGraph)
-	// 4. Softmax/Loss (handled by MPSGraph)
-	
-	modelLayerSpecs := mte.modelSpec.Layers
-	if len(modelLayerSpecs) < 3 {
-		return fmt.Errorf("hybrid CNN requires at least 3 layers (Conv2D, activation, Dense)")
-	}
-	
-	// Check for required layer types
-	hasConv := false
-	hasDense := false
-	
-	for _, layer := range modelLayerSpecs {
-		switch layer.Type {
-		case layers.Conv2D:
-			hasConv = true
-		case layers.Dense:
-			hasDense = true
-		}
-	}
-	
-	if !hasConv {
-		return fmt.Errorf("hybrid CNN requires Conv2D layer")
-	}
-	
-	if !hasDense {
-		return fmt.Errorf("hybrid CNN requires Dense layer")
-	}
-	
-	return nil
-}
+
 
 // ExecuteModelTrainingStep executes a complete model training step
 // This maintains the single-CGO-call principle while supporting flexible layer models
@@ -823,25 +673,8 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStep(
 		return 0, fmt.Errorf("model not compiled for execution")
 	}
 	
-	if mte.isDynamicEngine {
-		// Use SGD implementation that matches Adam's resource management approach
-		return mte.executeSGDStepDynamicWithGradients(inputTensor, labelTensor, learningRate, mte.gradientTensors)
-	} else {
-		// Use hybrid engine execution path for legacy compatibility
-		// For hybrid CNN, we need the FC layer parameters (conv parameters are built-in)
-		fcParameters := mte.getFCLayerParameters()
-		if len(fcParameters) == 0 {
-			return 0, fmt.Errorf("no FC layer parameters found")
-		}
-		
-		// Execute using proven single-CGO-call architecture
-		return mte.MPSTrainingEngine.ExecuteStepHybridFull(
-			inputTensor,
-			labelTensor,
-			fcParameters,
-			learningRate,
-		)
-	}
+	// Use dynamic engine (always available)
+	return mte.executeSGDStepDynamicWithGradients(inputTensor, labelTensor, learningRate, mte.gradientTensors)
 }
 
 // ExecuteModelTrainingStepWithAdam executes model training with Adam optimizer
@@ -853,23 +686,8 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdam(
 		return 0, fmt.Errorf("model not compiled for execution")
 	}
 	
-	if mte.isDynamicEngine {
-		// Dynamic engine uses external Adam optimization with gradient extraction
-		return mte.executeAdamStepDynamic(inputTensor, labelTensor)
-	} else {
-		// Hybrid fallback engine uses built-in Adam optimization
-		fcParameters := mte.getFCLayerParameters()
-		if len(fcParameters) == 0 {
-			return 0, fmt.Errorf("no FC layer parameters found")
-		}
-		
-		// Execute using proven Adam architecture
-		return mte.MPSTrainingEngine.ExecuteStepHybridFullWithAdam(
-			inputTensor,
-			labelTensor,
-			fcParameters,
-		)
-	}
+	// Use dynamic engine (always available)
+	return mte.executeAdamStepDynamic(inputTensor, labelTensor)
 }
 
 // executeAdamStepDynamic executes Adam optimization for dynamic engines using forward+backward+Adam pattern
@@ -1032,13 +850,8 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithLBFGS(
 		return 0, fmt.Errorf("model not compiled for execution")
 	}
 	
-	if mte.isDynamicEngine {
-		// Dynamic engine uses external L-BFGS optimization with gradient extraction
-		return mte.executeLBFGSStepDynamic(inputTensor, labelTensor)
-	} else {
-		// Hybrid fallback engine - L-BFGS not yet supported for hybrid
-		return 0, fmt.Errorf("L-BFGS not yet supported for hybrid engine")
-	}
+	// Dynamic engine uses external L-BFGS optimization with gradient extraction
+	return mte.executeLBFGSStepDynamic(inputTensor, labelTensor)
 }
 
 // executeLBFGSStepDynamic executes L-BFGS optimization for dynamic engines
@@ -1276,13 +1089,8 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdaGrad(
 		return 0, fmt.Errorf("model not compiled for execution")
 	}
 	
-	if mte.isDynamicEngine {
-		// Dynamic engine uses external AdaGrad optimization with gradient extraction
-		return mte.executeAdaGradStepDynamic(inputTensor, labelTensor)
-	} else {
-		// Hybrid fallback engine - AdaGrad not yet supported for hybrid
-		return 0, fmt.Errorf("AdaGrad not yet supported for hybrid engine")
-	}
+	// Dynamic engine uses external AdaGrad optimization with gradient extraction
+	return mte.executeAdaGradStepDynamic(inputTensor, labelTensor)
 }
 
 // executeAdaGradStepDynamic executes AdaGrad optimization for dynamic engines using forward+backward+AdaGrad pattern
@@ -1434,13 +1242,8 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithAdaDelta(
 		return 0, fmt.Errorf("model not compiled for execution")
 	}
 	
-	if mte.isDynamicEngine {
-		// Dynamic engine uses external AdaDelta optimization with gradient extraction
-		return mte.executeAdaDeltaStepDynamic(inputTensor, labelTensor)
-	} else {
-		// Hybrid fallback engine - AdaDelta not yet supported for hybrid
-		return 0, fmt.Errorf("AdaDelta not yet supported for hybrid engine")
-	}
+	// Dynamic engine uses external AdaDelta optimization with gradient extraction
+	return mte.executeAdaDeltaStepDynamic(inputTensor, labelTensor)
 }
 
 // executeAdaDeltaStepDynamic executes AdaDelta optimization for dynamic engines using forward+backward+AdaDelta pattern
@@ -1588,77 +1391,7 @@ func (mte *ModelTrainingEngine) getAllParameterTensors() []*memory.Tensor {
 	return mte.parameterTensors
 }
 
-// getFCLayerParameters extracts ALL fully connected layer parameters for hybrid execution
-func (mte *ModelTrainingEngine) getFCLayerParameters() []*memory.Tensor {
-	var fcParams []*memory.Tensor
-	paramIndex := 0
-	
-	// Extract ALL Dense layer parameters (FC1, FC2, etc.)
-	for _, layerSpec := range mte.modelSpec.Layers {
-		switch layerSpec.Type {
-		case layers.Dense:
-			// Dense layer has weight + optional bias
-			fcParams = append(fcParams, mte.parameterTensors[paramIndex]) // weights
-			paramIndex++
-			
-			if useBias, exists := layerSpec.Parameters["use_bias"].(bool); exists && useBias {
-				fcParams = append(fcParams, mte.parameterTensors[paramIndex]) // bias
-				paramIndex++
-			}
-			
-			// Continue to find more Dense layers (don't return early)
-			
-		case layers.Conv2D:
-			// Skip Conv2D parameters (handled by MPS)
-			paramIndex++ // weights
-			if useBias, exists := layerSpec.Parameters["use_bias"].(bool); exists && useBias {
-				paramIndex++ // bias
-			}
-			
-		case layers.ReLU, layers.Softmax:
-			// No parameters for activation layers
-			continue
-		}
-	}
-	
-	return fcParams
-}
 
-// getFCParameterShapes extracts the parameter shapes for ALL FC layers
-func getFCParameterShapes(modelSpec *layers.ModelSpec) [][]int {
-	var fcShapes [][]int
-	paramIndex := 0
-	
-	// Extract ALL Dense layer parameter shapes (FC1, FC2, etc.)
-	for _, layerSpec := range modelSpec.Layers {
-		switch layerSpec.Type {
-		case layers.Dense:
-			// Dense layer has weight + optional bias
-			fcShapes = append(fcShapes, modelSpec.ParameterShapes[paramIndex]) // weights
-			paramIndex++
-			
-			if useBias, exists := layerSpec.Parameters["use_bias"].(bool); exists && useBias {
-				fcShapes = append(fcShapes, modelSpec.ParameterShapes[paramIndex]) // bias
-				paramIndex++
-			}
-			
-			// Continue to find more Dense layers (don't return early)
-			
-		case layers.Conv2D:
-			// Skip Conv2D parameters (handled by MPS)
-			paramIndex++ // weights
-			if useBias, exists := layerSpec.Parameters["use_bias"].(bool); exists && useBias {
-				paramIndex++ // bias
-			}
-			
-		case layers.ReLU, layers.Softmax:
-			// No parameters for activation layers
-			continue
-		}
-	}
-	
-	return fcShapes
-}
 
 // GetModelSpec returns the model specification
 func (mte *ModelTrainingEngine) GetModelSpec() *layers.ModelSpec {
@@ -1672,7 +1405,7 @@ func (mte *ModelTrainingEngine) GetParameterTensors() []*memory.Tensor {
 
 // IsDynamicEngine returns whether this is a dynamic engine
 func (mte *ModelTrainingEngine) IsDynamicEngine() bool {
-	return mte.isDynamicEngine
+	return true // Always dynamic engine
 }
 
 // GetModelSummary returns a human-readable model summary
@@ -1737,14 +1470,13 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatched(
 		return nil, fmt.Errorf("failed to copy label data to GPU: %v", err)
 	}
 	
-	// Execute training step based on engine type
+	// Execute training step with dynamic engine
 	var loss float32
-	if mte.isDynamicEngine {
-		// Choose dynamic optimizer based on configuration
-		switch mte.MPSTrainingEngine.config.OptimizerType {
-		case cgo_bridge.Adam:
-			loss, err = mte.executeAdamStepDynamic(inputTensor, labelTensor)
-		case cgo_bridge.AdaGrad:
+	// Choose dynamic optimizer based on configuration
+	switch mte.MPSTrainingEngine.config.OptimizerType {
+	case cgo_bridge.Adam:
+		loss, err = mte.executeAdamStepDynamic(inputTensor, labelTensor)
+	case cgo_bridge.AdaGrad:
 			loss, err = mte.executeAdaGradStepDynamic(inputTensor, labelTensor)
 		case cgo_bridge.AdaDelta:
 			loss, err = mte.executeAdaDeltaStepDynamic(inputTensor, labelTensor)
@@ -1754,23 +1486,6 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatched(
 			// For other optimizers, fall back to Adam for now
 			loss, err = mte.executeAdamStepDynamic(inputTensor, labelTensor)
 		}
-	} else {
-		// Check configured optimizer type for hybrid engine
-		if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Adam {
-			loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
-		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.LBFGS {
-			loss, err = mte.ExecuteModelTrainingStepWithLBFGS(inputTensor, labelTensor)
-		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.AdaGrad {
-			loss, err = mte.ExecuteModelTrainingStepWithAdaGrad(inputTensor, labelTensor)
-		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.AdaDelta {
-			loss, err = mte.ExecuteModelTrainingStepWithAdaDelta(inputTensor, labelTensor)
-		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Nadam {
-			loss, err = mte.ExecuteModelTrainingStepWithNadam(inputTensor, labelTensor)
-		} else {
-			// SGD optimizer - use regular training step with learning rate
-			loss, err = mte.ExecuteModelTrainingStep(inputTensor, labelTensor, mte.MPSTrainingEngine.config.LearningRate)
-		}
-	}
 	
 	if err != nil {
 		return nil, fmt.Errorf("training step failed: %v", err)
@@ -1858,14 +1573,13 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGra
 		return nil, fmt.Errorf("failed to copy label data to persistent GPU buffer: %v", err)
 	}
 	
-	// Execute training step based on engine type and optimizer
+	// Execute training step with dynamic engine and optimizer
 	var loss float32
-	if mte.isDynamicEngine {
-		// Choose dynamic optimizer based on configuration
-		switch mte.MPSTrainingEngine.config.OptimizerType {
-		case cgo_bridge.Adam:
-			loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
-		case cgo_bridge.AdaGrad:
+	// Choose dynamic optimizer based on configuration
+	switch mte.MPSTrainingEngine.config.OptimizerType {
+	case cgo_bridge.Adam:
+		loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+	case cgo_bridge.AdaGrad:
 			loss, err = mte.executeAdaGradStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
 		case cgo_bridge.AdaDelta:
 			loss, err = mte.executeAdaDeltaStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
@@ -1875,23 +1589,6 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGra
 			// For other optimizers, fall back to Adam for now
 			loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
 		}
-	} else {
-		// Check configured optimizer type for hybrid engine
-		if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Adam {
-			loss, err = mte.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
-		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.LBFGS {
-			loss, err = mte.ExecuteModelTrainingStepWithLBFGS(inputTensor, labelTensor)
-		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.AdaGrad {
-			loss, err = mte.ExecuteModelTrainingStepWithAdaGrad(inputTensor, labelTensor)
-		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.AdaDelta {
-			loss, err = mte.ExecuteModelTrainingStepWithAdaDelta(inputTensor, labelTensor)
-		} else if mte.MPSTrainingEngine.config.OptimizerType == cgo_bridge.Nadam {
-			loss, err = mte.ExecuteModelTrainingStepWithNadam(inputTensor, labelTensor)
-		} else {
-			// SGD optimizer - use regular training step with learning rate
-			loss, err = mte.ExecuteModelTrainingStep(inputTensor, labelTensor, mte.MPSTrainingEngine.config.LearningRate)
-		}
-	}
 	
 	if err != nil {
 		return nil, fmt.Errorf("persistent training step failed: %v", err)
@@ -1999,36 +1696,18 @@ func (mte *ModelTrainingEngine) ExecuteInference(
 		return nil, fmt.Errorf("invalid batch size: %d", batchSize)
 	}
 	
-	// Extract parameters based on engine type
-	var weightBuffers []unsafe.Pointer
-	if mte.isDynamicEngine {
-		// Dynamic engines need ALL parameters in order
-		allParameters := mte.getAllParameterTensors()
-		if len(allParameters) == 0 {
-			return nil, fmt.Errorf("no parameters found for dynamic inference")
+	// Extract all parameters for dynamic engine
+	allParameters := mte.getAllParameterTensors()
+	if len(allParameters) == 0 {
+		return nil, fmt.Errorf("no parameters found for inference")
+	}
+	
+	weightBuffers := make([]unsafe.Pointer, len(allParameters))
+	for i, tensor := range allParameters {
+		if tensor == nil {
+			return nil, fmt.Errorf("parameter tensor %d is nil", i)
 		}
-		
-		weightBuffers = make([]unsafe.Pointer, len(allParameters))
-		for i, tensor := range allParameters {
-			if tensor == nil {
-				return nil, fmt.Errorf("parameter tensor %d is nil", i)
-			}
-			weightBuffers[i] = tensor.MetalBuffer()
-		}
-	} else {
-		// Hybrid engines only need FC layer parameters
-		fcParameters := mte.getFCLayerParameters()
-		if len(fcParameters) == 0 {
-			return nil, fmt.Errorf("no FC layer parameters found for inference")
-		}
-		
-		weightBuffers = make([]unsafe.Pointer, len(fcParameters))
-		for i, tensor := range fcParameters {
-			if tensor == nil {
-				return nil, fmt.Errorf("FC parameter tensor %d is nil", i)
-			}
-			weightBuffers[i] = tensor.MetalBuffer()
-		}
+		weightBuffers[i] = tensor.MetalBuffer()
 	}
 	
 	// Calculate output dimensions from model spec
@@ -2045,7 +1724,7 @@ func (mte *ModelTrainingEngine) ExecuteInference(
 		weightBuffers,
 		batchSize,
 		numClasses,
-		mte.isDynamicEngine, // Pass correct dynamic engine flag
+		true, // Always use dynamic engine
 	)
 	
 	if err != nil {
@@ -2184,13 +1863,8 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithNadam(
 	labelTensor *memory.Tensor,
 ) (float32, error) {
 	
-	if mte.isDynamicEngine {
-		// Dynamic engine uses external Nadam optimization with gradient extraction
-		return mte.executeNadamStepDynamic(inputTensor, labelTensor)
-	} else {
-		// Hybrid fallback engine - Nadam not yet supported for hybrid
-		return 0, fmt.Errorf("Nadam not yet supported for hybrid engine")
-	}
+	// Dynamic engine uses external Nadam optimization with gradient extraction
+	return mte.executeNadamStepDynamic(inputTensor, labelTensor)
 }
 
 // executeNadamStepDynamic executes Nadam optimization for dynamic engines using forward+backward+Nadam pattern

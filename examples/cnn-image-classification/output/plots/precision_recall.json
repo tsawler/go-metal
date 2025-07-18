@@ -1,0 +1,73 @@
+{
+  "plot_type": "precision_recall",
+  "title": "Precision-Recall Curve - Model",
+  "timestamp": "2025-07-17T08:48:16.428244-03:00",
+  "model_name": "Model",
+  "series": [
+    {
+      "name": "Precision-Recall Curve",
+      "type": "line",
+      "data": [
+        {
+          "x": 0,
+          "y": 1
+        },
+        {
+          "x": 0.029411764705882353,
+          "y": 1
+        },
+        {
+          "x": 0.29411764705882354,
+          "y": 0.9090909090909091
+        },
+        {
+          "x": 0.47058823529411764,
+          "y": 0.7619047619047619
+        },
+        {
+          "x": 0.6176470588235294,
+          "y": 0.6774193548387096
+        },
+        {
+          "x": 0.7058823529411765,
+          "y": 0.5853658536585366
+        },
+        {
+          "x": 0.8235294117647058,
+          "y": 0.5490196078431373
+        },
+        {
+          "x": 0.9117647058823529,
+          "y": 0.5081967213114754
+        },
+        {
+          "x": 0.9411764705882353,
+          "y": 0.4507042253521127
+        },
+        {
+          "x": 1,
+          "y": 0.44155844155844154
+        },
+        {
+          "x": 1,
+          "y": 0.425
+        }
+      ],
+      "style": {
+        "color": "#4ECDC4",
+        "line_width": 2
+      }
+    }
+  ],
+  "config": {
+    "x_axis_label": "Recall",
+    "y_axis_label": "Precision",
+    "x_axis_scale": "linear",
+    "y_axis_scale": "linear",
+    "show_legend": true,
+    "show_grid": true,
+    "width": 600,
+    "height": 600,
+    "interactive": true
+  }
+}

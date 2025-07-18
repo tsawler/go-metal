@@ -19,7 +19,9 @@ BatchTrainer provides a higher-level interface for batch training
 ```go
 func NewBatchTrainer(config cgo_bridge.TrainingConfig, batchSize int) (*BatchTrainer, error)
 ```
-NewBatchTrainer creates a new batch trainer
+NewBatchTrainer creates a new batch trainer DEPRECATED: Use
+NewModelTrainingEngineDynamic with proper layer specifications instead. This
+function is kept for backward compatibility but should not be used in new code.
 
 #### func  NewBatchTrainerConstantWeights
 
@@ -27,14 +29,9 @@ NewBatchTrainer creates a new batch trainer
 func NewBatchTrainerConstantWeights(config cgo_bridge.TrainingConfig, batchSize int) (*BatchTrainer, error)
 ```
 NewBatchTrainerConstantWeights creates a new batch trainer with constant weights
-
-#### func  NewBatchTrainerHybrid
-
-```go
-func NewBatchTrainerHybrid(config cgo_bridge.TrainingConfig, batchSize int) (*BatchTrainer, error)
-```
-NewBatchTrainerHybrid creates a new batch trainer with hybrid MPS/MPSGraph
-approach
+DEPRECATED: Use NewModelTrainingEngineDynamic with proper layer specifications
+instead. This function is kept for backward compatibility but should not be used
+in new code.
 
 #### func (*BatchTrainer) Cleanup
 
@@ -61,30 +58,6 @@ func (bt *BatchTrainer) TrainBatch(
 ```
 TrainBatch trains on a single batch
 
-#### func (*BatchTrainer) TrainBatchHybrid
-
-```go
-func (bt *BatchTrainer) TrainBatchHybrid(
-	inputTensor *memory.Tensor,
-	labelTensor *memory.Tensor,
-	weightTensors []*memory.Tensor,
-) (*TrainingStep, error)
-```
-TrainBatchHybrid trains on a single batch using hybrid MPS/MPSGraph approach
-
-#### func (*BatchTrainer) TrainBatchHybridFull
-
-```go
-func (bt *BatchTrainer) TrainBatchHybridFull(
-	inputTensor *memory.Tensor,
-	labelTensor *memory.Tensor,
-	weightTensors []*memory.Tensor,
-	learningRate float32,
-) (*TrainingStep, error)
-```
-TrainBatchHybridFull trains on a single batch using hybrid MPS/MPSGraph approach
-with full training loop
-
 #### type BatchedTrainingResult
 
 ```go
@@ -105,7 +78,8 @@ type MPSInferenceEngine struct {
 ```
 
 MPSInferenceEngine handles inference execution using MPSGraph Optimized for
-forward-pass only without loss computation or gradients
+forward-pass only without loss computation or gradients Works with any model
+architecture supported by the dynamic training engine
 
 #### func  NewMPSInferenceEngine
 
@@ -135,7 +109,9 @@ MPSTrainingEngine handles training execution using MPSGraph
 ```go
 func NewMPSTrainingEngine(config cgo_bridge.TrainingConfig) (*MPSTrainingEngine, error)
 ```
-NewMPSTrainingEngine creates a new training engine
+NewMPSTrainingEngine creates a new training engine DEPRECATED: Use
+NewModelTrainingEngineDynamic with proper layer specifications instead. This
+function is kept for backward compatibility but should not be used in new code.
 
 #### func  NewMPSTrainingEngineConstantWeights
 
@@ -143,25 +119,9 @@ NewMPSTrainingEngine creates a new training engine
 func NewMPSTrainingEngineConstantWeights(config cgo_bridge.TrainingConfig) (*MPSTrainingEngine, error)
 ```
 NewMPSTrainingEngineConstantWeights creates a new training engine with constant
-weights This avoids the MPSGraph isStaticMPSType assertion issue with
-convolution operations
-
-#### func  NewMPSTrainingEngineHybrid
-
-```go
-func NewMPSTrainingEngineHybrid(config cgo_bridge.TrainingConfig, modelConfig cgo_bridge.ModelConfig) (*MPSTrainingEngine, error)
-```
-NewMPSTrainingEngineHybrid creates a new hybrid MPS/MPSGraph training engine
-This uses MPS for convolution and MPSGraph for other operations, avoiding the
-assertion issue
-
-#### func  NewMPSTrainingEngineWithAdam
-
-```go
-func NewMPSTrainingEngineWithAdam(config cgo_bridge.TrainingConfig, adamConfig optimizer.AdamConfig, weightShapes [][]int) (*MPSTrainingEngine, error)
-```
-NewMPSTrainingEngineWithAdam creates a new hybrid training engine with Adam
-optimizer
+weights DEPRECATED: Use NewModelTrainingEngineDynamic with proper layer
+specifications instead. This function is kept for backward compatibility but
+should not be used in new code.
 
 #### func (*MPSTrainingEngine) Cleanup
 
@@ -180,44 +140,6 @@ func (e *MPSTrainingEngine) ExecuteStep(
 ) (float32, error)
 ```
 ExecuteStep executes a complete training step
-
-#### func (*MPSTrainingEngine) ExecuteStepHybrid
-
-```go
-func (e *MPSTrainingEngine) ExecuteStepHybrid(
-	inputTensor *memory.Tensor,
-	labelTensor *memory.Tensor,
-	weightTensors []*memory.Tensor,
-) (float32, error)
-```
-ExecuteStepHybrid executes a complete training step using hybrid MPS/MPSGraph
-approach
-
-#### func (*MPSTrainingEngine) ExecuteStepHybridFull
-
-```go
-func (e *MPSTrainingEngine) ExecuteStepHybridFull(
-	inputTensor *memory.Tensor,
-	labelTensor *memory.Tensor,
-	weightTensors []*memory.Tensor,
-	learningRate float32,
-) (float32, error)
-```
-ExecuteStepHybridFull executes a complete training step with backward pass using
-hybrid MPS/MPSGraph approach
-
-#### func (*MPSTrainingEngine) ExecuteStepHybridFullWithAdam
-
-```go
-func (e *MPSTrainingEngine) ExecuteStepHybridFullWithAdam(
-	inputTensor *memory.Tensor,
-	labelTensor *memory.Tensor,
-	weightTensors []*memory.Tensor,
-) (float32, error)
-```
-ExecuteStepHybridFullWithAdam executes a complete training step with Adam
-optimizer This performs forward pass, backward pass, and Adam optimization in
-one call
 
 #### func (*MPSTrainingEngine) ExecuteStepWithPrecomputedGradients
 
@@ -285,7 +207,20 @@ func NewModelInferenceEngine(
 	config cgo_bridge.InferenceConfig,
 ) (*ModelInferenceEngine, error)
 ```
-NewModelInferenceEngine creates a model-based inference engine
+NewModelInferenceEngine creates a model-based inference engine Works with any
+model architecture supported by the dynamic training engine
+
+#### func  NewModelInferenceEngineFromDynamicTraining
+
+```go
+func NewModelInferenceEngineFromDynamicTraining(
+	modelSpec *layers.ModelSpec,
+	config cgo_bridge.InferenceConfig,
+) (*ModelInferenceEngine, error)
+```
+NewModelInferenceEngineFromDynamicTraining creates an inference engine from a
+model trained with dynamic training engine This ensures full compatibility with
+any architecture supported by the dynamic training engine
 
 #### func (*ModelInferenceEngine) Cleanup
 
@@ -331,8 +266,8 @@ func (mie *ModelInferenceEngine) Predict(
 	inputShape []int,
 ) (*cgo_bridge.InferenceResult, error)
 ```
-Predict performs single forward pass for inference Optimized for single-image or
-small batch inference
+Predict performs single forward pass for inference Supports any model
+architecture and input dimensionality
 
 #### func (*ModelInferenceEngine) SetCustomNormalization
 
@@ -373,8 +308,9 @@ func NewModelTrainingEngine(
 	config cgo_bridge.TrainingConfig,
 ) (*ModelTrainingEngine, error)
 ```
-NewModelTrainingEngine creates a model-based training engine This integrates
-with the existing high-performance TrainingEngine architecture
+NewModelTrainingEngine creates a model-based training engine using dynamic
+engine by default This integrates with the high-performance dynamic
+TrainingEngine architecture
 
 #### func  NewModelTrainingEngineDynamic
 

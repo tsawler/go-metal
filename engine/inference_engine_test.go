@@ -51,10 +51,7 @@ func DisabledTestMPSInferenceEngineDetailed(t *testing.T) {
 	if !engine.initialized {
 		t.Error("Engine should be initialized")
 	}
-	if engine.isDynamic != config.UseDynamicEngine {
-		t.Errorf("Engine dynamic flag should match config: expected %v, got %v", 
-			config.UseDynamicEngine, engine.isDynamic)
-	}
+	// Engine now uses dynamic architecture by default
 	if engine.commandQueue == nil {
 		t.Error("Engine command queue should not be nil")
 	}
@@ -539,10 +536,7 @@ func DisabledTestInferenceEngineConfigurationVariations(t *testing.T) {
 				// defer engine.Cleanup()
 				
 				// Verify configuration is applied correctly
-				if engine.isDynamic != test.config.UseDynamicEngine {
-					t.Errorf("Expected isDynamic=%v, got %v", 
-						test.config.UseDynamicEngine, engine.isDynamic)
-				}
+				// Engine now uses dynamic architecture by default
 			} else {
 				if err == nil {
 					if engine != nil {

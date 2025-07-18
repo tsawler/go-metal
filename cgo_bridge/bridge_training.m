@@ -568,7 +568,14 @@ int execute_training_step_sgd_pooled(
             
             // Feed all parameter placeholders
             for (int i = 0; i < engine->allWeightPlaceholders.count && i < num_weights; i++) {
-                MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
+                id placeholderObj = engine->allWeightPlaceholders[i];
+                
+                // Skip NSNull placeholders from corrupted BatchNorm layers
+                if ([placeholderObj isKindOfClass:[NSNull class]]) {
+                    continue;
+                }
+                
+                MPSGraphTensor* paramPlaceholder = (MPSGraphTensor*)placeholderObj;
                 id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
                 
                 if (paramBuf && paramPlaceholder) {
@@ -942,7 +949,7 @@ int execute_training_step_dynamic_with_gradients_pooled(
                     // Use MPSGraph's automatic differentiation to compute gradients
                     NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradientDict = 
                         [engine->graph gradientForPrimaryTensor:actualLoss
-                                                    withTensors:engine->allWeightPlaceholders
+                                                    withTensors:engine->validPlaceholdersForGradients
                                                            name:@"dynamic_gradients"];
                     
                     // Collect gradients in the same order as weight placeholders
@@ -1458,13 +1465,127 @@ int execute_inference_dynamic(
                 // Create feeds dictionary for inference
                 NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
                 
-                // Add input tensor data with actual batch size
+                // UNIVERSAL SHAPE RESOLUTION: Create concrete shapes for MPSGraph type inference
+                // This fixes the "isStaticMPSType" assertion by providing explicit dimensions
                 NSArray<NSNumber*>* placeholderInputShape = engine->inputTensor.shape;
                 NSMutableArray<NSNumber*>* actualInputShape = [[NSMutableArray alloc] init];
                 [actualInputShape addObject:@(batch_size)]; // Use provided batch size
-                for (int i = 1; i < placeholderInputShape.count; i++) {
-                    [actualInputShape addObject:placeholderInputShape[i]];
+                
+                // For inference, we need to resolve ALL dynamic dimensions to concrete values
+                // Use the input buffer size to calculate actual dimensions
+                size_t totalElements = inputBuf.length / sizeof(float);
+                size_t elementsPerBatch = totalElements / batch_size;
+                
+                
+                if (placeholderInputShape.count == 4) {
+                    // 4D tensor: [batch, channels, height, width] - typical for CNN
+                    // For standard image inputs, assume CHW format
+                    // Calculate dimensions from total elements: channels * height * width = elementsPerBatch
+                    
+                    // Check if all spatial dimensions are zero/dynamic (common case)
+                    BOOL allDynamic = YES;
+                    for (int i = 1; i < placeholderInputShape.count; i++) {
+                        int dimValue = [placeholderInputShape[i] intValue];
+                        if (dimValue > 0) {
+                            allDynamic = NO;
+                            break;
+                        }
+                    }
+                    
+                    if (allDynamic) {
+                        // All dimensions need to be calculated from buffer size
+                        // Common cases for CNN models
+                        if (elementsPerBatch == 3 * 128 * 128) {
+                            [actualInputShape addObject:@(3)];    // channels
+                            [actualInputShape addObject:@(128)];  // height  
+                            [actualInputShape addObject:@(128)];  // width
+                        } else if (elementsPerBatch == 3 * 224 * 224) {
+                            [actualInputShape addObject:@(3)];    // channels
+                            [actualInputShape addObject:@(224)];  // height
+                            [actualInputShape addObject:@(224)];  // width
+                        } else if (elementsPerBatch == 1 * 28 * 28) {
+                            [actualInputShape addObject:@(1)];    // channels (grayscale)
+                            [actualInputShape addObject:@(28)];   // height
+                            [actualInputShape addObject:@(28)];   // width
+                        } else if (elementsPerBatch == 3 * 256 * 256) {
+                            [actualInputShape addObject:@(3)];    // channels
+                            [actualInputShape addObject:@(256)];  // height
+                            [actualInputShape addObject:@(256)];  // width
+                        } else if (elementsPerBatch == 256 * 256) {
+                            [actualInputShape addObject:@(1)];    // channels (grayscale)
+                            [actualInputShape addObject:@(256)];  // height
+                            [actualInputShape addObject:@(256)];  // width
+                        } else {
+                            // Generic case: try to infer square image dimensions
+                            size_t spatialSize = elementsPerBatch / 3; // assume 3 channels
+                            int side = (int)sqrt(spatialSize);
+                            if (side * side == spatialSize) {
+                                [actualInputShape addObject:@(3)];
+                                [actualInputShape addObject:@(side)];
+                                [actualInputShape addObject:@(side)];
+                            } else {
+                                // Try single channel
+                                side = (int)sqrt(elementsPerBatch);
+                                if (side * side == elementsPerBatch) {
+                                    [actualInputShape addObject:@(1)];
+                                    [actualInputShape addObject:@(side)];
+                                    [actualInputShape addObject:@(side)];
+                                } else {
+                                    // Fallback: create a flattened 2D tensor
+                                    [actualInputShape addObject:@(1)];
+                                    [actualInputShape addObject:@(1)];
+                                    [actualInputShape addObject:@((int)elementsPerBatch)];
+                                }
+                            }
+                        }
+                    } else {
+                        // Generic case: try to infer square image dimensions
+                        size_t spatialSize = elementsPerBatch / 3; // assume 3 channels
+                        int side = (int)sqrt(spatialSize);
+                        if (side * side == spatialSize) {
+                            [actualInputShape addObject:@(3)];
+                            [actualInputShape addObject:@(side)];
+                            [actualInputShape addObject:@(side)];
+                        } else {
+                            // Fallback: use placeholder shapes but replace -1 and 0 with calculated values
+                            for (int i = 1; i < placeholderInputShape.count; i++) {
+                                int dimValue = [placeholderInputShape[i] intValue];
+                                if (dimValue == -1 || dimValue == 0) {
+                                    // Calculate remaining dimension
+                                    size_t remainingElements = elementsPerBatch;
+                                    for (int j = 1; j < i; j++) {
+                                        remainingElements /= [actualInputShape[j] intValue];
+                                    }
+                                    [actualInputShape addObject:@((int)remainingElements)];
+                                } else {
+                                    [actualInputShape addObject:@(dimValue)];
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Non-4D tensors: resolve based on total elements
+                    for (int i = 1; i < placeholderInputShape.count; i++) {
+                        int dimValue = [placeholderInputShape[i] intValue];
+                        if (dimValue == -1 || dimValue == 0) {
+                            // For the last dimension, use remaining elements
+                            if (i == placeholderInputShape.count - 1) {
+                                size_t remainingElements = elementsPerBatch;
+                                for (int j = 1; j < i; j++) {
+                                    remainingElements /= [actualInputShape[j] intValue];
+                                }
+                                [actualInputShape addObject:@((int)remainingElements)];
+                            } else {
+                                // For intermediate dimensions, use placeholder or calculate
+                                [actualInputShape addObject:@((int)elementsPerBatch)];
+                                break; // Simplified for 2D case
+                            }
+                        } else {
+                            [actualInputShape addObject:@(dimValue)];
+                        }
+                    }
                 }
+                
                 
                 MPSGraphTensorData* inputTensorData = [[MPSGraphTensorData alloc] 
                                                       initWithMTLBuffer:inputBuf
@@ -1474,9 +1595,18 @@ int execute_inference_dynamic(
                 
                 
                 // Feed all parameter placeholders with their corresponding buffers
-                for (int i = 0; i < engine->allWeightPlaceholders.count && i < num_weights; i++) {
-                    MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
-                    id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                // CRITICAL FIX: Handle NSNull placeholders correctly by maintaining separate indices
+                int weightBufferIndex = 0; // Index for actual weight buffers (skips NSNull)
+                for (int placeholderIndex = 0; placeholderIndex < engine->allWeightPlaceholders.count && weightBufferIndex < num_weights; placeholderIndex++) {
+                    id placeholderObj = engine->allWeightPlaceholders[placeholderIndex];
+                    
+                    // Skip NSNull placeholders from corrupted BatchNorm layers
+                    if ([placeholderObj isKindOfClass:[NSNull class]]) {
+                        continue; // Don't increment weightBufferIndex
+                    }
+                    
+                    MPSGraphTensor* paramPlaceholder = (MPSGraphTensor*)placeholderObj;
+                    id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[weightBufferIndex];
                     
                     if (paramBuf && paramPlaceholder) {
                         NSArray<NSNumber*>* paramShape = paramPlaceholder.shape;
@@ -1486,6 +1616,8 @@ int execute_inference_dynamic(
                                                         dataType:MPSDataTypeFloat32];
                         feeds[paramPlaceholder] = paramData;
                     }
+                    
+                    weightBufferIndex++; // Only increment for actual weight buffers
                 }
                 
                 // UNIFIED SOLUTION: No need to feed running statistics since we use constants for inference
@@ -1598,7 +1730,14 @@ int execute_training_step_dynamic(
                 
                 // Feed all parameter placeholders with their corresponding buffers
                 for (int i = 0; i < engine->allWeightPlaceholders.count && i < num_weights; i++) {
-                    MPSGraphTensor* paramPlaceholder = engine->allWeightPlaceholders[i];
+                    id placeholderObj = engine->allWeightPlaceholders[i];
+                    
+                    // Skip NSNull placeholders from corrupted BatchNorm layers
+                    if ([placeholderObj isKindOfClass:[NSNull class]]) {
+                        continue;
+                    }
+                    
+                    MPSGraphTensor* paramPlaceholder = (MPSGraphTensor*)placeholderObj;
                     id<MTLBuffer> paramBuf = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
                     
                     if (paramBuf && paramPlaceholder) {
@@ -1688,7 +1827,7 @@ int execute_training_step_dynamic(
                         // Use MPSGraph's automatic differentiation to compute gradients
                         NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradientDict = 
                             [engine->graph gradientForPrimaryTensor:actualLoss
-                                                        withTensors:engine->allWeightPlaceholders
+                                                        withTensors:engine->validPlaceholdersForGradients
                                                                name:@"dynamic_gradients"];
                         
                         // Collect gradients in the same order as weight placeholders

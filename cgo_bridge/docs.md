@@ -166,13 +166,6 @@ func CreateTrainingEngineDynamic(
 CreateTrainingEngineDynamic creates a training engine with dynamic graph from
 model specification
 
-#### func  CreateTrainingEngineHybrid
-
-```go
-func CreateTrainingEngineHybrid(device unsafe.Pointer, config TrainingConfig, modelConfig ModelConfig) (unsafe.Pointer, error)
-```
-CreateTrainingEngineHybrid creates a hybrid MPS/MPSGraph training engine
-
 #### func  DeallocateMetalBuffer
 
 ```go
@@ -470,78 +463,6 @@ func ExecuteTrainingStepDynamicWithGradientsPooled(
 ExecuteTrainingStepDynamicWithGradientsPooled executes a dynamic training step
 with pooled command buffers
 
-#### func  ExecuteTrainingStepHybrid
-
-```go
-func ExecuteTrainingStepHybrid(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-) (float32, error)
-```
-ExecuteTrainingStepHybrid executes a training step using hybrid MPS/MPSGraph
-approach
-
-#### func  ExecuteTrainingStepHybridFull
-
-```go
-func ExecuteTrainingStepHybridFull(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	learningRate float32,
-) (float32, error)
-```
-ExecuteTrainingStepHybridFull executes a complete training step with backward
-pass using hybrid MPS/MPSGraph approach
-
-#### func  ExecuteTrainingStepHybridFullPooled
-
-```go
-func ExecuteTrainingStepHybridFullPooled(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	learningRate float32,
-	commandBuffer unsafe.Pointer,
-) (float32, error)
-```
-ExecuteTrainingStepHybridFullPooled executes a hybrid training step using
-command buffer pooling
-
-#### func  ExecuteTrainingStepHybridWithGradients
-
-```go
-func ExecuteTrainingStepHybridWithGradients(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	gradientBuffers []unsafe.Pointer,
-) (float32, error)
-```
-ExecuteTrainingStepHybridWithGradients executes forward+backward pass and
-returns gradients
-
-#### func  ExecuteTrainingStepHybridWithGradientsPooled
-
-```go
-func ExecuteTrainingStepHybridWithGradientsPooled(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	gradientBuffers []unsafe.Pointer,
-	commandPool unsafe.Pointer,
-) (float32, error)
-```
-ExecuteTrainingStepHybridWithGradientsPooled executes forward+backward pass with
-pooled command buffers RESOURCE LEAK FIX: Uses command buffer pooling to prevent
-Metal resource accumulation
-
 #### func  ExecuteTrainingStepSGDPooled
 
 ```go
@@ -653,6 +574,108 @@ func ZeroMetalBufferMPSGraph(device unsafe.Pointer, buffer unsafe.Pointer, size 
 ZeroMetalBufferMPSGraph zeros a Metal buffer using MPSGraph (works for all
 buffer types)
 
+#### type DedicatedInferenceConfig
+
+```go
+type DedicatedInferenceConfig struct {
+	PrecisionThreshold  float32           // Float16 conversion threshold
+	MaxBatchSize        int               // Maximum supported batch size
+	OptimizationLevel   OptimizationLevel // Optimization aggressiveness
+	MemoryStrategy      MemoryStrategy    // Memory management approach
+	EnableTelemetry     bool              // Enable performance monitoring
+	CacheCompiledGraphs bool              // Cache compiled MPSGraph executables
+}
+```
+
+DedicatedInferenceConfig holds configuration for the dedicated inference engine
+
+#### type DedicatedInferenceEngine
+
+```go
+type DedicatedInferenceEngine struct {
+}
+```
+
+DedicatedInferenceEngine represents a GPU-resident inference engine optimized
+for forward pass only
+
+#### func  NewDedicatedInferenceEngine
+
+```go
+func NewDedicatedInferenceEngine(
+	device unsafe.Pointer,
+	config DedicatedInferenceConfig,
+	layers []LayerSpecC,
+	parameters [][]float32,
+) (*DedicatedInferenceEngine, error)
+```
+NewDedicatedInferenceEngine creates a new dedicated inference engine optimized
+for forward pass only
+
+#### func (*DedicatedInferenceEngine) Destroy
+
+```go
+func (e *DedicatedInferenceEngine) Destroy() error
+```
+Destroy properly cleans up the inference engine resources
+
+#### func (*DedicatedInferenceEngine) GetTelemetry
+
+```go
+func (e *DedicatedInferenceEngine) GetTelemetry() (*InferenceTelemetry, error)
+```
+GetTelemetry returns performance telemetry data
+
+#### func (*DedicatedInferenceEngine) InferBatch
+
+```go
+func (e *DedicatedInferenceEngine) InferBatch(
+	inputData []float32,
+	inputShape []int,
+	batchSize int,
+) (*DedicatedInferenceResult, error)
+```
+InferBatch performs batch inference with optimized GPU execution
+
+#### func (*DedicatedInferenceEngine) InferSingle
+
+```go
+func (e *DedicatedInferenceEngine) InferSingle(
+	inputData []float32,
+	inputShape []int,
+) (*DedicatedInferenceResult, error)
+```
+InferSingle performs single sample inference
+
+#### func (*DedicatedInferenceEngine) PreallocateBuffers
+
+```go
+func (e *DedicatedInferenceEngine) PreallocateBuffers(maxBatchSize int) error
+```
+PreallocateBuffers pre-allocates GPU buffers for optimal performance
+
+#### func (*DedicatedInferenceEngine) ResetTelemetry
+
+```go
+func (e *DedicatedInferenceEngine) ResetTelemetry() error
+```
+ResetTelemetry clears all telemetry counters
+
+#### type DedicatedInferenceResult
+
+```go
+type DedicatedInferenceResult struct {
+	Predictions     []float32 // Output predictions (GPU -> CPU copied)
+	OutputShape     []int     // Shape of output tensor
+	ConfidenceScore float32   // Maximum confidence/probability
+	PredictedClass  int       // Predicted class index (for classification)
+	InferenceTimeMs float64   // Time taken for this inference
+	MemoryUsedBytes uint64    // GPU memory used for this inference
+}
+```
+
+DedicatedInferenceResult contains comprehensive inference results and metadata
+
 #### type DeviceType
 
 ```go
@@ -736,6 +759,22 @@ func ExecuteInferenceOnly(
 ```
 ExecuteInferenceOnly performs forward-only inference without loss computation
 
+#### type InferenceTelemetry
+
+```go
+type InferenceTelemetry struct {
+	TotalInferences uint64  // Total inference calls
+	TotalTimeMs     float64 // Total inference time in milliseconds
+	AvgLatencyMs    float64 // Average inference latency
+	PeakThroughput  float64 // Peak throughput (inferences/second)
+	PeakMemoryUsage uint64  // Peak GPU memory usage
+	CacheHits       uint64  // Graph compilation cache hits
+	CacheMisses     uint64  // Graph compilation cache misses
+}
+```
+
+InferenceTelemetry provides performance metrics for the inference engine
+
 #### type LayerSpecC
 
 ```go
@@ -759,6 +798,22 @@ type LayerSpecC struct {
 ```
 
 LayerSpecC represents a C-compatible layer specification
+
+#### type MemoryStrategy
+
+```go
+type MemoryStrategy int
+```
+
+MemoryStrategy controls how the inference engine manages GPU memory
+
+```go
+const (
+	Minimal      MemoryStrategy = iota // Minimal memory usage
+	BalancedMem                        // Balanced memory vs performance
+	PreAllocated                       // Pre-allocate buffers for maximum performance
+)
+```
 
 #### type ModelConfig
 
@@ -799,6 +854,23 @@ type ModelConfig struct {
 ```
 
 ModelConfig holds model architecture configuration for dynamic dimensions
+
+#### type OptimizationLevel
+
+```go
+type OptimizationLevel int
+```
+
+OptimizationLevel controls the level of optimizations applied to the inference
+engine
+
+```go
+const (
+	Conservative OptimizationLevel = iota // Safe optimizations only
+	Balanced                              // Standard inference optimizations
+	Aggressive                            // Maximum performance optimizations
+)
+```
 
 #### type OptimizerType
 

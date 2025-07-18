@@ -408,9 +408,9 @@ etc.)
 ```go
 func (ms *ModelSpec) ValidateModelForHybridEngine() error
 ```
-ValidateModelForHybridEngine checks if model is compatible with Hybrid
-TrainingEngine Optimized for CNN architectures with 4D input and Conv+Dense
-layer combinations
+ValidateModelForHybridEngine checks if model is compatible with training engine
+DEPRECATED: The hybrid engine has been removed. Use
+ValidateModelForDynamicEngine instead.
 
 #### func (*ModelSpec) ValidateModelForInference
 
@@ -418,16 +418,16 @@ layer combinations
 func (ms *ModelSpec) ValidateModelForInference() error
 ```
 ValidateModelForInference checks if model is compatible with InferenceEngine
-More lenient than training validation - supports Dense-only models
+Uses dynamic engine validation to support any model architecture
 
 #### func (*ModelSpec) ValidateModelForTrainingEngine
 
 ```go
 func (ms *ModelSpec) ValidateModelForTrainingEngine() error
 ```
-ValidateModelForTrainingEngine checks if model is compatible with existing
-TrainingEngine DEPRECATED: Use ValidateModelForHybridEngine or
-ValidateModelForDynamicEngine instead
+ValidateModelForTrainingEngine checks if model is compatible with training
+engine DEPRECATED: The hybrid engine has been removed. Use
+ValidateModelForDynamicEngine instead.
 
 #### type ModelSpecC
 

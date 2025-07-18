@@ -1,0 +1,58 @@
+{
+  "plot_type": "confusion_matrix",
+  "title": "Confusion Matrix - Model",
+  "timestamp": "2025-07-17T08:48:16.42812-03:00",
+  "model_name": "Model",
+  "series": [
+    {
+      "name": "Confusion Matrix",
+      "type": "heatmap",
+      "data": [
+        {
+          "x": 0,
+          "y": 0,
+          "z": 76,
+          "label": "True: Class 0, Pred: Class 0"
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "z": 108,
+          "label": "True: Class 0, Pred: Class 1"
+        },
+        {
+          "x": 0,
+          "y": 1,
+          "z": 29,
+          "label": "True: Class 1, Pred: Class 0"
+        },
+        {
+          "x": 1,
+          "y": 1,
+          "z": 107,
+          "label": "True: Class 1, Pred: Class 1"
+        }
+      ],
+      "style": {
+        "colorscale": "Blues"
+      }
+    }
+  ],
+  "config": {
+    "x_axis_label": "Predicted Class",
+    "y_axis_label": "True Class",
+    "x_axis_scale": "linear",
+    "y_axis_scale": "linear",
+    "show_legend": false,
+    "show_grid": false,
+    "width": 600,
+    "height": 600,
+    "interactive": true,
+    "custom_options": {
+      "class_names": [
+        "Class 0",
+        "Class 1"
+      ]
+    }
+  }
+}

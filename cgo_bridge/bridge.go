@@ -59,41 +59,12 @@ uintptr_t create_metal_device();
 void destroy_metal_device(uintptr_t device);
 uintptr_t create_training_engine(uintptr_t device, training_config_t* config);
 uintptr_t create_training_engine_constant_weights(uintptr_t device, training_config_t* config);
-uintptr_t create_training_engine_hybrid(uintptr_t device, training_config_t* config, model_config_t* model_config);
 int execute_training_step(
     uintptr_t engine,
     uintptr_t input_buffer,
     uintptr_t label_buffer,
     uintptr_t* weight_buffers,
     int num_weights,
-    float* loss_out
-);
-int execute_training_step_hybrid(
-    uintptr_t engine,
-    uintptr_t input_buffer,
-    uintptr_t label_buffer,
-    uintptr_t* weight_buffers,
-    int num_weights,
-    float* loss_out
-);
-int execute_training_step_hybrid_full(
-    uintptr_t engine,
-    uintptr_t input_buffer,
-    uintptr_t label_buffer,
-    uintptr_t* weight_buffers,
-    int num_weights,
-    float learning_rate,
-    float* loss_out
-);
-// RESOURCE LEAK FIX: Command buffer pooled version for Metal resource management
-int execute_training_step_hybrid_full_pooled(
-    uintptr_t engine,
-    uintptr_t input_buffer,
-    uintptr_t label_buffer,
-    uintptr_t* weight_buffers,
-    int num_weights,
-    float learning_rate,
-    uintptr_t command_buffer,
     float* loss_out
 );
 uintptr_t allocate_metal_buffer(uintptr_t device, int size, int device_type);
@@ -136,17 +107,6 @@ int execute_adam_step_mpsgraph_pooled(
     uintptr_t command_buffer
 );
 
-// RESOURCE LEAK FIX: Pooled version for Adam gradient computation
-int execute_training_step_hybrid_with_gradients_pooled(
-    uintptr_t engine,
-    uintptr_t input_buffer,
-    uintptr_t label_buffer,
-    uintptr_t* weight_buffers,
-    uintptr_t* gradient_buffers,
-    int num_weights,
-    uintptr_t command_buffer,
-    float* loss_out
-);
 
 // Utility functions for buffer operations
 int zero_metal_buffer(uintptr_t device, uintptr_t buffer, int size);
@@ -174,27 +134,7 @@ int copy_staging_to_gpu_buffer_async(uintptr_t staging_buffer, uintptr_t gpu_buf
                                      uintptr_t command_queue);
 int wait_for_buffer_copy_completion(uintptr_t command_queue);
 
-// Forward+backward pass that returns gradients for Adam optimizer
-int execute_training_step_hybrid_with_gradients(
-    uintptr_t engine,
-    uintptr_t input_buffer,
-    uintptr_t label_buffer,
-    uintptr_t* weight_buffers,
-    uintptr_t* gradient_buffers,
-    int num_weights,
-    float* loss_out
-);
 
-// Forward-only inference that returns predictions
-int execute_inference_hybrid(
-    uintptr_t engine,
-    uintptr_t input_buffer,
-    uintptr_t* weight_buffers,
-    int num_weights,
-    float* predictions_out,
-    int batch_size,
-    int num_classes
-);
 
 // Dynamic inference using the same graph as training (forward pass only)
 int execute_inference_dynamic(
@@ -297,6 +237,22 @@ int commit_command_buffer(uintptr_t command_buffer);
 int wait_command_buffer_completion(uintptr_t command_buffer);
 void setup_autorelease_pool();
 void drain_autorelease_pool();
+
+// Test function
+void test_debug_output();
+
+// Optimized inference execution with Metal buffers
+int execute_inference_optimized_buffers(
+    uintptr_t engine,
+    uintptr_t input_buffer,
+    uintptr_t* weight_buffers,
+    int num_weights,
+    float* output_data,
+    int* output_shape,
+    int* output_shape_len,
+    int batch_size,
+    int num_classes
+);
 
 // RESOURCE LEAK FIX: Command buffer pool management functions for Metal level
 uintptr_t get_command_buffer_from_pool(uintptr_t command_buffer);
@@ -717,59 +673,6 @@ func CreateTrainingEngineConstantWeights(device unsafe.Pointer, config TrainingC
 	return unsafe.Pointer(uintptr(engine)), nil
 }
 
-// CreateTrainingEngineHybrid creates a hybrid MPS/MPSGraph training engine
-func CreateTrainingEngineHybrid(device unsafe.Pointer, config TrainingConfig, modelConfig ModelConfig) (unsafe.Pointer, error) {
-	cConfig := C.training_config_t{
-		learning_rate:  C.float(config.LearningRate),
-		beta1:         C.float(config.Beta1),
-		beta2:         C.float(config.Beta2),
-		weight_decay:  C.float(config.WeightDecay),
-		epsilon:       C.float(config.Epsilon),
-		alpha:         C.float(config.Alpha),
-		momentum:      C.float(config.Momentum),
-		centered:      C.int(func() int { if config.Centered { return 1 } else { return 0 } }()),
-		optimizer_type: C.int(config.OptimizerType),
-		problem_type:   C.int(config.ProblemType),
-		loss_function:  C.int(config.LossFunction),
-	}
-	
-	cModelConfig := C.model_config_t{
-		batch_size:       C.int(modelConfig.BatchSize),
-		input_channels:   C.int(modelConfig.InputChannels),
-		input_height:     C.int(modelConfig.InputHeight),
-		input_width:      C.int(modelConfig.InputWidth),
-		
-		conv1_out_channels: C.int(modelConfig.Conv1OutChannels),
-		conv1_out_height:   C.int(modelConfig.Conv1OutHeight),
-		conv1_out_width:    C.int(modelConfig.Conv1OutWidth),
-		
-		conv2_out_channels: C.int(modelConfig.Conv2OutChannels),
-		conv2_out_height:   C.int(modelConfig.Conv2OutHeight),
-		conv2_out_width:    C.int(modelConfig.Conv2OutWidth),
-		
-		conv3_out_channels: C.int(modelConfig.Conv3OutChannels),
-		conv3_out_height:   C.int(modelConfig.Conv3OutHeight),
-		conv3_out_width:    C.int(modelConfig.Conv3OutWidth),
-		
-		fc1_input_size:  C.int(modelConfig.FC1InputSize),
-		fc1_output_size: C.int(modelConfig.FC1OutputSize),
-		fc2_output_size: C.int(modelConfig.FC2OutputSize),
-		
-		conv1_kernel_size: C.int(modelConfig.Conv1KernelSize),
-		conv1_stride:      C.int(modelConfig.Conv1Stride),
-		conv2_kernel_size: C.int(modelConfig.Conv2KernelSize),
-		conv2_stride:      C.int(modelConfig.Conv2Stride),
-		conv3_kernel_size: C.int(modelConfig.Conv3KernelSize),
-		conv3_stride:      C.int(modelConfig.Conv3Stride),
-	}
-	
-	engine := C.create_training_engine_hybrid(C.uintptr_t(uintptr(device)), &cConfig, &cModelConfig)
-	if engine == 0 {
-		return nil, fmt.Errorf("failed to create hybrid training engine")
-	}
-	
-	return unsafe.Pointer(uintptr(engine)), nil
-}
 
 // ExecuteTrainingStep executes a complete training step
 func ExecuteTrainingStep(
@@ -801,67 +704,7 @@ func ExecuteTrainingStep(
 	return float32(lossOut), nil
 }
 
-// ExecuteTrainingStepHybrid executes a training step using hybrid MPS/MPSGraph approach
-func ExecuteTrainingStepHybrid(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-) (float32, error) {
-	// Convert weight buffers to C array
-	cWeightBuffers := make([]C.uintptr_t, len(weightBuffers))
-	for i, buf := range weightBuffers {
-		cWeightBuffers[i] = C.uintptr_t(uintptr(buf))
-	}
-	
-	var lossOut C.float
-	result := C.execute_training_step_hybrid(
-		C.uintptr_t(uintptr(engine)),
-		C.uintptr_t(uintptr(inputBuffer)),
-		C.uintptr_t(uintptr(labelBuffer)),
-		&cWeightBuffers[0],
-		C.int(len(weightBuffers)),
-		&lossOut,
-	)
-	
-	if result != 0 {
-		return 0, fmt.Errorf("hybrid training step failed with error code: %d", result)
-	}
-	
-	return float32(lossOut), nil
-}
 
-// ExecuteTrainingStepHybridFull executes a complete training step with backward pass using hybrid MPS/MPSGraph approach
-func ExecuteTrainingStepHybridFull(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	learningRate float32,
-) (float32, error) {
-	// Convert weight buffers to C array
-	cWeightBuffers := make([]C.uintptr_t, len(weightBuffers))
-	for i, buf := range weightBuffers {
-		cWeightBuffers[i] = C.uintptr_t(uintptr(buf))
-	}
-	
-	var lossOut C.float
-	result := C.execute_training_step_hybrid_full(
-		C.uintptr_t(uintptr(engine)),
-		C.uintptr_t(uintptr(inputBuffer)),
-		C.uintptr_t(uintptr(labelBuffer)),
-		&cWeightBuffers[0],
-		C.int(len(weightBuffers)),
-		C.float(learningRate),
-		&lossOut,
-	)
-	
-	if result != 0 {
-		return 0, fmt.Errorf("hybrid full training step failed with error code: %d", result)
-	}
-	
-	return float32(lossOut), nil
-}
 
 // AllocateMetalBuffer allocates a Metal buffer
 func AllocateMetalBuffer(device unsafe.Pointer, size int, deviceType DeviceType) (unsafe.Pointer, error) {
@@ -912,30 +755,24 @@ func CreateInferenceEngine(device unsafe.Pointer, config InferenceConfig) (unsaf
 	
 	if config.UseDynamicEngine {
 		// Create dynamic training engine configured for inference
+		// Convert input shape from int32 to int
+		inputShape := make([]int, len(config.InputShape))
+		for i, dim := range config.InputShape {
+			inputShape[i] = int(dim)
+		}
+		
 		engine, err := CreateTrainingEngineDynamic(
 			device,
 			trainingConfig,
 			config.LayerSpecs,
-			make([]int, config.InputShapeLen), // Convert from int32 to int
+			inputShape, // Use actual input shape, not zeros
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create dynamic inference engine: %v", err)
 		}
 		return engine, nil
 	} else {
-		// Use hybrid engine for inference (fallback)
-		modelConfig := ModelConfig{
-			BatchSize:     int(config.InputShape[0]),
-			InputChannels: int(config.InputShape[1]),
-			InputHeight:   int(config.InputShape[2]),
-			InputWidth:    int(config.InputShape[3]),
-		}
-		
-		engine, err := CreateTrainingEngineHybrid(device, trainingConfig, modelConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create hybrid inference engine: %v", err)
-		}
-		return engine, nil
+		return nil, fmt.Errorf("dynamic engine is required for inference - hybrid engine has been removed")
 	}
 }
 
@@ -955,9 +792,63 @@ func ExecuteInferenceOnly(
 	isDynamic bool,
 	batchNormInferenceMode bool,
 ) (*InferenceResult, error) {
-	// Use existing inference function for now
-	// In a full implementation, this would call a dedicated inference-only C function
-	return ExecuteInference(engine, inputBuffer, weightBuffers, batchSize, numClasses, isDynamic)
+	fmt.Printf("DEBUG: ExecuteInferenceOnly called with batchSize=%d, numClasses=%d, numWeights=%d\n", 
+		batchSize, numClasses, len(weightBuffers))
+	
+	// Test debug output
+	C.test_debug_output()
+	
+	// Validate inputs
+	if engine == nil || inputBuffer == nil {
+		return nil, fmt.Errorf("engine or input buffer is nil")
+	}
+	
+	if batchSize <= 0 || numClasses <= 0 {
+		return nil, fmt.Errorf("invalid batch size (%d) or num classes (%d)", batchSize, numClasses)
+	}
+
+	// Allocate output buffer for predictions
+	predictionsSize := batchSize * numClasses
+	predictions := make([]float32, predictionsSize)
+
+	// Convert Go slice to C array for weight buffers
+	var cWeightBuffers *C.uintptr_t
+	if len(weightBuffers) > 0 {
+		cWeights := make([]C.uintptr_t, len(weightBuffers))
+		for i, buf := range weightBuffers {
+			cWeights[i] = C.uintptr_t(uintptr(buf))
+		}
+		cWeightBuffers = &cWeights[0]
+	}
+	
+	// CRITICAL FIX: Since CreateInferenceEngine actually creates a training engine,
+	// we need to use the training engine's inference function instead of the inference engine's function
+	result := C.execute_inference_dynamic(
+		C.uintptr_t(uintptr(engine)),
+		C.uintptr_t(uintptr(inputBuffer)),
+		cWeightBuffers,
+		C.int(len(weightBuffers)),
+		(*C.float)(unsafe.Pointer(&predictions[0])),
+		C.int(batchSize),
+		C.int(numClasses),
+	)
+
+	if result != 0 {
+		return nil, fmt.Errorf("inference execution failed with error code: %d", result)
+	}
+
+	// Since we're using execute_inference_dynamic, we know the output shape is [batchSize, numClasses]
+	goOutputShape := []int{batchSize, numClasses}
+
+	// Build inference result
+	inferenceResult := &InferenceResult{
+		Predictions: predictions,
+		BatchSize:   batchSize,
+		OutputShape: goOutputShape,
+		Success:     true,
+	}
+
+	return inferenceResult, nil
 }
 
 // BuildInferenceGraph builds an optimized inference graph
@@ -1035,47 +926,6 @@ func ExecuteAdamStepMPSGraph(
 }
 
 
-// ExecuteTrainingStepHybridWithGradients executes forward+backward pass and returns gradients
-func ExecuteTrainingStepHybridWithGradients(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	gradientBuffers []unsafe.Pointer,
-) (float32, error) {
-	if len(weightBuffers) != len(gradientBuffers) {
-		return 0, fmt.Errorf("weight buffers (%d) and gradient buffers (%d) count mismatch",
-			len(weightBuffers), len(gradientBuffers))
-	}
-
-	numWeights := len(weightBuffers)
-
-	// Convert Go slices to C arrays
-	cWeightBuffers := make([]C.uintptr_t, numWeights)
-	cGradientBuffers := make([]C.uintptr_t, numWeights)
-
-	for i := 0; i < numWeights; i++ {
-		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
-		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
-	}
-
-	var lossOut C.float
-	result := C.execute_training_step_hybrid_with_gradients(
-		C.uintptr_t(uintptr(engine)),
-		C.uintptr_t(uintptr(inputBuffer)),
-		C.uintptr_t(uintptr(labelBuffer)),
-		&cWeightBuffers[0],
-		&cGradientBuffers[0],
-		C.int(numWeights),
-		&lossOut,
-	)
-
-	if result != 0 {
-		return 0, fmt.Errorf("hybrid training step with gradients failed with error code: %d", result)
-	}
-
-	return float32(lossOut), nil
-}
 
 // ZeroMetalBuffer zeros a Metal buffer (uses CPU for accessible buffers, MPSGraph for GPU-only)
 func ZeroMetalBuffer(device unsafe.Pointer, buffer unsafe.Pointer, size int) error {
@@ -1338,7 +1188,7 @@ func ExecuteInference(
 	}
 
 	// Single CGO call for complete inference (design compliant)
-	// Choose between hybrid and dynamic inference based on engine type
+	// Only dynamic inference is supported now
 	var result C.int
 	if isDynamic {
 		result = C.execute_inference_dynamic(
@@ -1351,15 +1201,7 @@ func ExecuteInference(
 			C.int(numClasses),
 		)
 	} else {
-		result = C.execute_inference_hybrid(
-			C.uintptr_t(uintptr(engine)),
-			C.uintptr_t(uintptr(inputBuffer)),
-			cWeightBuffers,
-			C.int(len(weightBuffers)),
-			(*C.float)(unsafe.Pointer(&predictions[0])),
-			C.int(batchSize),
-			C.int(numClasses),
-		)
+		return nil, fmt.Errorf("dynamic engine is required for inference - hybrid engine has been removed")
 	}
 
 	if result != 0 {
@@ -1809,55 +1651,6 @@ func DrainAutoreleasePool() {
 
 // RESOURCE LEAK FIX: Command buffer pooled training functions
 
-// ExecuteTrainingStepHybridFullPooled executes a hybrid training step using command buffer pooling
-func ExecuteTrainingStepHybridFullPooled(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	learningRate float32,
-	commandBuffer unsafe.Pointer,
-) (float32, error) {
-	if engine == nil {
-		return 0, fmt.Errorf("engine cannot be nil")
-	}
-	
-	if inputBuffer == nil || labelBuffer == nil {
-		return 0, fmt.Errorf("input or label buffer cannot be nil")
-	}
-	
-	if commandBuffer == nil {
-		return 0, fmt.Errorf("command buffer cannot be nil")
-	}
-	
-	if len(weightBuffers) == 0 {
-		return 0, fmt.Errorf("weight buffers cannot be empty")
-	}
-	
-	// Convert Go slice to C array
-	weightPtrs := make([]C.uintptr_t, len(weightBuffers))
-	for i, ptr := range weightBuffers {
-		weightPtrs[i] = C.uintptr_t(uintptr(ptr))
-	}
-	
-	var loss float32
-	result := C.execute_training_step_hybrid_full_pooled(
-		C.uintptr_t(uintptr(engine)),
-		C.uintptr_t(uintptr(inputBuffer)),
-		C.uintptr_t(uintptr(labelBuffer)),
-		&weightPtrs[0],
-		C.int(len(weightBuffers)),
-		C.float(learningRate),
-		C.uintptr_t(uintptr(commandBuffer)),
-		(*C.float)(unsafe.Pointer(&loss)),
-	)
-	
-	if result != 0 {
-		return 0, fmt.Errorf("pooled training step failed with error code: %d", result)
-	}
-	
-	return loss, nil
-}
 
 // GetCommandBufferFromPool gets a command buffer from the pool (Metal level interface)
 func GetCommandBufferFromPool(commandPool unsafe.Pointer) (unsafe.Pointer, error) {
@@ -1884,61 +1677,6 @@ func ReturnCommandBufferToPool(commandBuffer unsafe.Pointer) {
 	)
 }
 
-// ExecuteTrainingStepHybridWithGradientsPooled executes forward+backward pass with pooled command buffers
-// RESOURCE LEAK FIX: Uses command buffer pooling to prevent Metal resource accumulation
-func ExecuteTrainingStepHybridWithGradientsPooled(
-	engine unsafe.Pointer,
-	inputBuffer unsafe.Pointer,
-	labelBuffer unsafe.Pointer,
-	weightBuffers []unsafe.Pointer,
-	gradientBuffers []unsafe.Pointer,
-	commandPool unsafe.Pointer,
-) (float32, error) {
-	if engine == nil || inputBuffer == nil || labelBuffer == nil || commandPool == nil {
-		return 0, fmt.Errorf("invalid pointer(s)")
-	}
-	
-	if len(weightBuffers) != len(gradientBuffers) {
-		return 0, fmt.Errorf("weight and gradient buffer count mismatch: %d vs %d", 
-			len(weightBuffers), len(gradientBuffers))
-	}
-	
-	// Convert to C arrays
-	weightBufPtrs := make([]C.uintptr_t, len(weightBuffers))
-	gradBufPtrs := make([]C.uintptr_t, len(gradientBuffers))
-	
-	for i, buf := range weightBuffers {
-		if buf == nil {
-			return 0, fmt.Errorf("weight buffer %d is nil", i)
-		}
-		weightBufPtrs[i] = C.uintptr_t(uintptr(buf))
-	}
-	
-	for i, buf := range gradientBuffers {
-		if buf == nil {
-			return 0, fmt.Errorf("gradient buffer %d is nil", i)
-		}
-		gradBufPtrs[i] = C.uintptr_t(uintptr(buf))
-	}
-	
-	var loss C.float
-	result := C.execute_training_step_hybrid_with_gradients_pooled(
-		C.uintptr_t(uintptr(engine)),
-		C.uintptr_t(uintptr(inputBuffer)),
-		C.uintptr_t(uintptr(labelBuffer)),
-		&weightBufPtrs[0],
-		&gradBufPtrs[0],
-		C.int(len(weightBuffers)),
-		C.uintptr_t(uintptr(commandPool)),
-		&loss,
-	)
-	
-	if result != 0 {
-		return 0, fmt.Errorf("pooled hybrid gradient training step failed with code: %d", result)
-	}
-	
-	return float32(loss), nil
-}
 
 // ExecuteAdamStepMPSGraphPooled performs Adam optimization with pooled command buffers
 // RESOURCE LEAK FIX: Uses command buffer pooling to prevent Metal resource accumulation
@@ -2666,16 +2404,30 @@ func NewDedicatedInferenceEngine(
 		cLayers[i] = convertLayerSpecToC(layer)
 	}
 	
-	// Prepare parameters for C interface
+	// Prepare parameters for C interface - copy data to C-allocated memory to avoid CGO pointer issues
 	cParameters := make([]*C.float, len(parameters))
 	cParameterSizes := make([]C.int, len(parameters))
 	
 	for i, param := range parameters {
 		if len(param) > 0 {
-			cParameters[i] = (*C.float)(&param[0])
+			// Allocate C memory and copy data
+			cParam := (*C.float)(C.malloc(C.size_t(len(param) * 4))) // 4 bytes per float32
+			if cParam == nil {
+				return nil, fmt.Errorf("failed to allocate C memory for parameter %d", i)
+			}
+			
+			// Copy Go slice data to C memory
+			paramSlice := (*[1 << 30]C.float)(unsafe.Pointer(cParam))[:len(param):len(param)]
+			for j, val := range param {
+				paramSlice[j] = C.float(val)
+			}
+			
+			cParameters[i] = cParam
 			cParameterSizes[i] = C.int(len(param))
 		}
 	}
+	
+	// Note: We need to free this memory after the C call, but the engine takes ownership
 	
 	// Create dedicated inference engine
 	enginePtr := C.create_inference_engine_optimized(
@@ -2705,6 +2457,7 @@ func (e *DedicatedInferenceEngine) InferBatch(
 	inputShape []int,
 	batchSize int,
 ) (*DedicatedInferenceResult, error) {
+	fmt.Printf("DEBUG: DedicatedInferenceEngine.InferBatch called with batchSize=%d\n", batchSize)
 	if e.isDestroyed {
 		return nil, fmt.Errorf("inference engine has been destroyed")
 	}
@@ -2733,6 +2486,7 @@ func (e *DedicatedInferenceEngine) InferBatch(
 	var cResult C.inference_result_t
 	
 	// Execute batch inference with single CGO call
+	fmt.Printf("DEBUG: About to call C.execute_inference_batch_optimized\n")
 	result := C.execute_inference_batch_optimized(
 		C.uintptr_t(uintptr(e.engine)),
 		(*C.float)(&inputData[0]),
@@ -2776,6 +2530,7 @@ func (e *DedicatedInferenceEngine) InferSingle(
 	inputData []float32,
 	inputShape []int,
 ) (*DedicatedInferenceResult, error) {
+	fmt.Printf("DEBUG: DedicatedInferenceEngine.InferSingle called\n")
 	return e.InferBatch(inputData, inputShape, 1)
 }
 
@@ -2882,11 +2637,24 @@ func convertLayerSpecToC(layer LayerSpecC) C.layer_spec_c_t {
 	}
 	cLayer.param_float_count = C.int(len(layer.ParamFloat))
 	
-	// Running statistics (for BatchNorm layers)
+	// Running statistics (for BatchNorm layers) - handle CGO pointer issues
 	if len(layer.RunningMean) > 0 {
-		cLayer.running_mean = (*C.float)(&layer.RunningMean[0])
-		cLayer.running_stats_size = C.int(len(layer.RunningMean))
-		cLayer.has_running_stats = 1
+		// Allocate C memory for running mean
+		cRunningMean := (*C.float)(C.malloc(C.size_t(len(layer.RunningMean) * 4)))
+		if cRunningMean != nil {
+			// Copy data to C memory
+			meanSlice := (*[1 << 30]C.float)(unsafe.Pointer(cRunningMean))[:len(layer.RunningMean):len(layer.RunningMean)]
+			for i, val := range layer.RunningMean {
+				meanSlice[i] = C.float(val)
+			}
+			cLayer.running_mean = cRunningMean
+			cLayer.running_stats_size = C.int(len(layer.RunningMean))
+			cLayer.has_running_stats = 1
+		} else {
+			cLayer.running_mean = nil
+			cLayer.running_stats_size = 0
+			cLayer.has_running_stats = 0
+		}
 	} else {
 		cLayer.running_mean = nil
 		cLayer.running_stats_size = 0
@@ -2894,7 +2662,18 @@ func convertLayerSpecToC(layer LayerSpecC) C.layer_spec_c_t {
 	}
 	
 	if len(layer.RunningVar) > 0 {
-		cLayer.running_var = (*C.float)(&layer.RunningVar[0])
+		// Allocate C memory for running variance
+		cRunningVar := (*C.float)(C.malloc(C.size_t(len(layer.RunningVar) * 4)))
+		if cRunningVar != nil {
+			// Copy data to C memory
+			varSlice := (*[1 << 30]C.float)(unsafe.Pointer(cRunningVar))[:len(layer.RunningVar):len(layer.RunningVar)]
+			for i, val := range layer.RunningVar {
+				varSlice[i] = C.float(val)
+			}
+			cLayer.running_var = cRunningVar
+		} else {
+			cLayer.running_var = nil
+		}
 	} else {
 		cLayer.running_var = nil
 	}

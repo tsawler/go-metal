@@ -12,12 +12,12 @@ import (
 
 // MPSInferenceEngine handles inference execution using MPSGraph
 // Optimized for forward-pass only without loss computation or gradients
+// Works with any model architecture supported by the dynamic training engine
 type MPSInferenceEngine struct {
 	device       unsafe.Pointer           // MTLDevice
 	engine       unsafe.Pointer           // Native inference engine
 	config       cgo_bridge.InferenceConfig
 	initialized  bool
-	isDynamic    bool                     // True if using dynamic engine
 	
 	// Resource management following design principles
 	commandQueue unsafe.Pointer           // MTLCommandQueue for command buffer creation
@@ -53,7 +53,6 @@ func NewMPSInferenceEngine(config cgo_bridge.InferenceConfig) (*MPSInferenceEngi
 		engine:            engine,
 		config:            config,
 		initialized:       true,
-		isDynamic:         config.UseDynamicEngine,
 		commandQueue:      commandQueue,
 		useCommandPooling: true, // Enable by default for performance
 	}, nil
@@ -85,22 +84,23 @@ type ModelInferenceEngine struct {
 }
 
 // NewModelInferenceEngine creates a model-based inference engine
+// Works with any model architecture supported by the dynamic training engine
 func NewModelInferenceEngine(
 	modelSpec *layers.ModelSpec,
 	config cgo_bridge.InferenceConfig,
 ) (*ModelInferenceEngine, error) {
-	// Validate model for inference (less strict than training validation)
-	if err := modelSpec.ValidateModelForInference(); err != nil {
+	// Validate model for dynamic engine (supports any architecture)
+	if err := modelSpec.ValidateModelForDynamicEngine(); err != nil {
 		return nil, fmt.Errorf("model validation failed: %v", err)
 	}
 	
-	// Convert model to inference-optimized layer specifications
-	inferenceSpecs, err := modelSpec.ConvertToInferenceLayerSpecs()
+	// Convert model to dynamic layer specifications (supports any architecture)
+	inferenceSpecs, err := modelSpec.ConvertToDynamicLayerSpecs()
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert model to inference specs: %v", err)
+		return nil, fmt.Errorf("failed to convert model to dynamic specs: %v", err)
 	}
 	
-	// Convert to CGO-compatible format
+	// Convert to CGO-compatible format using dynamic specs
 	cgoLayerSpecs := make([]cgo_bridge.LayerSpecC, len(inferenceSpecs))
 	for i, spec := range inferenceSpecs {
 		cgoLayerSpecs[i] = cgo_bridge.LayerSpecC{
@@ -114,7 +114,7 @@ func NewModelInferenceEngine(
 			ParamFloatCount: spec.ParamFloatCount,
 			ParamInt:        spec.ParamInt,
 			ParamIntCount:   spec.ParamIntCount,
-			// ARCHITECTURAL FIX: Copy running statistics for flexible normalization
+			// Support flexible normalization for any model architecture
 			RunningMean:     spec.RunningMean,
 			RunningVar:      spec.RunningVar,
 			RunningStatsSize: int32(len(spec.RunningMean)),
@@ -159,6 +159,17 @@ func NewModelInferenceEngine(
 	}
 	
 	return mie, nil
+}
+
+// NewModelInferenceEngineFromDynamicTraining creates an inference engine from a model trained with dynamic training engine
+// This ensures full compatibility with any architecture supported by the dynamic training engine
+func NewModelInferenceEngineFromDynamicTraining(
+	modelSpec *layers.ModelSpec,
+	config cgo_bridge.InferenceConfig,
+) (*ModelInferenceEngine, error) {
+	// This function is an alias for the main constructor, but makes it clear
+	// that it's designed to work with models from the dynamic training engine
+	return NewModelInferenceEngine(modelSpec, config)
 }
 
 // Cleanup performs complete resource cleanup
@@ -216,6 +227,26 @@ func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor)
 			continue
 		}
 		
+		// DEBUG: Check weight values
+		weightSum := float32(0.0)
+		weightMax := float32(-999999.0)
+		weightMin := float32(999999.0)
+		for _, val := range weight.Data {
+			weightSum += val
+			if val > weightMax {
+				weightMax = val
+			}
+			if val < weightMin {
+				weightMin = val
+			}
+		}
+		weightAvg := weightSum / float32(len(weight.Data))
+		
+		fmt.Printf("DEBUG: Loading weight[%d] %s: shape %v, data size %d\n", 
+			i, weight.Name, weight.Shape, len(weight.Data))
+		fmt.Printf("DEBUG: Weight[%d] %s stats: min=%.6f, max=%.6f, avg=%.6f\n", 
+			i, weight.Name, weightMin, weightMax, weightAvg)
+		
 		// Copy weights to GPU tensor (minimal CPU-GPU transfers)
 		err := cgo_bridge.CopyFloat32ArrayToMetalBuffer(
 			tensor.MetalBuffer(),
@@ -240,7 +271,7 @@ func (mie *ModelInferenceEngine) LoadWeights(weights []checkpoints.WeightTensor)
 }
 
 // Predict performs single forward pass for inference
-// Optimized for single-image or small batch inference
+// Supports any model architecture and input dimensionality
 func (mie *ModelInferenceEngine) Predict(
 	inputData []float32,
 	inputShape []int,
@@ -250,8 +281,8 @@ func (mie *ModelInferenceEngine) Predict(
 		return nil, fmt.Errorf("input data is empty")
 	}
 	
-	if len(inputShape) < 2 {
-		return nil, fmt.Errorf("input shape must have at least 2 dimensions, got %v", inputShape)
+	if len(inputShape) < 1 {
+		return nil, fmt.Errorf("input shape must have at least 1 dimension, got %v", inputShape)
 	}
 	
 	batchSize := inputShape[0]
@@ -290,7 +321,7 @@ func (mie *ModelInferenceEngine) executeInference(
 	fmt.Printf("Input tensor shape: %v\n", inputTensor.Shape())
 	fmt.Printf("Input tensor buffer: %p\n", inputTensor.MetalBuffer())
 	fmt.Printf("Batch size: %d\n", batchSize)
-	fmt.Printf("Is dynamic engine: %v\n", mie.MPSInferenceEngine.isDynamic)
+	fmt.Printf("Using dynamic engine architecture\n")
 	fmt.Printf("Batch norm inference mode: %v\n", mie.batchNormInferenceMode)
 	fmt.Printf("Number of parameter tensors: %d\n", len(mie.parameterTensors))
 	
@@ -330,14 +361,14 @@ func (mie *ModelInferenceEngine) executeInference(
 	fmt.Printf("Number of classes: %d\n", numClasses)
 	fmt.Printf("About to call ExecuteInferenceOnly...\n")
 	
-	// Single CGO call for complete inference (design compliant)
+	// Single CGO call for complete inference using dynamic engine architecture
 	result, err := cgo_bridge.ExecuteInferenceOnly(
 		mie.MPSInferenceEngine.engine,
 		inputTensor.MetalBuffer(),
 		weightBuffers,
 		batchSize,
 		numClasses,
-		mie.MPSInferenceEngine.isDynamic,
+		true, // Always use dynamic engine architecture
 		mie.batchNormInferenceMode, // Pass batch norm inference flag
 	)
 	
@@ -465,10 +496,10 @@ func (mie *ModelInferenceEngine) loadRunningStatistics(runningStatsWeights []che
 
 // recompileForInference rebuilds the inference graph with updated running statistics
 func (mie *ModelInferenceEngine) recompileForInference() error {
-	// Convert model to inference specs with updated running statistics
-	inferenceSpecs, err := mie.modelSpec.ConvertToInferenceLayerSpecs()
+	// Convert model to dynamic specs with updated running statistics
+	inferenceSpecs, err := mie.modelSpec.ConvertToDynamicLayerSpecs()
 	if err != nil {
-		return fmt.Errorf("failed to convert model to inference specs: %v", err)
+		return fmt.Errorf("failed to convert model to dynamic specs: %v", err)
 	}
 	
 	// Convert to CGO-compatible format with running statistics

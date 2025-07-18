@@ -132,65 +132,8 @@ func (st *SimpleTrainer) TrainBatch(
 	weights []*memory.Tensor,
 ) (*TrainingResult, error) {
 	
-	start := time.Now()
-	
-	// Create input tensor
-	inputTensor, err := memory.NewTensor(inputShape, memory.Float32, memory.GPU)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create input tensor: %v", err)
-	}
-	defer inputTensor.Release()
-	
-	// Copy input data to GPU tensor
-	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(inputTensor.MetalBuffer(), inputData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to copy input data to GPU: %v", err)
-	}
-	
-	// Create label tensor (one-hot encoded for hybrid approach)
-	// Convert int32 labels to one-hot float32 format
-	oneHotShape := []int{labelShape[0], 2} // Assuming 2 classes for this test
-	labelTensor, err := memory.NewTensor(oneHotShape, memory.Float32, memory.GPU)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create label tensor: %v", err)
-	}
-	defer labelTensor.Release()
-	
-	// Convert int32 labels to one-hot float32 format and copy to GPU
-	oneHotData := make([]float32, oneHotShape[0]*oneHotShape[1])
-	for i, label := range labelData {
-		// Zero-out the row first
-		baseIdx := i * oneHotShape[1]
-		for j := 0; j < oneHotShape[1]; j++ {
-			oneHotData[baseIdx+j] = 0.0
-		}
-		// Set the correct class to 1.0
-		if int(label) < oneHotShape[1] {
-			oneHotData[baseIdx+int(label)] = 1.0
-		}
-	}
-	
-	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), oneHotData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to copy label data to GPU: %v", err)
-	}
-	
-	// Execute hybrid full training step (forward + backward + optimizer)
-	learningRate := st.config.LearningRate
-	result, err := st.batchTrainer.TrainBatchHybridFull(inputTensor, labelTensor, weights, learningRate)
-	if err != nil {
-		return nil, fmt.Errorf("batch training failed: %v", err)
-	}
-	
-	totalTime := time.Since(start)
-	
-	return &TrainingResult{
-		Loss:       result.Loss,
-		BatchSize:  result.BatchSize,
-		StepTime:   totalTime,
-		Success:    result.Success,
-		BatchRate:  float64(result.BatchSize) / totalTime.Seconds(),
-	}, nil
+	// SimpleTrainer is deprecated - hybrid engine has been removed
+	return nil, fmt.Errorf("SimpleTrainer is deprecated. The hybrid engine has been removed. Use NewModelTrainer with proper layer specifications instead.")
 }
 
 // GetStats returns training statistics
@@ -443,43 +386,8 @@ func (tf *TrainerFactory) CreateTrainer(config TrainerConfig) (*SimpleTrainer, e
 		return nil, fmt.Errorf("invalid configuration: %v", err)
 	}
 	
-	// Convert to CGO bridge config (GPU-resident parameter passing)
-	bridgeConfig := cgo_bridge.TrainingConfig{
-		LearningRate:  config.LearningRate,
-		Beta1:         config.Beta1,
-		Beta2:         config.Beta2,
-		WeightDecay:   config.WeightDecay,
-		Epsilon:       config.Epsilon,
-		Alpha:         config.Alpha,
-		Momentum:      config.Momentum,
-		Centered:      config.Centered,
-		OptimizerType: config.OptimizerType,
-	}
-	
-	// Create batch trainer using legacy approach (DEPRECATED)
-	// This function maintains backward compatibility but is limited
-	var batchTrainer *engine.BatchTrainer
-	var err error
-	
-	// Handle deprecated configuration options
-	if config.UseHybridEngine {
-		batchTrainer, err = engine.NewBatchTrainerHybrid(bridgeConfig, config.BatchSize)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create hybrid batch trainer: %v", err)
-		}
-	} else if config.UseDynamicEngine {
-		// NOTE: This path doesn't exist in legacy BatchTrainer
-		// Users should use NewModelTrainer for smart routing
-		return nil, fmt.Errorf("dynamic engine not supported in legacy SimpleTrainer (use NewModelTrainer instead)")
-	} else {
-		return nil, fmt.Errorf("no engine specified (use UseHybridEngine: true or switch to NewModelTrainer for smart routing)")
-	}
-	
-	return &SimpleTrainer{
-		batchTrainer: batchTrainer,
-		batchSize:    config.BatchSize,
-		config:       bridgeConfig,
-	}, nil
+	// SimpleTrainer is deprecated - all legacy engine options have been removed
+	return nil, fmt.Errorf("SimpleTrainer is deprecated. The hybrid engine has been removed. Use NewModelTrainer with proper layer specifications instead. The dynamic engine provides universal architecture support and better performance.")
 }
 
 // CreateSGDTrainer creates an SGD trainer with specified parameters

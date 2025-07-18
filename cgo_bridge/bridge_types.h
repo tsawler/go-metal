@@ -128,9 +128,10 @@ typedef struct {
     MPSGraph* backwardGraph;                                // Separate graph for gradients
     
     // Dynamic graph placeholders (for complex architectures)
-    NSMutableArray* allWeightPlaceholders;                  // All weight placeholders in order
+    NSMutableArray* allWeightPlaceholders;                  // All weight placeholders in order (includes NSNull for corrupted layers)
     NSMutableArray* allBiasPlaceholders;                    // All bias placeholders in order
     NSMutableArray* batchnormRunningStatsPlaceholders;      // BatchNorm running mean/variance placeholders
+    NSMutableArray* validPlaceholdersForGradients;          // Filtered placeholders for gradient computation (excludes NSNull)
     
     // MEMORY LEAK FIX: Cached buffers to avoid per-step allocations
     id<MTLBuffer> cachedConvOutputBuffer;                   // Reusable buffer for conv output
