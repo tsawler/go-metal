@@ -84,7 +84,19 @@ func TestBoolToInt32(t *testing.T) {
 
 // TestMPSTrainingEngineCreation tests basic engine creation with Metal device
 func TestMPSTrainingEngineCreation(t *testing.T) {
-	// Don't create device here - engine creates its own
+	// Create a simple model for testing
+	inputShape := []int{1, 10}
+	builder := layers.NewModelBuilder(inputShape)
+	
+	model, err := builder.
+		AddDense(5, true, "dense1").
+		AddReLU("relu1").
+		AddDense(2, true, "output").
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+	
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
 		Beta1:           0.9,
@@ -96,7 +108,7 @@ func TestMPSTrainingEngineCreation(t *testing.T) {
 		LossFunction:    0, // CrossEntropy
 	}
 
-	engine, err := NewMPSTrainingEngine(config)
+	engine, err := NewModelTrainingEngineDynamic(model, config)
 	if err != nil {
 		// Skip if Metal is not available
 		if contains(err.Error(), "Metal") || contains(err.Error(), "device") {
@@ -108,20 +120,14 @@ func TestMPSTrainingEngineCreation(t *testing.T) {
 	// defer engine.Cleanup()
 
 	// Verify engine state
-	if engine.device == nil {
-		t.Error("Engine device should not be nil")
+	if engine.MPSTrainingEngine == nil {
+		t.Error("Base training engine should not be nil")
 	}
-	if engine.engine == nil {
-		t.Error("Engine pointer should not be nil")
+	if engine.modelSpec == nil {
+		t.Error("Model specification should not be nil")
 	}
-	if !engine.initialized {
-		t.Error("Engine should be initialized")
-	}
-	if engine.commandQueue == nil {
-		t.Error("Engine command queue should not be nil")
-	}
-	if !engine.useCommandPooling {
-		t.Error("Engine should have command pooling enabled by default")
+	if len(engine.parameterTensors) == 0 {
+		t.Error("Parameter tensors should be initialized")
 	}
 
 	t.Log("✅ MPSTrainingEngine creation test passed")
@@ -140,6 +146,19 @@ func TestMPSInferenceEngineCreation(t *testing.T) {
 
 // TestEngineIntegrationWithMetalDevice tests engine integration and demonstrates code correctness
 func TestEngineIntegrationWithMetalDevice(t *testing.T) {
+	// Create a model for testing
+	inputShape := []int{1, 10}
+	builder := layers.NewModelBuilder(inputShape)
+	
+	model, err := builder.
+		AddDense(5, true, "dense1").
+		AddReLU("relu1").
+		AddDense(2, true, "output").
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+	
 	// Test 1: Training engine with comprehensive validation
 	trainingConfig := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -152,7 +171,7 @@ func TestEngineIntegrationWithMetalDevice(t *testing.T) {
 		LossFunction:    0, // CrossEntropy
 	}
 
-	trainingEngine, err := NewMPSTrainingEngine(trainingConfig)
+	trainingEngine, err := NewModelTrainingEngineDynamic(model, trainingConfig)
 	if err != nil {
 		if contains(err.Error(), "Metal") || contains(err.Error(), "device") {
 			t.Skipf("Metal device not available for training engine: %v", err)
@@ -163,20 +182,14 @@ func TestEngineIntegrationWithMetalDevice(t *testing.T) {
 	// defer trainingEngine.Cleanup()
 
 	// Test 2: Verify engine state demonstrates correctness
-	if !trainingEngine.initialized {
-		t.Error("Training engine should be initialized")
+	if trainingEngine.MPSTrainingEngine == nil {
+		t.Error("Base training engine should not be nil")
 	}
-	if trainingEngine.device == nil {
-		t.Error("Training engine should have a valid Metal device")
+	if trainingEngine.modelSpec == nil {
+		t.Error("Model specification should not be nil")
 	}
-	if trainingEngine.engine == nil {
-		t.Error("Training engine should have a valid native engine")
-	}
-	if trainingEngine.commandQueue == nil {
-		t.Error("Training engine should have a valid command queue")
-	}
-	if !trainingEngine.useCommandPooling {
-		t.Error("Training engine should have command pooling enabled")
+	if len(trainingEngine.parameterTensors) == 0 {
+		t.Error("Parameter tensors should be initialized")
 	}
 
 	// Test 3: Verify configuration correctness
@@ -188,10 +201,10 @@ func TestEngineIntegrationWithMetalDevice(t *testing.T) {
 		t.Errorf("Optimizer type mismatch: expected %d, got %d", trainingConfig.OptimizerType, config.OptimizerType)
 	}
 
-	// Test 4: Verify device access works correctly  
-	devicePtr := trainingEngine.GetDevice()
-	if devicePtr == nil {
-		t.Error("Device pointer should not be nil")
+	// Test 4: Verify parameter tensors are correctly initialized
+	paramTensors := trainingEngine.GetParameterTensors()
+	if len(paramTensors) == 0 {
+		t.Error("Parameter tensors should be available")
 	}
 
 	t.Log("✅ Engine integration demonstrates complete code correctness")
@@ -277,6 +290,19 @@ func TestModelValidation(t *testing.T) {
 
 // TestEngineCodeCorrectnessDemonstration - comprehensive test demonstrating code correctness
 func TestEngineCodeCorrectnessDemonstration(t *testing.T) {
+	// Create a simple model for testing
+	inputShape := []int{1, 10}
+	builder := layers.NewModelBuilder(inputShape)
+	
+	model, err := builder.
+		AddDense(5, true, "dense1").
+		AddReLU("relu1").
+		AddDense(2, true, "output").
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+	
 	// Test 1: Validate proper error handling for invalid configurations
 	invalidConfig := cgo_bridge.TrainingConfig{
 		LearningRate: -0.001, // Invalid negative learning rate
@@ -289,7 +315,7 @@ func TestEngineCodeCorrectnessDemonstration(t *testing.T) {
 		LossFunction:  0,
 	}
 	
-	_, err := NewMPSTrainingEngine(invalidConfig)
+	_, err = NewModelTrainingEngineDynamic(model, invalidConfig)
 	// Engine may create successfully but would fail during actual training
 	// This demonstrates the system handles invalid configs gracefully
 	if err != nil {
@@ -310,7 +336,7 @@ func TestEngineCodeCorrectnessDemonstration(t *testing.T) {
 		LossFunction:    0, // CrossEntropy
 	}
 	
-	engine, err := NewMPSTrainingEngine(validConfig)
+	engine, err := NewModelTrainingEngineDynamic(model, validConfig)
 	if err != nil {
 		if contains(err.Error(), "Metal") || contains(err.Error(), "device") {
 			t.Skipf("Metal device not available: %v", err)
@@ -319,20 +345,16 @@ func TestEngineCodeCorrectnessDemonstration(t *testing.T) {
 	}
 	
 	// Test 3: Validate engine state correctness
-	if !engine.initialized {
-		t.Error("CORRECTNESS VIOLATION: Engine should be initialized after creation")
+	if engine.MPSTrainingEngine == nil {
+		t.Error("CORRECTNESS VIOLATION: Base training engine should not be nil")
 	}
 	
-	if engine.device == nil {
-		t.Error("CORRECTNESS VIOLATION: Engine should have valid Metal device")
+	if engine.modelSpec == nil {
+		t.Error("CORRECTNESS VIOLATION: Model specification should not be nil")
 	}
 	
-	if engine.commandQueue == nil {
-		t.Error("CORRECTNESS VIOLATION: Engine should have valid command queue")
-	}
-	
-	if !engine.useCommandPooling {
-		t.Error("CORRECTNESS VIOLATION: Engine should enable command pooling by default")
+	if len(engine.parameterTensors) == 0 {
+		t.Error("CORRECTNESS VIOLATION: Parameter tensors should be initialized")
 	}
 	
 	// Test 4: Validate configuration persistence
@@ -347,11 +369,11 @@ func TestEngineCodeCorrectnessDemonstration(t *testing.T) {
 			validConfig.Beta1, storedConfig.Beta1)
 	}
 	
-	// Test 5: Validate device access consistency
-	device1 := engine.GetDevice()
-	device2 := engine.GetDevice()
-	if device1 != device2 {
-		t.Error("CORRECTNESS VIOLATION: GetDevice should return consistent pointer")
+	// Test 5: Validate parameter tensor consistency
+	paramTensors1 := engine.GetParameterTensors()
+	paramTensors2 := engine.GetParameterTensors()
+	if len(paramTensors1) != len(paramTensors2) {
+		t.Error("CORRECTNESS VIOLATION: GetParameterTensors should return consistent count")
 	}
 	
 	t.Log("✅ All code correctness validations passed - engine behavior is deterministic and correct")

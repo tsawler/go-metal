@@ -89,6 +89,11 @@ func NewModelInferenceEngine(
 	modelSpec *layers.ModelSpec,
 	config cgo_bridge.InferenceConfig,
 ) (*ModelInferenceEngine, error) {
+	// Check for nil model
+	if modelSpec == nil {
+		return nil, fmt.Errorf("model specification cannot be nil")
+	}
+	
 	// Validate model for dynamic engine (supports any architecture)
 	if err := modelSpec.ValidateModelForDynamicEngine(); err != nil {
 		return nil, fmt.Errorf("model validation failed: %v", err)

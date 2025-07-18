@@ -24,7 +24,7 @@ func DisabledTestMPSInferenceEngineDetailed(t *testing.T) {
 	
 	// Test 2: Valid 4D configuration creation - demonstrates correct input format
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape: batch, channels, height, width
 		InputShapeLen:          4,
@@ -71,7 +71,7 @@ func DisabledTestMPSInferenceEngineCleanup(t *testing.T) {
 	defer cgo_bridge.DestroyMetalDevice(device)
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
@@ -130,7 +130,7 @@ func TestModelInferenceEngineCreation(t *testing.T) {
 	}
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
@@ -196,7 +196,7 @@ func DisabledTestModelInferenceEngineCleanup(t *testing.T) {
 	}
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
@@ -243,7 +243,7 @@ func DisabledTestInferenceEngineWeightLoading(t *testing.T) {
 	}
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
@@ -327,7 +327,7 @@ func DisabledTestInferenceEnginePrediction(t *testing.T) {
 	}
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
@@ -400,7 +400,7 @@ func DisabledTestInferenceEngineNormalization(t *testing.T) {
 	}
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
@@ -495,7 +495,7 @@ func DisabledTestInferenceEngineConfigurationVariations(t *testing.T) {
 		{
 			name: "static_engine",
 			config: cgo_bridge.InferenceConfig{
-				UseDynamicEngine:       false,
+				UseDynamicEngine:       true,
 				BatchNormInferenceMode: true,
 				InputShape:             []int32{1, 10},
 				InputShapeLen:          2,
@@ -505,7 +505,7 @@ func DisabledTestInferenceEngineConfigurationVariations(t *testing.T) {
 		{
 			name: "batch_norm_disabled",
 			config: cgo_bridge.InferenceConfig{
-				UseDynamicEngine:       false,
+				UseDynamicEngine:       true,
 				BatchNormInferenceMode: false,
 				InputShape:             []int32{1, 10},
 				InputShapeLen:          2,
@@ -515,7 +515,7 @@ func DisabledTestInferenceEngineConfigurationVariations(t *testing.T) {
 		{
 			name: "invalid_input_shape_len",
 			config: cgo_bridge.InferenceConfig{
-				UseDynamicEngine:       false,
+				UseDynamicEngine:       true,
 				BatchNormInferenceMode: true,
 				InputShape:             []int32{1, 10},
 				InputShapeLen:          0, // Invalid
@@ -574,7 +574,7 @@ func DisabledTestInferenceEngineRunningStatistics(t *testing.T) {
 	}
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
@@ -638,7 +638,7 @@ func DisabledTestInferenceEnginePerformanceMetrics(t *testing.T) {
 	}
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
@@ -687,7 +687,7 @@ func DisabledTestInferenceEngineResourceManagement(t *testing.T) {
 	// Test 1: Multiple engine creation and cleanup
 	for i := 0; i < 3; i++ {
 		config := cgo_bridge.InferenceConfig{
-			UseDynamicEngine:       false,
+			UseDynamicEngine:       true,
 			BatchNormInferenceMode: true,
 			InputShape:             []int32{1, 10},
 			InputShapeLen:          2,
@@ -716,7 +716,7 @@ func DisabledTestInferenceEngineResourceManagement(t *testing.T) {
 	}
 	
 	config := cgo_bridge.InferenceConfig{
-		UseDynamicEngine:       false,
+		UseDynamicEngine:       true,
 		BatchNormInferenceMode: true,
 		InputShape:             []int32{1, 3, 32, 32}, // Valid 4D shape
 		InputShapeLen:          4,
