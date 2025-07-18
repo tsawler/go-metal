@@ -1,4 +1,4 @@
-package loss
+package training
 
 import (
 	"math"
@@ -6,7 +6,6 @@ import (
 
 	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/layers"
-	"github.com/tsawler/go-metal/training"
 )
 
 func TestSparseCrossEntropyGradientComputation(t *testing.T) {
@@ -29,11 +28,11 @@ func TestSparseCrossEntropyGradientComputation(t *testing.T) {
 	}
 	
 	// Configure SparseCrossEntropy loss
-	config := training.TrainerConfig{
+	config := TrainerConfig{
 		BatchSize:     batchSize,
 		LearningRate:  0.01,
 		OptimizerType: cgo_bridge.Adam,
-		EngineType:    training.Dynamic,
+		EngineType:    Dynamic,
 		LossFunction:  1, // SparseCrossEntropy
 		ProblemType:   0, // Classification
 		Beta1:         0.9,
@@ -41,7 +40,7 @@ func TestSparseCrossEntropyGradientComputation(t *testing.T) {
 		Epsilon:       1e-8,
 	}
 	
-	trainer, err := training.NewModelTrainer(model, config)
+	trainer, err := NewModelTrainer(model, config)
 	if err != nil {
 		t.Fatalf("Failed to create trainer with SparseCrossEntropy: %v", err)
 	}
@@ -110,11 +109,11 @@ func TestSparseCrossEntropyVsCrossEntropy(t *testing.T) {
 	}
 	
 	// Configuration for SparseCrossEntropy
-	config1 := training.TrainerConfig{
+	config1 := TrainerConfig{
 		BatchSize:     batchSize,
 		LearningRate:  0.01,
 		OptimizerType: cgo_bridge.Adam,
-		EngineType:    training.Dynamic,
+		EngineType:    Dynamic,
 		LossFunction:  1, // SparseCrossEntropy
 		ProblemType:   0, // Classification
 		Beta1:         0.9,
@@ -123,11 +122,11 @@ func TestSparseCrossEntropyVsCrossEntropy(t *testing.T) {
 	}
 	
 	// Configuration for CrossEntropy (default)
-	config2 := training.TrainerConfig{
+	config2 := TrainerConfig{
 		BatchSize:     batchSize,
 		LearningRate:  0.01,
 		OptimizerType: cgo_bridge.Adam,
-		EngineType:    training.Dynamic,
+		EngineType:    Dynamic,
 		// LossFunction: 0, // CrossEntropy (default)
 		// ProblemType:  0, // Classification (default)
 		Beta1:         0.9,
@@ -135,13 +134,13 @@ func TestSparseCrossEntropyVsCrossEntropy(t *testing.T) {
 		Epsilon:       1e-8,
 	}
 	
-	trainer1, err := training.NewModelTrainer(model1, config1)
+	trainer1, err := NewModelTrainer(model1, config1)
 	if err != nil {
 		t.Fatalf("Failed to create SparseCE trainer: %v", err)
 	}
 	defer trainer1.Cleanup()
 	
-	trainer2, err := training.NewModelTrainer(model2, config2)
+	trainer2, err := NewModelTrainer(model2, config2)
 	if err != nil {
 		t.Fatalf("Failed to create CrossCE trainer: %v", err)
 	}
@@ -215,11 +214,11 @@ func TestSparseCrossEntropyMultipleOptimizers(t *testing.T) {
 			}
 			
 			// Configure with SparseCrossEntropy
-			config := training.TrainerConfig{
+			config := TrainerConfig{
 				BatchSize:     batchSize,
 				LearningRate:  0.01,
 				OptimizerType: test.opt,
-				EngineType:    training.Dynamic,
+				EngineType:    Dynamic,
 				LossFunction:  1, // SparseCrossEntropy
 				ProblemType:   0, // Classification
 				Beta1:         0.9,
@@ -227,7 +226,7 @@ func TestSparseCrossEntropyMultipleOptimizers(t *testing.T) {
 				Epsilon:       1e-8,
 			}
 			
-			trainer, err := training.NewModelTrainer(model, config)
+			trainer, err := NewModelTrainer(model, config)
 			if err != nil {
 				t.Fatalf("Failed to create trainer with %s: %v", test.name, err)
 			}
@@ -269,11 +268,11 @@ func TestSparseCrossEntropyLabelShapeValidation(t *testing.T) {
 		t.Fatalf("Failed to compile model: %v", err)
 	}
 	
-	config := training.TrainerConfig{
+	config := TrainerConfig{
 		BatchSize:     batchSize,
 		LearningRate:  0.01,
 		OptimizerType: cgo_bridge.Adam,
-		EngineType:    training.Dynamic,
+		EngineType:    Dynamic,
 		LossFunction:  1, // SparseCrossEntropy
 		ProblemType:   0, // Classification
 		Beta1:         0.9,
@@ -281,7 +280,7 @@ func TestSparseCrossEntropyLabelShapeValidation(t *testing.T) {
 		Epsilon:       1e-8,
 	}
 	
-	trainer, err := training.NewModelTrainer(model, config)
+	trainer, err := NewModelTrainer(model, config)
 	if err != nil {
 		t.Fatalf("Failed to create trainer: %v", err)
 	}
