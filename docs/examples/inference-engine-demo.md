@@ -84,6 +84,9 @@ func trainModel(modelSpec *layers.ModelSpec, trainData []float32, trainLabels []
         BatchSize:     32,
         LearningRate:  0.01,
         OptimizerType: cgo_bridge.Adam,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
         EngineType:    training.Auto,
         ProblemType:   training.Classification,
         LossFunction:  training.CrossEntropy,
@@ -95,6 +98,12 @@ func trainModel(modelSpec *layers.ModelSpec, trainData []float32, trainLabels []
         return fmt.Errorf("failed to create trainer: %v", err)
     }
     defer trainer.Cleanup()
+    
+    // Enable persistent buffers for better performance
+    err = trainer.EnablePersistentBuffers([]int{config.BatchSize, 4})
+    if err != nil {
+        return fmt.Errorf("failed to enable persistent buffers: %v", err)
+    }
     
     // Train for a few steps
     numSamples := len(trainLabels)
@@ -110,8 +119,14 @@ func trainModel(modelSpec *layers.ModelSpec, trainData []float32, trainLabels []
         batchFeatures := trainData[startIdx*4 : endIdx*4]
         batchLabels := trainLabels[startIdx:endIdx]
         
+        // Convert int labels to int32
+        batchLabelsInt32 := make([]int32, len(batchLabels))
+        for i, label := range batchLabels {
+            batchLabelsInt32[i] = int32(label)
+        }
+        
         // Create label data
-        labels, err := training.NewInt32Labels(batchLabels, []int{config.BatchSize})
+        labels, err := training.NewInt32Labels(batchLabelsInt32, []int{config.BatchSize})
         if err != nil {
             return fmt.Errorf("failed to create labels: %v", err)
         }
@@ -324,13 +339,13 @@ go run inference_demo.go
 Go-Metal Inference Engine Demo
 ==============================
 
-Created model with 368 parameters
+Created model with 131 parameters
 Training model...
-  Step 1 - Loss: 1.0986, Accuracy: 33.33%
-  Step 2 - Loss: 1.0847, Accuracy: 40.62%
-  Step 3 - Loss: 1.0621, Accuracy: 43.75%
-  Step 4 - Loss: 1.0234, Accuracy: 53.12%
-  Step 5 - Loss: 0.9756, Accuracy: 56.25%
+  Step 1 - Loss: 1.0634, Accuracy: 15.62%
+  Step 2 - Loss: 1.0094, Accuracy: 37.50%
+  Step 3 - Loss: 0.9511, Accuracy: 53.12%
+  Step 4 - Loss: 0.9046, Accuracy: 68.75%
+  Step 5 - Loss: 0.9015, Accuracy: 78.12%
 
 Saving trained model...
 Model saved to demo_model.json
@@ -345,36 +360,48 @@ Class 1 features: high x1 + low x2,x3 + high x4
 Class 2 features: medium all features
 
 Class 0 sample: features=[0.1 0.2 0.8 0.9]
-  Predicted class: 0 (confidence: 45.2%)
-  Class probabilities: [45.2%, 28.3%, 26.5%]
+  Predicted class: 0 (confidence: 61.5%)
+  Class probabilities: [61.5%, 13.9%, 24.7%]
   ✓ Correct prediction
 
 Class 1 sample: features=[0.9 0.1 0.2 0.8]
-  Predicted class: 1 (confidence: 48.7%)
-  Class probabilities: [25.1%, 48.7%, 26.2%]
-  ✓ Correct prediction
+  Predicted class: 0 (confidence: 44.1%)
+  Class probabilities: [44.1%, 42.8%, 13.1%]
+  ✗ Expected class 1
 
 Class 2 sample: features=[0.5 0.5 0.5 0.5]
-  Predicted class: 2 (confidence: 41.3%)
-  Class probabilities: [29.4%, 29.3%, 41.3%]
-  ✓ Correct prediction
+  Predicted class: 0 (confidence: 54.8%)
+  Class probabilities: [54.8%, 21.7%, 23.5%]
+  ✗ Expected class 2
 
 Ambiguous sample: features=[0.4 0.3 0.6 0.7]
-  Predicted class: 0 (confidence: 37.8%)
-  Class probabilities: [37.8%, 30.1%, 32.1%]
+  Predicted class: 0 (confidence: 58.8%)
+  Class probabilities: [58.8%, 18.2%, 23.0%]
 
 Demo completed successfully!
 ```
 
+Note: The accuracy may vary as this is a simple demonstration with minimal training. In production, you would train for more epochs with a larger dataset.
+
 ## Key Concepts Demonstrated
 
 1. **Model Creation**: Building a simple neural network architecture
-2. **Training**: Quick training to get a functional model
-3. **Model Saving**: Persisting the trained model to disk
-4. **Model Loading**: Loading the saved model for inference
-5. **Inference Engine Setup**: Configuring and creating the inference engine
-6. **Making Predictions**: Running inference on new data
-7. **Result Interpretation**: Processing and understanding predictions
+2. **Training**: Quick training to get a functional model with proper Adam optimizer configuration
+3. **Persistent Buffers**: Enabling GPU memory optimization for training
+4. **Type Conversion**: Converting Go `int` labels to `int32` for compatibility
+5. **Model Saving**: Persisting the trained model to disk
+6. **Model Loading**: Loading the saved model for inference
+7. **Inference Engine Setup**: Configuring and creating the inference engine
+8. **Making Predictions**: Running inference on new data
+9. **Result Interpretation**: Processing and understanding predictions
+
+## Important Notes
+
+- The example uses Adam optimizer with proper beta values (0.9, 0.999)
+- Persistent buffers are enabled for better training performance
+- Labels must be converted from `int` to `int32` type
+- The model trains for only 5 steps for demonstration purposes
+- Predictions may not be highly accurate due to minimal training
 
 ## Customization
 
@@ -384,3 +411,4 @@ You can modify this example to:
 - Implement batch inference
 - Add preprocessing/postprocessing
 - Support different problem types (regression, multi-label classification)
+- Train for more epochs to improve accuracy
