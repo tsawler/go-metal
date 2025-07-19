@@ -848,6 +848,13 @@ func (sgd *SGDOptimizerState) GetState() (*OptimizerState, error)
 ```
 GetState extracts optimizer state for checkpointing
 
+#### func (*SGDOptimizerState) GetStep
+
+```go
+func (sgd *SGDOptimizerState) GetStep() uint64
+```
+GetStep returns the current optimization step count
+
 #### func (*SGDOptimizerState) GetStepCount
 
 ```go

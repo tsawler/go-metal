@@ -84,6 +84,16 @@ func TestBoolToInt32(t *testing.T) {
 
 // TestMPSTrainingEngineCreation tests basic engine creation with Metal device
 func TestMPSTrainingEngineCreation(t *testing.T) {
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping training engine creation test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+	
+	// Initialize memory manager
+	memory.InitializeGlobalMemoryManager(device)
+	
 	// Create a simple model for testing
 	inputShape := []int{1, 10}
 	builder := layers.NewModelBuilder(inputShape)
@@ -110,10 +120,6 @@ func TestMPSTrainingEngineCreation(t *testing.T) {
 
 	engine, err := NewModelTrainingEngineDynamic(model, config)
 	if err != nil {
-		// Skip if Metal is not available
-		if contains(err.Error(), "Metal") || contains(err.Error(), "device") {
-			t.Skipf("Metal device not available for training engine test: %v", err)
-		}
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
 	// Note: Temporary skip cleanup to avoid CGO double-free issues
@@ -146,6 +152,16 @@ func TestMPSInferenceEngineCreation(t *testing.T) {
 
 // TestEngineIntegrationWithMetalDevice tests engine integration and demonstrates code correctness
 func TestEngineIntegrationWithMetalDevice(t *testing.T) {
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping engine integration test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+	
+	// Initialize memory manager
+	memory.InitializeGlobalMemoryManager(device)
+	
 	// Create a model for testing
 	inputShape := []int{1, 10}
 	builder := layers.NewModelBuilder(inputShape)
@@ -173,9 +189,6 @@ func TestEngineIntegrationWithMetalDevice(t *testing.T) {
 
 	trainingEngine, err := NewModelTrainingEngineDynamic(model, trainingConfig)
 	if err != nil {
-		if contains(err.Error(), "Metal") || contains(err.Error(), "device") {
-			t.Skipf("Metal device not available for training engine: %v", err)
-		}
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
 	// Note: Skip cleanup to avoid CGO double-free issues - let GC handle it
@@ -211,7 +224,30 @@ func TestEngineIntegrationWithMetalDevice(t *testing.T) {
 }
 
 // TestMetalDeviceResourceManagement tests proper Metal device resource management
-func DisabledTestMetalDeviceResourceManagement(t *testing.T) {
+func TestMetalDeviceResourceManagement(t *testing.T) {
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping resource management test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+	
+	// Initialize memory manager
+	memory.InitializeGlobalMemoryManager(device)
+	
+	// Create a simple model for testing resource management
+	inputShape := []int{1, 10}
+	builder := layers.NewModelBuilder(inputShape)
+	
+	model, err := builder.
+		AddDense(5, true, "dense1").
+		AddReLU("relu1").
+		AddDense(2, true, "output").
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+	
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
 		Beta1:           0.9,
@@ -224,14 +260,10 @@ func DisabledTestMetalDeviceResourceManagement(t *testing.T) {
 	}
 
 	// Test 1: Create multiple engines to test resource sharing
-	engines := make([]*MPSTrainingEngine, 3)
+	engines := make([]*ModelTrainingEngine, 3)
 	for i := 0; i < 3; i++ {
-		engine, err := NewMPSTrainingEngine(config)
+		engine, err := NewModelTrainingEngineDynamic(model, config)
 		if err != nil {
-			// Skip if Metal is not available
-			if contains(err.Error(), "Metal") || contains(err.Error(), "device") {
-				t.Skipf("Metal device not available for engine %d: %v", i, err)
-			}
 			// Cleanup previously created engines
 			for j := 0; j < i; j++ {
 				engines[j].Cleanup()
@@ -241,13 +273,16 @@ func DisabledTestMetalDeviceResourceManagement(t *testing.T) {
 		engines[i] = engine
 	}
 
-	// Test 2: Verify all engines have valid devices
+	// Test 2: Verify all engines have valid state
 	for i, engine := range engines {
-		if engine.device == nil {
-			t.Errorf("Engine %d should have a valid device", i)
+		if engine.MPSTrainingEngine == nil {
+			t.Errorf("Engine %d should have a valid base training engine", i)
 		}
-		if !engine.initialized {
-			t.Errorf("Engine %d should be initialized", i)
+		if engine.modelSpec == nil {
+			t.Errorf("Engine %d should have a valid model specification", i)
+		}
+		if len(engine.parameterTensors) == 0 {
+			t.Errorf("Engine %d should have parameter tensors", i)
 		}
 	}
 
@@ -290,6 +325,16 @@ func TestModelValidation(t *testing.T) {
 
 // TestEngineCodeCorrectnessDemonstration - comprehensive test demonstrating code correctness
 func TestEngineCodeCorrectnessDemonstration(t *testing.T) {
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping code correctness demonstration test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+	
+	// Initialize memory manager
+	memory.InitializeGlobalMemoryManager(device)
+	
 	// Create a simple model for testing
 	inputShape := []int{1, 10}
 	builder := layers.NewModelBuilder(inputShape)
@@ -338,9 +383,6 @@ func TestEngineCodeCorrectnessDemonstration(t *testing.T) {
 	
 	engine, err := NewModelTrainingEngineDynamic(model, validConfig)
 	if err != nil {
-		if contains(err.Error(), "Metal") || contains(err.Error(), "device") {
-			t.Skipf("Metal device not available: %v", err)
-		}
 		t.Fatalf("Valid config should create engine successfully: %v", err)
 	}
 	

@@ -12,8 +12,15 @@ import (
 
 // TestStagingBufferPoolMemoryTransfer tests the optimized memory transfer functionality
 func TestStagingBufferPoolMemoryTransfer(t *testing.T) {
-	// Initialize memory manager (required for Metal device)
-	memory.InitializeGlobalMemoryManager(nil)
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping staging buffer pool memory transfer test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+	
+	// Initialize memory manager
+	memory.InitializeGlobalMemoryManager(device)
 
 	// Get memory manager
 	memManager := memory.GetGlobalMemoryManager()
@@ -145,8 +152,15 @@ func TestStagingBufferPoolMemoryTransfer(t *testing.T) {
 
 // TestStagingBufferPoolBufferManagement tests buffer lifecycle management
 func TestStagingBufferPoolBufferManagement(t *testing.T) {
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		t.Skipf("Skipping staging buffer pool buffer management test - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+	
 	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(nil)
+	memory.InitializeGlobalMemoryManager(device)
 
 	memManager := memory.GetGlobalMemoryManager()
 	if memManager == nil {
@@ -688,8 +702,15 @@ func TestStagingPoolStats(t *testing.T) {
 
 // BenchmarkMemoryTransfer benchmarks the optimized memory transfer performance
 func BenchmarkMemoryTransfer(b *testing.B) {
+	// Create Metal device
+	device, err := cgo_bridge.CreateMetalDevice()
+	if err != nil {
+		b.Skipf("Skipping memory transfer benchmark - Metal device not available: %v", err)
+	}
+	defer cgo_bridge.DestroyMetalDevice(device)
+	
 	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(nil)
+	memory.InitializeGlobalMemoryManager(device)
 
 	memManager := memory.GetGlobalMemoryManager()
 	if memManager == nil {
