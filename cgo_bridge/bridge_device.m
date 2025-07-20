@@ -795,6 +795,15 @@ uintptr_t create_training_engine_dynamic(
         engine->adamPrecompiledUpdatedMomentum = [[NSMutableArray alloc] init];
         engine->adamPrecompiledUpdatedVariance = [[NSMutableArray alloc] init];
         
+        // Initialize RMSProp-specific graph compilation arrays
+        engine->rmspropGraphCompiled = NO;
+        engine->rmspropStateInitialized = NO;
+        engine->rmspropPrecompiledGradients = [[NSMutableArray alloc] init];
+        engine->rmspropPrecompiledUpdatedParams = [[NSMutableArray alloc] init];
+        engine->rmspropPrecompiledUpdatedMomentum = [[NSMutableArray alloc] init];
+        engine->rmspropPrecompiledUpdatedSquaredGrad = [[NSMutableArray alloc] init];
+        engine->rmspropPrecompiledUpdatedGradAvg = [[NSMutableArray alloc] init];
+        
         // Create command queue
         engine->commandQueue = [device newCommandQueue];
         if (!engine->commandQueue) {

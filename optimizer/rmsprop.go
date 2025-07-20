@@ -313,11 +313,12 @@ func (rmsprop *RMSPropOptimizerState) Cleanup() {
 				rmsprop.memoryManager.ReleaseBuffer(rmsprop.SquaredGradAvgBuffers[i])
 				rmsprop.SquaredGradAvgBuffers[i] = nil
 			}
-			if rmsprop.MomentumBuffers[i] != nil {
+			// Defensive bounds checking to prevent index out of range
+			if i < len(rmsprop.MomentumBuffers) && rmsprop.MomentumBuffers[i] != nil {
 				rmsprop.memoryManager.ReleaseBuffer(rmsprop.MomentumBuffers[i])
 				rmsprop.MomentumBuffers[i] = nil
 			}
-			if rmsprop.GradientAvgBuffers[i] != nil {
+			if i < len(rmsprop.GradientAvgBuffers) && rmsprop.GradientAvgBuffers[i] != nil {
 				rmsprop.memoryManager.ReleaseBuffer(rmsprop.GradientAvgBuffers[i])
 				rmsprop.GradientAvgBuffers[i] = nil
 			}

@@ -12,14 +12,6 @@ import (
 
 // TestMPSTrainingEngineDetailed tests the creation and basic functionality of MPSTrainingEngine
 func TestMPSTrainingEngineDetailed(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping training engine detailed test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 	
 	// Create a simple model for testing
 	inputShape := []int{1, 10}
@@ -46,7 +38,7 @@ func TestMPSTrainingEngineDetailed(t *testing.T) {
 		LossFunction:    0, // CrossEntropy
 	}
 
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	if err != nil {
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
@@ -90,14 +82,6 @@ func TestMPSTrainingEngineDetailed(t *testing.T) {
 
 // TestMPSTrainingEngineCleanup tests proper resource cleanup
 func TestMPSTrainingEngineCleanup(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping training engine cleanup test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -123,7 +107,7 @@ func TestMPSTrainingEngineCleanup(t *testing.T) {
 		t.Fatalf("Failed to create test model: %v", err)
 	}
 
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	if err != nil {
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
@@ -150,14 +134,6 @@ func TestMPSTrainingEngineCleanup(t *testing.T) {
 
 // TestMPSTrainingEngineConstantWeights tests constant weights engine creation
 func TestMPSTrainingEngineConstantWeights(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping constant weights test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -183,7 +159,7 @@ func TestMPSTrainingEngineConstantWeights(t *testing.T) {
 		t.Fatalf("Failed to create test model: %v", err)
 	}
 
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	if err != nil {
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
@@ -281,14 +257,6 @@ func DisabledTestMPSTrainingEngineWithAdam(t *testing.T) {
 
 // TestTrainingEngineStepExecution tests training step execution
 func TestTrainingEngineStepExecution(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping step execution test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -314,7 +282,7 @@ func TestTrainingEngineStepExecution(t *testing.T) {
 		t.Fatalf("Failed to create test model: %v", err)
 	}
 
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	if err != nil {
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
@@ -478,14 +446,6 @@ func DisabledTestTrainingEngineAdamOptimization(t *testing.T) {
 
 // TestBatchTrainerCreation tests batch trainer creation and usage
 func TestBatchTrainerCreation(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping batch trainer test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -515,7 +475,7 @@ func TestBatchTrainerCreation(t *testing.T) {
 	}
 
 	// Test 1: Model training engine creation (replaces batch trainer)
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	if err != nil {
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
@@ -554,14 +514,6 @@ func TestBatchTrainerCreation(t *testing.T) {
 
 // TestBatchTrainerTraining tests batch training functionality
 func TestBatchTrainerTraining(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping batch training test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -589,7 +541,7 @@ func TestBatchTrainerTraining(t *testing.T) {
 		t.Fatalf("Failed to create test model: %v", err)
 	}
 
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	if err != nil {
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
@@ -651,14 +603,6 @@ func TestBatchTrainerTraining(t *testing.T) {
 
 // TestTrainingEngineConfigurationValidation tests configuration validation
 func TestTrainingEngineConfigurationValidation(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping configuration test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	// Test different configuration combinations
 	configs := []struct {
@@ -725,7 +669,7 @@ func TestTrainingEngineConfigurationValidation(t *testing.T) {
 				t.Fatalf("Failed to create test model: %v", err)
 			}
 
-			engine, err := NewModelTrainingEngineDynamic(model, test.config)
+			engine, err := createTestModelTrainingEngine(model, test.config, t)
 			if test.valid {
 				if err != nil {
 					// Check if this is a buffer pool exhaustion error
@@ -822,14 +766,6 @@ func TestTrainingEngineAPIValidation(t *testing.T) {
 
 // TestTrainingEnginePerformanceMetrics tests performance-related functionality
 func TestTrainingEnginePerformanceMetrics(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping performance test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -857,7 +793,7 @@ func TestTrainingEnginePerformanceMetrics(t *testing.T) {
 
 	// Test 1: Engine creation performance
 	startTime := time.Now()
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	creationTime := time.Since(startTime)
 	if err != nil {
 		// Check if this is a buffer pool exhaustion error
@@ -898,7 +834,7 @@ func TestTrainingEnginePerformanceMetrics(t *testing.T) {
 
 	// Test 5: Multiple engine creation (resource management)
 	for i := 0; i < 3; i++ {
-		testEngine, testErr := NewModelTrainingEngineDynamic(model, config)
+		testEngine, testErr := createTestModelTrainingEngine(model, config, t)
 		if testErr != nil {
 			// Check if this is a buffer pool exhaustion error
 			if strings.Contains(testErr.Error(), "buffer pool at capacity") || strings.Contains(testErr.Error(), "failed to allocate") {
@@ -914,14 +850,6 @@ func TestTrainingEnginePerformanceMetrics(t *testing.T) {
 
 // TestTrainingEngineResourceManagement tests resource management patterns
 func TestTrainingEngineResourceManagement(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping resource management test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -950,7 +878,7 @@ func TestTrainingEngineResourceManagement(t *testing.T) {
 	// Test 1: Multiple engine creation and cleanup
 	engines := make([]*ModelTrainingEngine, 3)
 	for i := 0; i < 3; i++ {
-		engine, err := NewModelTrainingEngineDynamic(model, config)
+		engine, err := createTestModelTrainingEngine(model, config, t)
 		if err != nil {
 			// Check if this is a buffer pool exhaustion error
 			if strings.Contains(err.Error(), "buffer pool at capacity") || strings.Contains(err.Error(), "failed to allocate") {
@@ -1079,14 +1007,6 @@ func DisabledTestTrainingEngineWithPrecomputedGradients(t *testing.T) {
 
 // TestTrainingEngineErrorHandling tests error handling in various scenarios
 func TestTrainingEngineErrorHandling(t *testing.T) {
-	device, err := cgo_bridge.CreateMetalDevice()
-	if err != nil {
-		t.Skipf("Skipping error handling test - Metal device not available: %v", err)
-	}
-	defer cgo_bridge.DestroyMetalDevice(device)
-	
-	// Initialize memory manager
-	memory.InitializeGlobalMemoryManager(device)
 
 	config := cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
@@ -1112,7 +1032,7 @@ func TestTrainingEngineErrorHandling(t *testing.T) {
 		t.Fatalf("Failed to create test model: %v", err)
 	}
 
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	if err != nil {
 		// Check if this is a buffer pool exhaustion error
 		if strings.Contains(err.Error(), "buffer pool at capacity") || strings.Contains(err.Error(), "failed to allocate") {

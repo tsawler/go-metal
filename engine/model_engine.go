@@ -1386,6 +1386,163 @@ func (mte *ModelTrainingEngine) executeAdaDeltaStepDynamicWithGradients(
 	return actualLoss, nil
 }
 
+// ExecuteModelTrainingStepWithRMSProp executes model training with RMSProp optimizer
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithRMSProp(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	if !mte.compiledForModel {
+		return 0, fmt.Errorf("model not compiled for execution")
+	}
+	
+	// Dynamic engine uses external RMSProp optimization with gradient extraction
+	return mte.executeRMSPropStepDynamic(inputTensor, labelTensor)
+}
+
+// executeRMSPropStepDynamic executes RMSProp optimization for dynamic engines using forward+backward+RMSProp pattern
+func (mte *ModelTrainingEngine) executeRMSPropStepDynamic(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error) {
+	return mte.executeRMSPropStepDynamicWithGradients(inputTensor, labelTensor, nil)
+}
+
+// executeRMSPropStepDynamicWithGradients executes RMSProp optimization with optional pre-allocated gradient tensors
+// PERFORMANCE CRITICAL: This eliminates 128MB/step allocation when persistentGradientTensors is provided
+func (mte *ModelTrainingEngine) executeRMSPropStepDynamicWithGradients(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+	persistentGradientTensors []*memory.Tensor, // If nil, will allocate (fallback behavior)
+) (float32, error) {
+	// Get all parameter tensors for the dynamic engine (it uses all parameters, not just FC)
+	allParameters := mte.parameterTensors
+	if len(allParameters) == 0 {
+		return 0, fmt.Errorf("no parameter tensors found for dynamic engine")
+	}
+	
+	// Convert parameter tensors to weight buffers for CGO call
+	weightBuffers := make([]unsafe.Pointer, len(allParameters))
+	for i, tensor := range allParameters {
+		if tensor == nil {
+			return 0, fmt.Errorf("parameter tensor %d is nil", i)
+		}
+		weightBuffers[i] = tensor.MetalBuffer()
+	}
+	
+	// Get batch size from input tensor shape
+	inputShape := inputTensor.Shape()
+	if len(inputShape) == 0 {
+		return 0, fmt.Errorf("input tensor has no shape")
+	}
+	batchSize := inputShape[0]
+	
+	// Step 1: Set weight buffers in RMSProp optimizer
+	if mte.MPSTrainingEngine.rmspropOptimizer == nil {
+		return 0, fmt.Errorf("RMSProp optimizer not initialized for dynamic engine")
+	}
+	
+	err := mte.MPSTrainingEngine.rmspropOptimizer.SetWeightBuffers(weightBuffers)
+	if err != nil {
+		return 0, fmt.Errorf("failed to set weight buffers in RMSProp optimizer: %v", err)
+	}
+	
+	// Step 2: Use persistent gradient tensors if provided, otherwise allocate
+	gradientBuffers := make([]unsafe.Pointer, len(allParameters))
+	var gradientTensors []*memory.Tensor
+	var allocatedGradients bool
+
+	if persistentGradientTensors != nil && len(persistentGradientTensors) == len(allParameters) {
+		// PERFORMANCE OPTIMIZATION: Use pre-allocated persistent gradient tensors
+		gradientTensors = persistentGradientTensors
+		allocatedGradients = false
+		for i, gradTensor := range gradientTensors {
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	} else {
+		// FALLBACK: Allocate gradient tensors (original behavior for compatibility)
+		gradientTensors = make([]*memory.Tensor, len(allParameters))
+		allocatedGradients = true
+		defer func() {
+			if allocatedGradients {
+				for _, gradTensor := range gradientTensors {
+					if gradTensor != nil {
+						gradTensor.Release()
+					}
+				}
+			}
+		}()
+
+		for i, paramTensor := range allParameters {
+			// Create gradient tensor with same shape as parameter
+			gradTensor, err := memory.NewTensor(paramTensor.Shape(), memory.Float32, memory.GPU)
+			if err != nil {
+				// Cleanup previously created tensors
+				for j := 0; j < i; j++ {
+					gradientTensors[j].Release()
+				}
+				return 0, fmt.Errorf("failed to create gradient tensor %d: %v", i, err)
+			}
+			gradientTensors[i] = gradTensor
+			gradientBuffers[i] = gradTensor.MetalBuffer()
+		}
+	}
+
+	// Step 3: Compute ACTUAL loss and gradients using MPSGraph automatic differentiation
+	// RESOURCE LEAK FIX: Use pooled version if command pooling is enabled
+	var actualLoss float32
+	
+	if mte.MPSTrainingEngine.useCommandPooling && mte.MPSTrainingEngine.commandQueue != nil {
+		// Use pooled version with command queue for resource leak prevention
+		fmt.Printf("🚀 RMSProp using POOLED execution path\n")
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradientsPooled(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			batchSize,
+			mte.MPSTrainingEngine.commandQueue, // Pass command queue as pool
+		)
+	} else {
+		// Use regular version without pooling (fallback)
+		fmt.Printf("❌ RMSProp using NON-POOLED execution path\n")
+		actualLoss, err = cgo_bridge.ExecuteTrainingStepDynamicWithGradients(
+			unsafe.Pointer(mte.MPSTrainingEngine.engine),
+			inputTensor.MetalBuffer(),
+			labelTensor.MetalBuffer(),
+			weightBuffers,
+			gradientBuffers,
+			mte.MPSTrainingEngine.config.LearningRate, // Pass learning rate for RMSProp
+			batchSize,
+		)
+	}
+	
+	if err != nil {
+		return 0, fmt.Errorf("gradient computation failed: %v", err)
+	}
+
+	// Step 4: Apply RMSProp optimization with REAL gradients
+	// UNIFIED OPTIMIZER: Skip separate RMSProp step if optimizer is integrated into the graph
+	// When using the pooled version with unified optimizer, the parameter updates
+	// are already performed within the same MPSGraph execution
+	if !mte.MPSTrainingEngine.useCommandPooling {
+		// Only run separate RMSProp step if NOT using unified optimizer
+		fmt.Printf("🔧 RMSProp running SEPARATE optimizer step\n")
+		err = mte.MPSTrainingEngine.rmspropOptimizer.Step(gradientBuffers)
+		if err != nil {
+			return 0, fmt.Errorf("RMSProp optimization step failed: %v", err)
+		}
+	} else {
+		// UNIFIED OPTIMIZER: Parameters already updated in single MPSGraph execution
+		// This implements the design-doc.md requirement for single command buffer
+		// No separate optimizer step needed
+		fmt.Printf("✅ RMSProp using UNIFIED optimizer (no separate step)\n")
+	}
+	
+	// Return actual computed loss
+	return actualLoss, nil
+}
+
 // getAllParameterTensors returns all parameter tensors for dynamic inference
 func (mte *ModelTrainingEngine) getAllParameterTensors() []*memory.Tensor {
 	return mte.parameterTensors
@@ -1580,15 +1737,17 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGra
 	case cgo_bridge.Adam:
 		loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
 	case cgo_bridge.AdaGrad:
-			loss, err = mte.executeAdaGradStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
-		case cgo_bridge.AdaDelta:
-			loss, err = mte.executeAdaDeltaStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
-		case cgo_bridge.Nadam:
-			loss, err = mte.executeNadamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
-		default:
-			// For other optimizers, fall back to Adam for now
-			loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
-		}
+		loss, err = mte.executeAdaGradStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+	case cgo_bridge.AdaDelta:
+		loss, err = mte.executeAdaDeltaStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+	case cgo_bridge.Nadam:
+		loss, err = mte.executeNadamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+	case cgo_bridge.RMSProp:
+		loss, err = mte.executeRMSPropStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+	default:
+		// For other optimizers, fall back to Adam for now
+		loss, err = mte.executeAdamStepDynamicWithGradients(inputTensor, labelTensor, persistentGradientTensors)
+	}
 	
 	if err != nil {
 		return nil, fmt.Errorf("persistent training step failed: %v", err)
@@ -1610,19 +1769,49 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepBatchedPersistentWithGra
 		// Extract labels from label tensor for accuracy calculation
 		labelShape := labelTensor.Shape()
 		batchSize := labelShape[0]
-		numClasses := labelShape[1]
 		
-		// Convert one-hot back to class indices for accuracy calculation
+		// Handle both 1D (sparse) and 2D (one-hot) label formats
+		var numClasses int
+		var isOneHot bool
+		if len(labelShape) == 1 {
+			// Sparse categorical labels: shape [batchSize], infer numClasses from predictions
+			isOneHot = false
+			if len(inferenceResult.Predictions) > 0 {
+				numClasses = len(inferenceResult.Predictions) / batchSize
+			} else {
+				// Cannot determine numClasses, skip accuracy calculation
+				return result, nil
+			}
+		} else if len(labelShape) == 2 {
+			// One-hot encoded labels: shape [batchSize, numClasses]
+			numClasses = labelShape[1]
+			isOneHot = true
+		} else {
+			// Unsupported label shape, skip accuracy calculation
+			return result, nil
+		}
+		
+		// Convert labels to class indices for accuracy calculation
 		classLabels := make([]int32, batchSize)
-		for i := 0; i < batchSize; i++ {
-			maxIdx := 0
-			for j := 1; j < numClasses; j++ {
-				labelIdx := i*numClasses + j
-				if labelIdx < len(labelData) && labelData[labelIdx] > labelData[i*numClasses+maxIdx] {
-					maxIdx = j
+		if isOneHot {
+			// One-hot encoded: find the maximum value index for each sample
+			for i := 0; i < batchSize; i++ {
+				maxIdx := 0
+				for j := 1; j < numClasses; j++ {
+					labelIdx := i*numClasses + j
+					if labelIdx < len(labelData) && labelData[labelIdx] > labelData[i*numClasses+maxIdx] {
+						maxIdx = j
+					}
+				}
+				classLabels[i] = int32(maxIdx)
+			}
+		} else {
+			// Sparse categorical: labels are already class indices
+			for i := 0; i < batchSize; i++ {
+				if i < len(labelData) {
+					classLabels[i] = int32(labelData[i])
 				}
 			}
-			classLabels[i] = int32(maxIdx)
 		}
 		
 		// Calculate accuracy using existing method

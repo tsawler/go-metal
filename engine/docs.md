@@ -464,6 +464,17 @@ func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithNadam(
 ```
 ExecuteModelTrainingStepWithNadam executes model training with Nadam optimizer
 
+#### func (*ModelTrainingEngine) ExecuteModelTrainingStepWithRMSProp
+
+```go
+func (mte *ModelTrainingEngine) ExecuteModelTrainingStepWithRMSProp(
+	inputTensor *memory.Tensor,
+	labelTensor *memory.Tensor,
+) (float32, error)
+```
+ExecuteModelTrainingStepWithRMSProp executes model training with RMSProp
+optimizer
+
 #### func (*ModelTrainingEngine) GetModelSpec
 
 ```go

@@ -118,7 +118,7 @@ func TestMPSTrainingEngineCreation(t *testing.T) {
 		LossFunction:    0, // CrossEntropy
 	}
 
-	engine, err := NewModelTrainingEngineDynamic(model, config)
+	engine, err := createTestModelTrainingEngine(model, config, t)
 	if err != nil {
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestEngineIntegrationWithMetalDevice(t *testing.T) {
 		LossFunction:    0, // CrossEntropy
 	}
 
-	trainingEngine, err := NewModelTrainingEngineDynamic(model, trainingConfig)
+	trainingEngine, err := createTestModelTrainingEngine(model, trainingConfig, t)
 	if err != nil {
 		t.Fatalf("Failed to create training engine: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestMetalDeviceResourceManagement(t *testing.T) {
 	// Test 1: Create multiple engines to test resource sharing
 	engines := make([]*ModelTrainingEngine, 3)
 	for i := 0; i < 3; i++ {
-		engine, err := NewModelTrainingEngineDynamic(model, config)
+		engine, err := createTestModelTrainingEngine(model, config, t)
 		if err != nil {
 			// Cleanup previously created engines
 			for j := 0; j < i; j++ {
@@ -306,7 +306,7 @@ func TestModelValidation(t *testing.T) {
 	}
 
 	// This should fail validation if we try to create an engine with it
-	_, err := NewModelTrainingEngineDynamic(emptyModel, cgo_bridge.TrainingConfig{
+	_, err := createTestModelTrainingEngine(emptyModel, cgo_bridge.TrainingConfig{
 		LearningRate:    0.001,
 		Beta1:           0.9,
 		Beta2:           0.999,
@@ -315,7 +315,7 @@ func TestModelValidation(t *testing.T) {
 		OptimizerType:   0,
 		ProblemType:     0,
 		LossFunction:    0,
-	})
+	}, t)
 	if err == nil {
 		t.Error("Expected error for empty model")
 	}
@@ -360,7 +360,7 @@ func TestEngineCodeCorrectnessDemonstration(t *testing.T) {
 		LossFunction:  0,
 	}
 	
-	_, err = NewModelTrainingEngineDynamic(model, invalidConfig)
+	_, err = createTestModelTrainingEngine(model, invalidConfig, t)
 	// Engine may create successfully but would fail during actual training
 	// This demonstrates the system handles invalid configs gracefully
 	if err != nil {
@@ -650,7 +650,7 @@ func DisabledTestErrorHandling(t *testing.T) {
 		t.Fatalf("Failed to create test model: %v", err)
 	}
 
-	_, err = NewModelTrainingEngineDynamic(model, invalidConfig)
+	_, err = createTestModelTrainingEngine(model, invalidConfig, t)
 	// Note: The engine creation might succeed even with negative learning rate
 	// as the validation might happen later in the training process
 	if err == nil {
