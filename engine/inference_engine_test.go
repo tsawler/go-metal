@@ -48,9 +48,6 @@ func TestMPSInferenceEngineDetailed(t *testing.T) {
 		t.Fatalf("Failed to create inference engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		engine.Cleanup()
 	}()
 	
@@ -118,11 +115,11 @@ func TestMPSInferenceEngineCleanup(t *testing.T) {
 	engine.Cleanup()
 	
 	// Verify cleanup state - model inference engine should release resources
-	if engine.MPSInferenceEngine == nil {
-		t.Error("Base engine should still exist after cleanup")
+	if engine.MPSInferenceEngine != nil {
+		t.Error("Base engine should be nil after cleanup")
 	}
 	// Note: ModelInferenceEngine cleanup releases parameter tensors and model resources
-	// The underlying MPS engine may still exist for reuse
+	// The underlying MPS engine is set to nil for complete resource cleanup
 	
 	// Test double cleanup (should not panic)
 	engine.Cleanup()
@@ -170,9 +167,6 @@ func TestModelInferenceEngineCreation(t *testing.T) {
 		t.Fatalf("Failed to create model inference engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 	
@@ -292,9 +286,6 @@ func TestInferenceEngineWeightLoading(t *testing.T) {
 		t.Fatalf("Failed to create model inference engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 	
@@ -383,9 +374,6 @@ func TestInferenceEnginePrediction(t *testing.T) {
 		t.Fatalf("Failed to create model inference engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 	
@@ -468,9 +456,6 @@ func TestInferenceEngineNormalization(t *testing.T) {
 		t.Fatalf("Failed to create model inference engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 	
@@ -672,9 +657,6 @@ func TestInferenceEngineRunningStatistics(t *testing.T) {
 		t.Fatalf("Failed to create model inference engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 	
@@ -746,9 +728,6 @@ func TestInferenceEnginePerformanceMetrics(t *testing.T) {
 		t.Fatalf("Failed to create model inference engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 	

@@ -88,10 +88,6 @@ func TestExecuteTrainingStep(t *testing.T) {
 	t.Logf("Successfully created training engine and buffers")
 	t.Logf("Batch size: %d, Input size: %d, Output size: %d", batchSize, inputSize, outputSize)
 	
-	// Set engine to nil to prevent cleanup crash in defer
-	// This is a known issue with certain training engine configurations
-	engine = nil
-	
 	// Don't test actual training execution with incomplete setup
 	// The training engine expects proper weight tensor configuration
 	// This test demonstrates:
@@ -204,7 +200,7 @@ func TestExecuteTrainingStepDynamic(t *testing.T) {
 	// 1. Dynamic training engine creation with layer specifications
 	// 2. Adam optimizer configuration
 	// 3. Buffer allocation with proper sizes
-	// 4. Resource cleanup without crashes
+	// 4. Proper resource cleanup with robust handling
 	t.Logf("Dynamic training engine creation test completed successfully")
 
 	t.Log("✅ ExecuteTrainingStepDynamic test passed")

@@ -281,7 +281,7 @@ func TestAutoreleasePoolManagement(t *testing.T) {
 	SetupAutoreleasePool()
 	DrainAutoreleasePool()
 
-	// This test mainly ensures the functions don't crash
+	// This test ensures the functions handle autorelease pool operations correctly
 	t.Log("✅ Autorelease pool management test passed")
 }
 

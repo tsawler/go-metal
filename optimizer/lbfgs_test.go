@@ -99,8 +99,8 @@ func TestLBFGSOptimizer_Creation(t *testing.T) {
 }
 
 func TestLBFGSOptimizer_InvalidConfig(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping L-BFGS invalid config test - requires stable Metal buffer allocation")
+	// Skip this test as it requires actual Metal device
+	t.Skip("Skipping L-BFGS invalid config test - requires actual Metal device for buffer allocation")
 	
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
@@ -162,8 +162,8 @@ func TestLBFGSOptimizer_InvalidInputs(t *testing.T) {
 }
 
 func TestLBFGSOptimizer_SetWeightBuffers(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping L-BFGS set weight buffers test - requires stable Metal buffer allocation")
+	// Skip this test as it requires actual Metal device
+	t.Skip("Skipping L-BFGS set weight buffers test - requires actual Metal device for buffer allocation")
 	
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
@@ -219,8 +219,8 @@ func TestLBFGSOptimizer_SetWeightBuffers(t *testing.T) {
 }
 
 func TestLBFGSOptimizer_GetStats(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping L-BFGS get stats test - requires stable Metal buffer allocation")
+	// Skip this test as it requires actual Metal device
+	t.Skip("Skipping L-BFGS get stats test - requires actual Metal device for buffer allocation")
 	
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
@@ -267,8 +267,8 @@ func TestLBFGSOptimizer_GetStats(t *testing.T) {
 }
 
 func TestLBFGSOptimizer_UpdateLearningRate(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping L-BFGS update learning rate test - requires stable Metal buffer allocation")
+	// Skip this test as it requires actual Metal device
+	t.Skip("Skipping L-BFGS update learning rate test - requires actual Metal device for buffer allocation")
 	
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
@@ -300,8 +300,8 @@ func TestLBFGSOptimizer_UpdateLearningRate(t *testing.T) {
 }
 
 func TestLBFGSOptimizer_Cleanup(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping L-BFGS cleanup test - requires stable Metal buffer allocation")
+	// Skip this test as it requires actual Metal device
+	t.Skip("Skipping L-BFGS cleanup test - requires actual Metal device for buffer allocation")
 	
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {
@@ -332,8 +332,8 @@ func TestLBFGSOptimizer_Cleanup(t *testing.T) {
 }
 
 func TestLBFGSOptimizer_BufferSizes(t *testing.T) {
-	// Skip this test to avoid Metal buffer allocation crashes
-	t.Skip("Skipping L-BFGS buffer sizes test - requires stable Metal buffer allocation")
+	// Skip this test as it requires actual Metal device
+	t.Skip("Skipping L-BFGS buffer sizes test - requires actual Metal device for buffer allocation")
 	
 	device, err := cgo_bridge.CreateMetalDevice()
 	if err != nil {

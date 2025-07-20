@@ -1570,9 +1570,9 @@ func (mte *ModelTrainingEngine) GetModelSummary() string {
 	return mte.modelSpec.Summary()
 }
 
-// Cleanup releases all resources including model parameters
+// Cleanup releases all resources including model parameters with enhanced robustness
 func (mte *ModelTrainingEngine) Cleanup() {
-	// Release parameter tensors
+	// Release parameter tensors with deterministic ordering
 	for _, tensor := range mte.parameterTensors {
 		if tensor != nil {
 			tensor.Release()
@@ -1580,7 +1580,7 @@ func (mte *ModelTrainingEngine) Cleanup() {
 	}
 	mte.parameterTensors = nil
 	
-	// Release gradient tensors
+	// Release gradient tensors with deterministic ordering
 	for _, tensor := range mte.gradientTensors {
 		if tensor != nil {
 			tensor.Release()
@@ -1588,12 +1588,15 @@ func (mte *ModelTrainingEngine) Cleanup() {
 	}
 	mte.gradientTensors = nil
 	
-	// Cleanup base training engine
+	// Cleanup base training engine using enhanced cleanup
+	// The improved MPSTrainingEngine.Cleanup() now handles all resources robustly
 	if mte.MPSTrainingEngine != nil {
 		mte.MPSTrainingEngine.Cleanup()
+		mte.MPSTrainingEngine = nil
 	}
 	
 	mte.compiledForModel = false
+	mte.isDynamicEngine = false
 }
 
 // BatchedTrainingResult represents the result of an optimized batched training step

@@ -100,15 +100,14 @@ func TestCreateTrainingEngineConstantWeights(t *testing.T) {
 			return
 		}
 		t.Logf("CreateTrainingEngineConstantWeights returned error (may be expected): %v", err)
-		// Don't fatal - just log and continue to test that we don't crash
+		// Don't fatal - just log and continue to test graceful error handling
 	} else {
 		if engine == nil {
 			t.Error("CreateTrainingEngineConstantWeights returned nil engine")
 		} else {
 			t.Logf("Successfully created constant weights training engine")
-			// Set engine to nil to prevent cleanup crash in defer
-			// This is a known issue with certain training engine configurations
-			engine = nil
+			// Cleanup engine properly - no longer need workarounds
+			defer DestroyTrainingEngine(engine)
 		}
 	}
 	
@@ -160,7 +159,7 @@ func TestCreateInferenceEngine(t *testing.T) {
 			return
 		}
 		t.Logf("CreateInferenceEngine returned error (may be expected): %v", err)
-		// Don't fatal - just log and continue to test that we don't crash
+		// Don't fatal - just log and continue to test graceful error handling
 	} else {
 		if engine == nil {
 			t.Error("CreateInferenceEngine returned nil engine")
@@ -258,7 +257,7 @@ func TestCommandBufferPooling(t *testing.T) {
 		t.Error("Expected error for nil command pool, got nil")
 	}
 
-	// Test ReturnCommandBufferToPool with nil (should not crash)
+	// Test ReturnCommandBufferToPool with nil (should handle gracefully)
 	ReturnCommandBufferToPool(nil)
 
 	t.Log("✅ Command buffer pooling test passed")
@@ -385,7 +384,7 @@ func TestUtilityFunctions(t *testing.T) {
 		OptimizerType: 2,    // RMSProp
 	}
 
-	// If this doesn't crash, the boolToInt function is working
+	// Test that the boolToInt function works correctly
 	if config.LearningRate != 0.001 {
 		t.Error("Config initialization failed")
 	}

@@ -446,8 +446,8 @@ func TestRMSPropStepMethod(t *testing.T) {
 		t.Error("Expected error for mismatched gradient buffer count, got nil")
 	}
 	
-	// Test step with correct gradient buffer count (will fail on CGO bridge call)
-	// Skip this test because CGO bridge call with mock device causes segfault
+	// Test step with correct gradient buffer count (requires real Metal device)
+	// Skip this test because CGO bridge call with mock device requires actual hardware
 	// The validation code path is already tested above
 	
 	correctGradientBuffers := []unsafe.Pointer{

@@ -58,7 +58,7 @@ func NewMPSInferenceEngine(config cgo_bridge.InferenceConfig) (*MPSInferenceEngi
 	}, nil
 }
 
-// Cleanup performs deterministic resource cleanup (reference counting principle)
+// Cleanup performs deterministic resource cleanup with enhanced robustness
 func (ie *MPSInferenceEngine) Cleanup() {
 	if ie.engine != nil {
 		cgo_bridge.DestroyInferenceEngine(ie.engine)
@@ -70,7 +70,9 @@ func (ie *MPSInferenceEngine) Cleanup() {
 		ie.commandQueue = nil
 	}
 	
+	// Disable resource management flags
 	ie.initialized = false
+	ie.useCommandPooling = false
 }
 
 // ModelInferenceEngine extends MPSInferenceEngine with layer-based model support
@@ -177,9 +179,9 @@ func NewModelInferenceEngineFromDynamicTraining(
 	return NewModelInferenceEngine(modelSpec, config)
 }
 
-// Cleanup performs complete resource cleanup
+// Cleanup performs complete resource cleanup with enhanced robustness
 func (mie *ModelInferenceEngine) Cleanup() {
-	// Release parameter tensors
+	// Release parameter tensors with deterministic ordering
 	for _, tensor := range mie.parameterTensors {
 		if tensor != nil {
 			tensor.Release()
@@ -187,10 +189,15 @@ func (mie *ModelInferenceEngine) Cleanup() {
 	}
 	mie.parameterTensors = nil
 	
-	// Cleanup base engine
+	// Cleanup base engine using enhanced cleanup
 	if mie.MPSInferenceEngine != nil {
 		mie.MPSInferenceEngine.Cleanup()
+		mie.MPSInferenceEngine = nil
 	}
+	
+	// Reset compilation state
+	mie.compiledForModel = false
+	mie.batchNormInferenceMode = false
 }
 
 // LoadWeights loads pre-trained weights into the inference engine

@@ -185,8 +185,9 @@ func (e *MPSTrainingEngine) GetConfig() cgo_bridge.TrainingConfig {
 	return e.config
 }
 
-// Cleanup releases resources
+// Cleanup releases resources with enhanced robustness and deterministic ordering
 func (e *MPSTrainingEngine) Cleanup() {
+	// Clean up optimizers in sequence (order matters for memory management)
 	if e.adamOptimizer != nil {
 		e.adamOptimizer.Cleanup()
 		e.adamOptimizer = nil
@@ -222,22 +223,28 @@ func (e *MPSTrainingEngine) Cleanup() {
 		e.nadamOptimizer = nil
 	}
 	
+	// Clean up training engine using the improved C/Objective-C bridge
+	// The enhanced destroy_training_engine function now handles all cleanup robustly
 	if e.initialized && e.engine != nil {
 		cgo_bridge.DestroyTrainingEngine(e.engine)
 		e.engine = nil
 		e.initialized = false
 	}
 
-	// RESOURCE LEAK FIX: Release command queue before device cleanup
+	// Release command queue (order matters: before device cleanup)
 	if e.commandQueue != nil {
 		cgo_bridge.ReleaseCommandQueue(e.commandQueue)
 		e.commandQueue = nil
 	}
 
+	// Release Metal device last
 	if e.device != nil {
 		cgo_bridge.DestroyMetalDevice(e.device)
 		e.device = nil
 	}
+	
+	// Disable command pooling flag
+	e.useCommandPooling = false
 }
 
 // TrainingStep represents a single training step result
@@ -302,10 +309,11 @@ func (bt *BatchTrainer) GetCurrentStep() int {
 	return bt.currentStep
 }
 
-// Cleanup releases resources
+// Cleanup releases resources with enhanced robustness
 func (bt *BatchTrainer) Cleanup() {
 	if bt.engine != nil {
 		bt.engine.Cleanup()
+		bt.engine = nil
 	}
 }
 

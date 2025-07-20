@@ -289,12 +289,7 @@ func TestExecuteRMSPropStepMPSGraph(t *testing.T) {
 }
 
 // Test ExecuteTrainingStepSGDPooled function
-// Note: This test causes crashes during cleanup - skip for now
 func TestExecuteTrainingStepSGDPooled(t *testing.T) {
-	t.Skip("Skipping SGD pooled test - causes crashes during engine cleanup")
-	
-	// Commented out test body to prevent crashes
-	/*
 	const bufferSize = 64
 	const numElements = bufferSize / 4
 
@@ -367,9 +362,8 @@ func TestExecuteTrainingStepSGDPooled(t *testing.T) {
 		t.Skipf("Skipping SGD pooled test - could not create training engine: %v", err)
 		return
 	}
-	var engineCreated = engine != nil
 	defer func() {
-		if engineCreated && engine != nil {
+		if engine != nil {
 			DestroyTrainingEngine(engine)
 		}
 	}()
@@ -405,7 +399,6 @@ func TestExecuteTrainingStepSGDPooled(t *testing.T) {
 	}
 
 	t.Log("✅ ExecuteTrainingStepSGDPooled test passed")
-	*/
 }
 
 // Test ExecuteAdaGradStepMPSGraph function

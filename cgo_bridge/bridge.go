@@ -732,7 +732,9 @@ func DeallocateMetalBuffer(buffer unsafe.Pointer) {
 	}
 }
 
-// DestroyTrainingEngine destroys a training engine
+// DestroyTrainingEngine destroys a training engine with comprehensive cleanup
+// This function properly handles all optimizer states, cached resources,
+// and pre-compiled operations with robust resource management
 func DestroyTrainingEngine(engine unsafe.Pointer) {
 	if engine != nil {
 		C.destroy_training_engine(C.uintptr_t(uintptr(engine)))
@@ -2625,13 +2627,13 @@ func convertLayerSpecToC(layer LayerSpecC) C.layer_spec_c_t {
 	for i := 0; i < len(layer.InputShape) && i < 4; i++ {
 		cLayer.input_shape[i] = C.int(layer.InputShape[i])
 	}
-	cLayer.input_shape_len = C.int(len(layer.InputShape))
+	cLayer.input_shape_len = C.int(layer.InputShapeLen)
 	
 	// Output shape
 	for i := 0; i < len(layer.OutputShape) && i < 4; i++ {
 		cLayer.output_shape[i] = C.int(layer.OutputShape[i])
 	}
-	cLayer.output_shape_len = C.int(len(layer.OutputShape))
+	cLayer.output_shape_len = C.int(layer.OutputShapeLen)
 	
 	// Integer parameters
 	for i := 0; i < len(layer.ParamInt) && i < 8; i++ {

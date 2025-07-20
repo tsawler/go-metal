@@ -113,8 +113,9 @@ uintptr_t create_training_engine(uintptr_t device_ptr, training_config_t* config
             return 0;
         }
         
-        // Allocate training engine
-        training_engine_t* engine = malloc(sizeof(training_engine_t));
+        // Allocate and zero-initialize training engine to prevent garbage values
+        // Use calloc to ensure all fields (including optimizer state flags) are properly initialized
+        training_engine_t* engine = calloc(1, sizeof(training_engine_t));
         if (!engine) {
             return 0;
         }
@@ -122,6 +123,15 @@ uintptr_t create_training_engine(uintptr_t device_ptr, training_config_t* config
         engine->device = device;
         engine->config = *config;
         engine->initialized = NO;
+        
+        // Initialize optimizer state flags to prevent garbage values during cleanup
+        engine->adamStateInitialized = NO;
+        engine->sgdStateInitialized = NO;
+        engine->rmspropStateInitialized = NO;
+        engine->lbfgsStateInitialized = NO;
+        engine->adagradScalarsCached = NO;
+        engine->adadeltaScalarsCached = NO;
+        engine->nadamScalarsCached = NO;
         
         // Create command queue
         engine->commandQueue = [device newCommandQueue];
@@ -242,14 +252,24 @@ uintptr_t create_training_engine_constant_weights(uintptr_t device_ptr, training
             return 0;
         }
         
-        // Allocate training engine
-        training_engine_t* engine = malloc(sizeof(training_engine_t));
+        // Allocate and zero-initialize training engine to prevent garbage values
+        // Use calloc to ensure all fields (including optimizer state flags) are properly initialized
+        training_engine_t* engine = calloc(1, sizeof(training_engine_t));
         if (!engine) {
             return 0;
         }
         
         engine->device = device;
         engine->config = *config;
+        
+        // Initialize optimizer state flags to prevent garbage values during cleanup
+        engine->adamStateInitialized = NO;
+        engine->sgdStateInitialized = NO;
+        engine->rmspropStateInitialized = NO;
+        engine->lbfgsStateInitialized = NO;
+        engine->adagradScalarsCached = NO;
+        engine->adadeltaScalarsCached = NO;
+        engine->nadamScalarsCached = NO;
         engine->initialized = NO;
         engine->useConstantWeights = YES; // Use constant weights approach
         
@@ -378,8 +398,9 @@ uintptr_t create_training_engine_hybrid(uintptr_t device_ptr, training_config_t*
             return 0;
         }
         
-        // Allocate training engine
-        training_engine_t* engine = malloc(sizeof(training_engine_t));
+        // Allocate and zero-initialize training engine to prevent garbage values
+        // Use calloc to ensure all fields (including optimizer state flags) are properly initialized
+        training_engine_t* engine = calloc(1, sizeof(training_engine_t));
         if (!engine) {
             return 0;
         }
@@ -387,6 +408,15 @@ uintptr_t create_training_engine_hybrid(uintptr_t device_ptr, training_config_t*
         engine->device = device;
         engine->config = *config;
         engine->model_config = *model_config;  // Store model configuration
+        
+        // Initialize optimizer state flags to prevent garbage values during cleanup
+        engine->adamStateInitialized = NO;
+        engine->sgdStateInitialized = NO;
+        engine->rmspropStateInitialized = NO;
+        engine->lbfgsStateInitialized = NO;
+        engine->adagradScalarsCached = NO;
+        engine->adadeltaScalarsCached = NO;
+        engine->nadamScalarsCached = NO;
         engine->initialized = NO;
         engine->useConstantWeights = NO;
         engine->useHybridApproach = YES; // Enable hybrid approach
@@ -686,7 +716,7 @@ uintptr_t create_training_engine_hybrid(uintptr_t device_ptr, training_config_t*
     }
 }
 
-// Destroy training engine
+// Destroy training engine with comprehensive cleanup
 void destroy_training_engine(uintptr_t engine_ptr) {
     @autoreleasepool {
         if (engine_ptr == 0) {
@@ -695,29 +725,174 @@ void destroy_training_engine(uintptr_t engine_ptr) {
         
         training_engine_t* engine = (training_engine_t*)engine_ptr;
         
-        // Release Objective-C objects
-        engine->graph = nil;
-        engine->executable = nil;
-        engine->commandQueue = nil;
-        engine->device = nil;
-
-        // Explicitly release objects for the hybrid approach that were stored directly in the C struct
-        engine->conv1Layer = nil; // Release the MPSCNNConvolution object
-        engine->conv2Layer = nil; // Release the MPSCNNConvolution object
-        engine->conv3Layer = nil; // Release the MPSCNNConvolution object
-        engine->conv1WeightBuffer = nil; // Release the MTLBuffer
-        engine->conv1BiasBuffer = nil;   // Release the MTLBuffer
-        engine->conv2WeightBuffer = nil; // Release the MTLBuffer
-        engine->conv2BiasBuffer = nil;   // Release the MTLBuffer
-        engine->conv3WeightBuffer = nil; // Release the MTLBuffer
-        engine->conv3BiasBuffer = nil;   // Release the MTLBuffer
+        // Check if the engine is properly initialized before cleanup
+        if (!engine) {
+            return;
+        }
         
-        // MEMORY LEAK FIX: Release cached buffers
+        // === PHASE 1: Release Optimizer-Specific State ===
+        
+        // Adam optimizer cleanup - check initialization flag
+        if (engine->adamStateInitialized) {
+            engine->momentumBuffers = nil;
+            engine->varianceBuffers = nil;
+            engine->momentumVariables = nil;
+            engine->varianceVariables = nil;
+            engine->momentumPlaceholders = nil;
+            engine->variancePlaceholders = nil;
+            engine->cachedBiasCorr1Buffer = nil;
+            engine->cachedBiasCorr2Buffer = nil;
+            
+            // Adam cached scalars
+            engine->cachedBeta1Tensor = nil;
+            engine->cachedBeta2Tensor = nil;
+            engine->cachedEpsilonTensor = nil;
+            engine->cachedOneTensor = nil;
+            engine->cachedOneMinusBeta1 = nil;
+            engine->cachedOneMinusBeta2 = nil;
+            engine->biasCorr1Placeholder = nil;
+            engine->biasCorr2Placeholder = nil;
+            
+            // Adam pre-compiled operations
+            if (engine->adamGraphCompiled) {
+                engine->adamPrecompiledGradients = nil;
+                engine->adamPrecompiledUpdatedParams = nil;
+                engine->adamPrecompiledUpdatedMomentum = nil;
+                engine->adamPrecompiledUpdatedVariance = nil;
+            }
+        }
+        
+        // SGD optimizer cleanup - check initialization flag
+        if (engine->sgdStateInitialized) {
+            // SGD cached scalars
+            engine->sgdCachedLrTensor = nil;
+            engine->sgdCachedMomentumTensor = nil;
+            engine->cachedMomentumTensor = nil;
+            engine->cachedWeightDecayTensor = nil;
+            
+            // SGD pre-compiled operations
+            if (engine->sgdGraphCompiled) {
+                engine->sgdPrecompiledGradients = nil;
+                engine->sgdPrecompiledUpdatedParams = nil;
+                engine->sgdPrecompiledUpdatedMomentum = nil;
+            }
+        }
+        
+        // RMSProp optimizer cleanup - check initialization flag
+        if (engine->rmspropStateInitialized) {
+            engine->squaredGradPlaceholders = nil;
+            engine->squaredGradVariables = nil;
+            engine->squaredGradBuffers = nil;
+            engine->gradAvgPlaceholders = nil;
+            engine->gradAvgVariables = nil;
+            engine->gradAvgBuffers = nil;
+            
+            // RMSProp cached scalars
+            engine->cachedAlphaTensor = nil;
+            engine->cachedOneMinusAlphaTensor = nil;
+            engine->rmspropCachedMomentumTensor = nil;
+            engine->rmspropCachedEpsilonTensor = nil;
+            
+            // RMSProp pre-compiled operations
+            if (engine->rmspropGraphCompiled) {
+                engine->rmspropPrecompiledGradients = nil;
+                engine->rmspropPrecompiledUpdatedParams = nil;
+                engine->rmspropPrecompiledUpdatedMomentum = nil;
+                engine->rmspropPrecompiledUpdatedSquaredGrad = nil;
+                engine->rmspropPrecompiledUpdatedGradAvg = nil;
+            }
+        }
+        
+        // L-BFGS optimizer cleanup - check initialization flag
+        if (engine->lbfgsStateInitialized) {
+            engine->lbfgsHistorySVectors = nil;
+            engine->lbfgsHistoryYVectors = nil;
+            engine->lbfgsRhoBuffers = nil;
+            engine->lbfgsOldGradientBuffers = nil;
+            engine->lbfgsSearchDirBuffers = nil;
+            engine->lbfgsAlphaBuffer = nil;
+            engine->lbfgsCachedInitialStepTensor = nil;
+            
+            // L-BFGS pre-compiled operations
+            if (engine->lbfgsGraphCompiled) {
+                engine->lbfgsPrecompiledGradients = nil;
+                engine->lbfgsPrecompiledUpdatedParams = nil;
+                engine->lbfgsPrecompiledSearchDirections = nil;
+            }
+        }
+        
+        // === PHASE 2: Release Shared Cached Resources ===
+        
+        engine->cachedLrTensor = nil;
+        
+        // Release general pre-compiled operations
+        engine->precompiledGradientTensors = nil;
+        engine->precompiledUpdatedParams = nil;
+        engine->precompiledUpdatedMomentum = nil;
+        engine->precompiledUpdatedVariance = nil;
+        engine->precompiledSGDUpdatedParams = nil;
+        engine->precompiledSGDUpdatedMomentum = nil;
+        
+        // === PHASE 3: Release Dynamic Graph Resources ===
+        
+        engine->allWeightPlaceholders = nil;
+        engine->allBiasPlaceholders = nil;
+        engine->batchnormRunningStatsPlaceholders = nil;
+        engine->validPlaceholdersForGradients = nil;
+        
+        // === PHASE 4: Release MPS Convolution Layers ===
+        
+        engine->conv1Layer = nil;
+        engine->conv2Layer = nil;
+        engine->conv3Layer = nil;
+        engine->conv1WeightBuffer = nil;
+        engine->conv1BiasBuffer = nil;
+        engine->conv2WeightBuffer = nil;
+        engine->conv2BiasBuffer = nil;
+        engine->conv3WeightBuffer = nil;
+        engine->conv3BiasBuffer = nil;
+        
+        // === PHASE 5: Release Cached Images and Buffers ===
+        
         engine->cachedConvOutputBuffer = nil;
         engine->cachedInputImage = nil;
         engine->cachedConvOutputImage = nil;
         
-        // Free the engine structure
+        // === PHASE 6: Release Core Graph Objects ===
+        
+        // Release backward graph if it exists
+        engine->backwardGraph = nil;
+        
+        // Release main graph and executable
+        engine->graph = nil;
+        engine->executable = nil;
+        
+        // === PHASE 7: Release Command Queue and Device ===
+        
+        engine->commandQueue = nil;
+        engine->device = nil;
+        
+        // === PHASE 8: Reset State Flags ===
+        
+        engine->adamStateInitialized = NO;
+        engine->sgdStateInitialized = NO;
+        engine->rmspropStateInitialized = NO;
+        engine->lbfgsStateInitialized = NO;
+        engine->adamGraphCompiled = NO;
+        engine->sgdGraphCompiled = NO;
+        engine->rmspropGraphCompiled = NO;
+        engine->lbfgsGraphCompiled = NO;
+        engine->adamScalarsCached = NO;
+        engine->sgdScalarsCached = NO;
+        engine->rmspropScalarsCached = NO;
+        engine->lbfgsScalarsCached = NO;
+        engine->adagradScalarsCached = NO;
+        engine->adadeltaScalarsCached = NO;
+        engine->nadamScalarsCached = NO;
+        engine->initialized = NO;
+        
+        // === PHASE 9: Free Engine Structure ===
+        
         free(engine);
     }
 }

@@ -43,9 +43,6 @@ func TestModelTrainingEngineDynamicCreation(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -175,9 +172,6 @@ func TestModelTrainingEngineWeightInitialization(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -232,9 +226,6 @@ func TestModelTrainingEngineWeightLoading(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -295,9 +286,6 @@ func TestModelTrainingEngineTraining(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -379,9 +367,6 @@ func TestModelTrainingEnginePrediction(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -445,9 +430,6 @@ func TestModelTrainingEngineCheckpointing(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -510,9 +492,6 @@ func TestModelTrainingEngineParameterAccess(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -620,9 +599,6 @@ func TestModelTrainingEngineOptimizers(t *testing.T) {
 				t.Fatalf("Failed to create model training engine with %s: %v", test.name, err)
 			}
 			defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -719,9 +695,6 @@ func TestModelTrainingEngineArchitectures(t *testing.T) {
 				t.Fatalf("Failed to create model training engine for %s: %v", arch.name, err)
 			}
 			defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -781,9 +754,6 @@ func TestModelTrainingEnginePerformance(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -933,9 +903,6 @@ func TestModelTrainingEngineErrorHandling(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -1024,9 +991,6 @@ func TestModelTrainingEngineWithRMSProp(t *testing.T) {
 		t.Fatalf("Failed to create model training engine with RMSProp: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 
@@ -1159,9 +1123,6 @@ func TestModelTrainingEngineRMSPropConvergence(t *testing.T) {
 		t.Fatalf("Failed to create model training engine: %v", err)
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("Cleanup panic recovered: %v", r)
-		}
 		modelEngine.Cleanup()
 	}()
 

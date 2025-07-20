@@ -87,24 +87,59 @@ go test -v -timeout 60s .
 ### Graceful Degradation
 - Tests skip rather than fail when Metal resources are unavailable
 - Buffer pool exhaustion is handled gracefully with appropriate skipping
-- CGO segfaults are avoided through careful resource management
+
+## Error Handling Examples
+
+### Buffer Pool Exhaustion
+```go
+buffer, err := createTestBuffer(bufferSize, GPU, t)
+if err != nil {
+    return // Will skip if buffer pool exhausted
+}
+defer DeallocateMetalBuffer(buffer)
+```
+
+### Engine Creation with Resource Management
+```go
+engine, err := CreateTrainingEngine(device, config)
+if err != nil {
+    // Check for buffer pool exhaustion and skip gracefully
+    if strings.Contains(err.Error(), "buffer pool at capacity") || 
+       strings.Contains(err.Error(), "failed to allocate") {
+        t.Skipf("Skipping test - buffer pool exhausted: %v", err)
+        return
+    }
+    t.Fatalf("Failed to create training engine: %v", err)
+}
+defer DestroyTrainingEngine(engine)
+```
+
+### Metal Device Requirements
+```go
+device, err := getSharedDevice()
+if err != nil {
+    t.Skipf("Skipping test - Metal device not available: %v", err)
+}
+```
+- Robust resource management ensures reliable test execution
 
 ### Comprehensive Coverage
 - Tests both happy path and error conditions
 - Validates configuration structures without expensive operations
 - Covers memory operations, device management, and error handling
 
-### Safety First
-- Avoids creating actual training/inference engines to prevent CGO crashes
-- Focuses on testing the bridge functions rather than full engine lifecycle
-- Uses smaller buffer sizes to minimize resource usage
+### Comprehensive Testing
+- Tests actual training/inference engines with robust cleanup handling
+- Covers both bridge functions and full engine lifecycle operations
+- Uses appropriate buffer sizes for thorough testing while managing resources efficiently
 
 ## Key Features
 
-1. **No CGO Segfaults**: Carefully designed to avoid the segmentation faults common in CGO testing
-2. **Resource Efficiency**: Uses shared resources and appropriate cleanup to prevent exhaustion
+1. **Robust Operation**: Designed with enhanced cleanup functionality for reliable CGO testing
+2. **Resource Efficiency**: Uses shared resources and proper cleanup to prevent exhaustion
 3. **Comprehensive Coverage**: Tests all major bridge functions and configuration types
 4. **Realistic Usage**: Tests mirror real-world usage patterns of the bridge functions
 5. **Error Resilience**: Proper handling of expected errors and edge cases
+6. **Enhanced Reliability**: Benefits from improved cleanup methods that ensure stable test execution
 
 This test suite ensures the reliability of the critical Go-Metal bridge layer while maintaining stability and performance.

@@ -33,6 +33,8 @@
 
 @property (nonatomic, assign) MPSInferenceEngine* cEngine;
 @property (nonatomic, assign) ModelArchitecture* modelArchitecture;
+@property (nonatomic, assign) int graphBatchSize;  // Store batch size for consistent tensor operations
+@property (nonatomic, assign) inference_config_t config;  // Store config for access to max_batch_size
 
 // Core methods
 - (instancetype)initWithDevice:(id<MTLDevice>)device config:(inference_config_t)config;
@@ -198,12 +200,25 @@ void calculateDenseLayerDimensions(layer_spec_c_t* layer, int layerIdx, MPSInfer
 
 - (BOOL)buildInferenceGraphWithLayers:(layer_spec_c_t*)layers layerCount:(int)layerCount {
     @autoreleasepool {
-        // Create input placeholder - use fixed batch size for graph compilation consistency
+        // Create input placeholder - use config max_batch_size for graph compilation consistency
         // Note: The batch size should match the actual execution batch size
-        int graph_batch_size = 1;  // Use fixed batch size for inference
-        NSArray<NSNumber*>* inputShape = @[@(graph_batch_size), @(layers[0].input_shape[1]), @(layers[0].input_shape[2]), @(layers[0].input_shape[3])];
-        printf("DEBUG: Creating input placeholder with shape [%d, %d, %d, %d]\n", 
-               graph_batch_size, layers[0].input_shape[1], layers[0].input_shape[2], layers[0].input_shape[3]);
+        int graph_batch_size = self.cEngine ? self.cEngine->config.max_batch_size : 1;  // Use config batch size for inference
+        self.graphBatchSize = graph_batch_size;  // Store for use in other methods
+        
+        // Create input shape based on first layer's input_shape_len
+        NSMutableArray<NSNumber*>* inputShape = [[NSMutableArray alloc] init];
+        [inputShape addObject:@(graph_batch_size)];
+        for (int i = 1; i < layers[0].input_shape_len; i++) {
+            [inputShape addObject:@(layers[0].input_shape[i])];
+        }
+        
+        // Debug print with dynamic shape
+        printf("DEBUG: Creating input placeholder with %d dimensions: [", layers[0].input_shape_len);
+        printf("%d", graph_batch_size);
+        for (int i = 1; i < layers[0].input_shape_len; i++) {
+            printf(", %d", layers[0].input_shape[i]);
+        }
+        printf("]\n");
         MPSGraphTensor* inputTensor = [_graph placeholderWithShape:inputShape
                                                           dataType:MPSDataTypeFloat32
                                                               name:@"input"];
@@ -361,8 +376,8 @@ void calculateDenseLayerDimensions(layer_spec_c_t* layer, int layerIdx, MPSInfer
         // But our parameter expects 32768 features, so we need to check the actual conv output size
         
         // Calculate the flatten dimensions dynamically based on actual tensor shape
-        // For batch_size=1 and input tensor shape [1, C, H, W], flatten to [1, C*H*W]
-        int batch_size = 1;  // Fixed batch size for inference
+        // For batch_size=N and input tensor shape [N, C, H, W], flatten to [N, C*H*W]
+        int batch_size = self.graphBatchSize;  // Use configured batch size for inference
         
         // Calculate the actual flattened size from the previous layer output
         // The actual tensor is [1, 32, 126, 126] = 507,456 elements
@@ -1027,9 +1042,20 @@ int execute_inference_batch_optimized(
         }
         
         // Create input tensor data with runtime batch size
-        NSArray<NSNumber*>* actualInputShape = @[@(batch_size), @(input_shape[1]), @(input_shape[2]), @(input_shape[3])];
-        printf("DEBUG: Creating input tensor data with shape [%d, %d, %d, %d]\n", 
-               batch_size, input_shape[1], input_shape[2], input_shape[3]);
+        // Build shape array based on actual input shape length
+        NSMutableArray<NSNumber*>* actualInputShape = [[NSMutableArray alloc] init];
+        [actualInputShape addObject:@(batch_size)];
+        for (int i = 1; i < input_shape_len; i++) {
+            [actualInputShape addObject:@(input_shape[i])];
+        }
+        
+        // Debug print with dynamic shape
+        printf("DEBUG: Creating input tensor data with %d dimensions: [", input_shape_len);
+        printf("%d", batch_size);
+        for (int i = 1; i < input_shape_len; i++) {
+            printf(", %d", input_shape[i]);
+        }
+        printf("]\n");
         MPSGraphTensorData* inputTensorData = [[MPSGraphTensorData alloc] initWithMTLBuffer:inputBuffer
                                                                                       shape:actualInputShape
                                                                                    dataType:MPSDataTypeFloat32];

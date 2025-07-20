@@ -30,10 +30,10 @@ func TestCustomNormalization(t *testing.T) {
 		BatchNormInferenceMode: true,
 	}
 	
-	// Create inference engine (this will fail without Metal device, but we can test the setup)
+	// Create inference engine (requires Metal device configuration)
 	_, err = NewModelInferenceEngine(model, config)
 	
-	// We expect this to fail due to Metal device not being available in CI/test environment
+	// Handle Metal device requirements gracefully in test environment
 	// But we can verify the normalization logic is properly set up
 	if err != nil {
 		t.Logf("Expected Metal device error: %v", err)
@@ -41,7 +41,7 @@ func TestCustomNormalization(t *testing.T) {
 		// Test the normalization logic directly on the model spec
 		err = testNormalizationLogic(model)
 		if err != nil {
-			t.Fatalf("Normalization logic test failed: %v", err)
+			t.Fatalf("Normalization logic validation error: %v", err)
 		}
 		
 		t.Log("✅ Normalization logic test passed")
