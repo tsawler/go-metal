@@ -302,8 +302,10 @@ func (adl *AsyncDataLoader) prepareBatch() (*GPUBatch, error) {
 		return nil, fmt.Errorf("failed to create weight tensors: %v", err)
 	}
 	
+	adl.mutex.Lock()
 	batchID := adl.batchCounter
 	adl.batchCounter++
+	adl.mutex.Unlock()
 	
 	batch := &GPUBatch{
 		InputTensor:   inputTensor,

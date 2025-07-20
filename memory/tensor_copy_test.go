@@ -32,8 +32,10 @@ func TestTensorCopyAPI(t *testing.T) {
 
 	// Test 2: Copy to tensor with nil buffer
 	t.Run("CopyToNilBuffer", func(t *testing.T) {
+		// Create a valid pointer for testing
+		var dummyValue int = 1
 		srcTensor := &Tensor{
-			metalBuffer: unsafe.Pointer(uintptr(1)), // Non-nil pointer
+			metalBuffer: unsafe.Pointer(&dummyValue), // Valid pointer
 			shape:       []int{2, 4},
 			dtype:       Float32,
 			device:      GPU,
@@ -52,8 +54,10 @@ func TestTensorCopyAPI(t *testing.T) {
 
 	// Test 3: Copy from tensor with nil buffer
 	t.Run("CopyFromNilBuffer", func(t *testing.T) {
+		// Create a valid pointer for testing
+		var dummyValue2 int = 1
 		dstTensor := &Tensor{
-			metalBuffer: unsafe.Pointer(uintptr(1)), // Non-nil pointer
+			metalBuffer: unsafe.Pointer(&dummyValue2), // Valid pointer
 			shape:       []int{2, 4},
 			dtype:       Float32,
 			device:      GPU,
@@ -72,8 +76,10 @@ func TestTensorCopyAPI(t *testing.T) {
 
 	// Test 4: Shape mismatch
 	t.Run("ShapeMismatch", func(t *testing.T) {
+		// Create valid pointers for testing
+		var dummyValue3, dummyValue4 int = 1, 2
 		srcTensor := &Tensor{
-			metalBuffer: unsafe.Pointer(uintptr(1)),
+			metalBuffer: unsafe.Pointer(&dummyValue3),
 			shape:       []int{2, 4},
 			dtype:       Float32,
 			device:      GPU,
@@ -81,7 +87,7 @@ func TestTensorCopyAPI(t *testing.T) {
 		}
 		
 		dstTensor := &Tensor{
-			metalBuffer: unsafe.Pointer(uintptr(2)),
+			metalBuffer: unsafe.Pointer(&dummyValue4),
 			shape:       []int{4, 2}, // Different shape
 			dtype:       Float32,
 			device:      GPU,
@@ -97,8 +103,10 @@ func TestTensorCopyAPI(t *testing.T) {
 
 	// Test 5: Data type mismatch
 	t.Run("DataTypeMismatch", func(t *testing.T) {
+		// Create valid pointers for testing
+		var dummyValue5, dummyValue6 int = 1, 2
 		srcTensor := &Tensor{
-			metalBuffer: unsafe.Pointer(uintptr(1)),
+			metalBuffer: unsafe.Pointer(&dummyValue5),
 			shape:       []int{2, 4},
 			dtype:       Float32,
 			device:      GPU,
@@ -106,7 +114,7 @@ func TestTensorCopyAPI(t *testing.T) {
 		}
 		
 		dstTensor := &Tensor{
-			metalBuffer: unsafe.Pointer(uintptr(2)),
+			metalBuffer: unsafe.Pointer(&dummyValue6),
 			shape:       []int{2, 4},
 			dtype:       Int32, // Different data type
 			device:      GPU,
@@ -122,8 +130,10 @@ func TestTensorCopyAPI(t *testing.T) {
 
 	// Test 6: Size mismatch
 	t.Run("SizeMismatch", func(t *testing.T) {
+		// Create valid pointers for testing
+		var dummyValue7, dummyValue8 int = 1, 2
 		srcTensor := &Tensor{
-			metalBuffer: unsafe.Pointer(uintptr(1)),
+			metalBuffer: unsafe.Pointer(&dummyValue7),
 			shape:       []int{2, 4},
 			dtype:       Float32,
 			device:      GPU,
@@ -131,7 +141,7 @@ func TestTensorCopyAPI(t *testing.T) {
 		}
 		
 		dstTensor := &Tensor{
-			metalBuffer: unsafe.Pointer(uintptr(2)),
+			metalBuffer: unsafe.Pointer(&dummyValue8),
 			shape:       []int{2, 4},
 			dtype:       Float32,
 			device:      GPU,

@@ -2,6 +2,7 @@ package async
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
@@ -13,6 +14,7 @@ type MockDataSource struct {
 	batchSize  int
 	counter    int
 	maxBatches int
+	mutex      sync.Mutex
 }
 
 func NewMockDataSource(maxBatches int) *MockDataSource {
@@ -23,6 +25,9 @@ func NewMockDataSource(maxBatches int) *MockDataSource {
 }
 
 func (mds *MockDataSource) GetBatch(batchSize int) ([]float32, []int, []float32, []int, error) {
+	mds.mutex.Lock()
+	defer mds.mutex.Unlock()
+	
 	if mds.counter >= mds.maxBatches {
 		return nil, nil, nil, nil, fmt.Errorf("no more batches available")
 	}

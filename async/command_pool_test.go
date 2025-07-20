@@ -363,8 +363,9 @@ func TestCommandBufferPoolAsyncExecution(t *testing.T) {
 		}
 
 		// Test buffer not in use
+		var dummyValue int = 1
 		mockBuffer := &CommandBuffer{
-			buffer: unsafe.Pointer(uintptr(1)), // Mock pointer
+			buffer: unsafe.Pointer(&dummyValue), // Valid pointer
 			inUse:  false,
 			id:     999,
 		}
