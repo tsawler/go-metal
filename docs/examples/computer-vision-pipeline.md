@@ -34,9 +34,9 @@ import (
 func main() {
 	fmt.Println("=== Go-Metal Computer Vision Pipeline ===")
 
-	// Step 1: Create synthetic dataset
+	// Step 1: Create larger synthetic dataset for better validation
 	dataDir := "synthetic_vision_data"
-	err := createSyntheticDataset(dataDir)
+	err := createSyntheticDataset(dataDir, 20) // 20 samples per class instead of 10
 	if err != nil {
 		log.Fatalf("Failed to create dataset: %v", err)
 	}
@@ -51,13 +51,13 @@ func main() {
 
 	fmt.Printf("✅ Dataset loaded: %s\n", fullDataset.String())
 
-	// Step 3: Split dataset 
-	trainDataset, valDataset := fullDataset.Split(0.8, true)
+	// Step 3: Split dataset with more validation samples
+	trainDataset, valDataset := fullDataset.Split(0.7, true) // 70/30 split for better validation
 	fmt.Printf("📊 Train: %d samples, Validation: %d samples\n", 
 		trainDataset.Len(), valDataset.Len())
 
-	// Step 4: Create data loaders with shared cache
-	batchSize := 4
+	// Step 4: Use smaller batch size for better validation accuracy calculation
+	batchSize := 2  // Smaller batch size
 	imageSize := 64
 	
 	trainLoader, valLoader := dataloader.CreateSharedDataLoaders(
@@ -75,11 +75,11 @@ func main() {
 	
 	builder := layers.NewModelBuilder(inputShape)
 	model, err := builder.
-		AddConv2D(8, 3, 2, 1, true, "conv1").  // 8 filters, stride=2
+		AddConv2D(16, 3, 2, 1, true, "conv1"). // More filters for better feature extraction
 		AddReLU("relu1").
-		AddConv2D(16, 3, 2, 1, true, "conv2"). // 16 filters, stride=2 
+		AddConv2D(32, 3, 2, 1, true, "conv2"). // More filters
 		AddReLU("relu2").
-		AddDense(32, true, "fc1").             // Dense layer
+		AddDense(64, true, "fc1").             // Larger dense layer
 		AddReLU("relu3").
 		AddDense(3, true, "output").           // 3 classes
 		Compile()
@@ -88,10 +88,10 @@ func main() {
 		log.Fatalf("Failed to compile model: %v", err)
 	}
 
-	// Step 6: Create trainer
+	// Step 6: Create trainer with lower learning rate for stability
 	config := training.TrainerConfig{
 		BatchSize:     batchSize,
-		LearningRate:  0.001,
+		LearningRate:  0.0005, // Lower learning rate
 		OptimizerType: cgo_bridge.Adam,
 		Beta1:         0.9,
 		Beta2:         0.999,
@@ -117,10 +117,10 @@ func main() {
 	trainer.SetAccuracyCheckInterval(1)
 	fmt.Println("✅ Training setup complete")
 
-	// Step 8: Training loop
-	epochs := 3
-	stepsPerEpoch := min(trainDataset.Len()/batchSize, 10) // Limit for demo
-	valSteps := min(valDataset.Len()/batchSize, 5)
+	// Step 8: Training loop with more epochs
+	epochs := 5 // More epochs for better convergence
+	stepsPerEpoch := trainDataset.Len() / batchSize
+	valSteps := valDataset.Len() / batchSize
 
 	session := trainer.CreateTrainingSession("VisionDemo", epochs, stepsPerEpoch, valSteps)
 	session.StartTraining()
@@ -242,19 +242,17 @@ func main() {
 }
 
 // Helper functions for dataset creation
-func createSyntheticDataset(dataDir string) error {
-	// Create 3 classes with distinct visual patterns
+func createSyntheticDataset(dataDir string, samplesPerClass int) error {
+	// Create 3 classes with MORE distinct visual patterns
 	classes := []struct {
 		name    string
 		color   color.RGBA
 		pattern string
 	}{
-		{"circles", color.RGBA{255, 100, 100, 255}, "circles"},
-		{"squares", color.RGBA{100, 255, 100, 255}, "squares"},
-		{"stripes", color.RGBA{100, 100, 255, 255}, "stripes"},
+		{"circles", color.RGBA{255, 80, 80, 255}, "circles"},
+		{"squares", color.RGBA{80, 255, 80, 255}, "squares"}, 
+		{"stripes", color.RGBA{80, 80, 255, 255}, "stripes"},
 	}
-
-	samplesPerClass := 10
 
 	for _, class := range classes {
 		classDir := filepath.Join(dataDir, class.name)
@@ -391,40 +389,40 @@ When you run this example, you should see output similar to:
 ```
 === Go-Metal Computer Vision Pipeline ===
 📂 Loading dataset...
-✅ Dataset loaded: ImageFolderDataset: 30 samples, 3 classes
+✅ Dataset loaded: ImageFolderDataset: 60 samples, 3 classes
 Class distribution:
-  circles: 10 samples
-  squares: 10 samples  
-  stripes: 10 samples
+  circles: 20 samples
+  squares: 20 samples
+  stripes: 20 samples
 
-📊 Train: 24 samples, Validation: 6 samples
+📊 Train: 42 samples, Validation: 18 samples
 🧠 Building CNN model...
 ✅ Training setup complete
 
 Model Architecture:
 VisionDemo(
-  (conv1): Conv2d(3, 8, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=true)
+  (conv1): Conv2d(3, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=true)
   (relu1): ReLU()
-  (conv2): Conv2d(8, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=true)
-  (relu2): ReLU()  
-  (fc1): Linear(in_features=4096, out_features=32, bias=true)
+  (conv2): Conv2d(16, 32, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=true)
+  (relu2): ReLU()
+  (fc1): Linear(in_features=8192, out_features=64, bias=true)
   (relu3): ReLU()
-  (output): Linear(in_features=32, out_features=3, bias=true)
+  (output): Linear(in_features=64, out_features=3, bias=true)
 )
 
-🏋️ Training for 3 epochs (6 steps per epoch)
+🏋️ Training for 5 epochs (21 steps per epoch, 9 validation steps)
 
-🧠 Epoch 1/3
-Epoch 1/3 (Training): 100%|████████████| 6/6 [00:00<00:00, 12.47batch/s, loss=0.511, accuracy=66.67%]
-📦 Cache: 24/50 items, Hits: 0, Misses: 24, Hit Rate: 0.0%
-Epoch 1/3 (Validation): 100%|████████████| 1/1 [00:00<00:00, 712.08batch/s, accuracy=75.00%]
+🧠 Epoch 1/5
+Epoch 1/5 (Training): 100%|████████████| 21/21 [00:01<00:00, 17.82batch/s, loss=0.297, accuracy=92.86%]
+📦 Cache: 42/100 items, Hits: 0, Misses: 42, Hit Rate: 0.0%
+Epoch 1/5 (Validation): 100%|████████████| 9/9 [00:00<00:00, 1282.17batch/s, loss=0.243, accuracy=100.00%]
 
-Epoch 2/3 Summary:
-  Training   - Loss: 0.2660, Accuracy: 79.17%
-  Validation - Loss: 0.0391, Accuracy: 75.00%
+Epoch 2/5 Summary:
+  Training   - Loss: 0.0097, Accuracy: 100.00%
+  Validation - Loss: 0.0672, Accuracy: 100.00%
 
 🎉 Training completed!
-📈 Best validation accuracy: 75.00%
+📈 Best validation accuracy: 100.00%
 ✨ Vision training example successful!
 ```
 
@@ -498,6 +496,43 @@ config := training.TrainerConfig{
     // ... other parameters
 }
 ```
+
+## Troubleshooting
+
+### Low Validation Accuracy (e.g., stuck at 33% or 50%)
+
+**Symptoms**: Validation accuracy stays constant while training accuracy improves
+**Causes and Solutions**:
+
+1. **Dataset too small**: 
+   - Use at least 15-20 samples per class
+   - Ensure validation set has sufficient samples (>10 per class)
+
+2. **Poor train/validation split**:
+   - Use 70/30 or 60/40 split instead of 80/20 for small datasets
+   - Ensure balanced class distribution in validation set
+
+3. **Patterns not distinct enough**:
+   - Make visual differences more pronounced
+   - Reduce noise in synthetic data
+   - Check that classes are actually different
+
+4. **Model configuration issues**:
+   - Lower learning rate (try 0.0005 instead of 0.001)
+   - Use smaller batch sizes for better gradient estimates
+   - Add more model capacity (more filters, larger dense layers)
+
+5. **Data preprocessing problems**:
+   - Verify image data is properly normalized [0,1]
+   - Check that labels match the expected classes
+   - Ensure CHW format is correct
+
+### Performance Optimization
+
+- **Increase dataset size**: 50+ samples per class for realistic results
+- **Use appropriate batch sizes**: 2-8 for small datasets, 16-32 for larger ones
+- **Monitor cache hit rate**: >50% indicates good cache utilization
+- **Reduce image size during development**: 64x64 trains faster than 224x224
 
 ## Next Steps
 
