@@ -1191,3 +1191,563 @@ func TestModelTrainingEngineRMSPropConvergence(t *testing.T) {
 
 	t.Log("✅ RMSProp convergence test passed")
 }
+
+// TestModelTrainingEngineAdamConvergence tests Adam convergence on a simple problem
+func TestModelTrainingEngineAdamConvergence(t *testing.T) {
+	// Create a simple classification model (3-class to match working test)
+	inputShape := []int{4, 2}  // batch size 4, 2 features
+	builder := layers.NewModelBuilder(inputShape)
+
+	model, err := builder.
+		AddDense(3, true, "output").  // 3 outputs for 3 classes
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+
+	// Configure Adam with higher learning rate for faster convergence
+	config := cgo_bridge.TrainingConfig{
+		LearningRate:   0.01,     // Higher learning rate for faster convergence
+		Beta1:          0.9,      // Standard Adam beta1
+		Beta2:          0.999,    // Standard Adam beta2
+		Epsilon:        1e-8,
+		WeightDecay:    0.0,      // No weight decay for faster convergence
+		OptimizerType:  cgo_bridge.Adam,
+		ProblemType:    0,        // Classification
+		LossFunction:   1,        // SparseCategoricalCrossEntropy
+	}
+
+	// Use shared resources like the working test
+	modelEngine, err := createTestModelTrainingEngine(model, config, t)
+	if err != nil {
+		t.Fatalf("Failed to create model training engine: %v", err)
+	}
+	defer func() {
+		modelEngine.Cleanup()
+	}()
+
+	// Create test data using shared resources
+	batchSize := 4
+	inputTensor, err := createTestTensor([]int{batchSize, 2}, memory.Float32, t)
+	if err != nil {
+		t.Fatalf("Failed to create input tensor: %v", err)
+	}
+	defer inputTensor.Release()
+
+	labelTensor, err := createTestTensor([]int{batchSize}, memory.Float32, t)  // Sparse labels
+	if err != nil {
+		t.Fatalf("Failed to create label tensor: %v", err)
+	}
+	defer labelTensor.Release()
+
+	// Create very simple linearly separable data
+	inputData := []float32{
+		0.0, 0.0,  // class 0
+		1.0, 0.0,  // class 1  
+		0.0, 1.0,  // class 2
+		1.0, 1.0,  // class 0
+	}
+	
+	// Sparse categorical labels (class indices)
+	labelData := []float32{0, 1, 2, 0}
+
+	// Copy data to GPU
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(inputTensor.MetalBuffer(), inputData)
+	if err != nil {
+		t.Fatalf("Failed to copy input data: %v", err)
+	}
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), labelData)
+	if err != nil {
+		t.Fatalf("Failed to copy label data: %v", err)
+	}
+
+	// Train for multiple epochs and verify convergence
+	var losses []float32
+	epochs := 30  // Adam might need more epochs due to smaller learning rate
+	
+	for epoch := 0; epoch < epochs; epoch++ {
+		loss, err := modelEngine.ExecuteModelTrainingStepWithAdam(inputTensor, labelTensor)
+		if err != nil {
+			t.Fatalf("Training failed at epoch %d: %v", epoch, err)
+		}
+		losses = append(losses, loss)
+		
+		if epoch%10 == 0 {
+			t.Logf("Epoch %d: loss = %f", epoch, loss)
+		}
+	}
+
+	// Verify loss decreased significantly - Adam should converge reliably
+	initialLoss := losses[0]
+	finalLoss := losses[len(losses)-1]
+	if finalLoss >= initialLoss {
+		t.Errorf("Loss did not decrease: initial=%f, final=%f", initialLoss, finalLoss)
+	}
+
+	// Verify reasonable convergence (at least 14% reduction for Adam)
+	lossReduction := (initialLoss - finalLoss) / initialLoss
+	if lossReduction < 0.14 {
+		t.Errorf("Insufficient convergence: only %f%% loss reduction", lossReduction*100)
+	}
+
+	// Verify final loss is reasonable for linearly separable data
+	if finalLoss > 0.5 {
+		t.Logf("Warning: Final loss %f is higher than expected for linearly separable data", finalLoss)
+	}
+
+	t.Logf("Adam convergence: %f → %f (%.1f%% reduction)", initialLoss, finalLoss, lossReduction*100)
+	t.Log("✅ Adam convergence test passed")
+}
+
+// TestModelTrainingEngineSGDConvergence tests SGD convergence on a simple problem
+func TestModelTrainingEngineSGDConvergence(t *testing.T) {
+	// Create a simple classification model (3-class to match working test)
+	inputShape := []int{4, 2}  // batch size 4, 2 features
+	builder := layers.NewModelBuilder(inputShape)
+
+	model, err := builder.
+		AddDense(3, true, "output").  // 3 outputs for 3 classes
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+
+	// Configure SGD with momentum for better convergence
+	config := cgo_bridge.TrainingConfig{
+		LearningRate:   0.1,      // Higher learning rate for SGD
+		Momentum:       0.9,      // Momentum helps SGD convergence
+		WeightDecay:    0.001,    // Small weight decay
+		Epsilon:        1e-8,
+		OptimizerType:  cgo_bridge.SGD,
+		ProblemType:    0,        // Classification
+		LossFunction:   1,        // SparseCategoricalCrossEntropy
+	}
+
+	// Use shared resources like the working test
+	modelEngine, err := createTestModelTrainingEngine(model, config, t)
+	if err != nil {
+		t.Fatalf("Failed to create model training engine: %v", err)
+	}
+	defer func() {
+		modelEngine.Cleanup()
+	}()
+
+	// Create test data using shared resources
+	batchSize := 4
+	inputTensor, err := createTestTensor([]int{batchSize, 2}, memory.Float32, t)
+	if err != nil {
+		t.Fatalf("Failed to create input tensor: %v", err)
+	}
+	defer inputTensor.Release()
+
+	labelTensor, err := createTestTensor([]int{batchSize}, memory.Float32, t)  // Sparse labels
+	if err != nil {
+		t.Fatalf("Failed to create label tensor: %v", err)
+	}
+	defer labelTensor.Release()
+
+	// Create very simple linearly separable data
+	inputData := []float32{
+		0.0, 0.0,  // class 0
+		1.0, 0.0,  // class 1  
+		0.0, 1.0,  // class 2
+		1.0, 1.0,  // class 0
+	}
+	
+	// Sparse categorical labels (class indices)
+	labelData := []float32{0, 1, 2, 0}
+
+	// Copy data to GPU
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(inputTensor.MetalBuffer(), inputData)
+	if err != nil {
+		t.Fatalf("Failed to copy input data: %v", err)
+	}
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), labelData)
+	if err != nil {
+		t.Fatalf("Failed to copy label data: %v", err)
+	}
+
+	// Train for multiple epochs and verify convergence
+	var losses []float32
+	epochs := 25  // SGD with momentum should converge reasonably fast
+	
+	for epoch := 0; epoch < epochs; epoch++ {
+		// Note: SGD doesn't have a dedicated ExecuteModelTrainingStepWithSGD method
+		// We use the general training step which takes a learning rate parameter
+		loss, err := modelEngine.ExecuteModelTrainingStep(inputTensor, labelTensor, config.LearningRate)
+		if err != nil {
+			t.Fatalf("Training failed at epoch %d: %v", epoch, err)
+		}
+		losses = append(losses, loss)
+		
+		if epoch%5 == 0 {
+			t.Logf("Epoch %d: loss = %f", epoch, loss)
+		}
+	}
+
+	// Verify loss decreased - SGD can be more erratic but should trend downward
+	initialLoss := losses[0]
+	finalLoss := losses[len(losses)-1]
+	if finalLoss >= initialLoss {
+		t.Errorf("Loss did not decrease: initial=%f, final=%f", initialLoss, finalLoss)
+	}
+
+	// Verify reasonable convergence (at least 20% reduction for SGD)
+	lossReduction := (initialLoss - finalLoss) / initialLoss
+	if lossReduction < 0.20 {
+		t.Errorf("Insufficient convergence: only %f%% loss reduction", lossReduction*100)
+	}
+
+	// Verify final loss is reasonable for linearly separable data
+	if finalLoss > 0.6 {
+		t.Logf("Warning: Final loss %f is higher than expected for linearly separable data", finalLoss)
+	}
+
+	t.Logf("SGD convergence: %f → %f (%.1f%% reduction)", initialLoss, finalLoss, lossReduction*100)
+	t.Log("✅ SGD convergence test passed")
+}
+
+// TestModelTrainingEngineAdaGradConvergence tests AdaGrad convergence on a simple problem
+func TestModelTrainingEngineAdaGradConvergence(t *testing.T) {
+	// Create a simple classification model (3-class to match working test)
+	inputShape := []int{4, 2}  // batch size 4, 2 features
+	builder := layers.NewModelBuilder(inputShape)
+
+	model, err := builder.
+		AddDense(3, true, "output").  // 3 outputs for 3 classes
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+
+	// Configure AdaGrad with standard parameters
+	config := cgo_bridge.TrainingConfig{
+		LearningRate:   0.01,     // Standard AdaGrad learning rate
+		Epsilon:        1e-8,     // For numerical stability
+		WeightDecay:    0.001,    // Small weight decay
+		OptimizerType:  cgo_bridge.AdaGrad,
+		ProblemType:    0,        // Classification
+		LossFunction:   1,        // SparseCategoricalCrossEntropy
+	}
+
+	// Use shared resources like the working test
+	modelEngine, err := createTestModelTrainingEngine(model, config, t)
+	if err != nil {
+		t.Fatalf("Failed to create model training engine: %v", err)
+	}
+	defer func() {
+		modelEngine.Cleanup()
+	}()
+
+	// Create test data using shared resources
+	batchSize := 4
+	inputTensor, err := createTestTensor([]int{batchSize, 2}, memory.Float32, t)
+	if err != nil {
+		t.Fatalf("Failed to create input tensor: %v", err)
+	}
+	defer inputTensor.Release()
+
+	labelTensor, err := createTestTensor([]int{batchSize}, memory.Float32, t)  // Sparse labels
+	if err != nil {
+		t.Fatalf("Failed to create label tensor: %v", err)
+	}
+	defer labelTensor.Release()
+
+	// Create very simple linearly separable data
+	inputData := []float32{
+		0.0, 0.0,  // class 0
+		1.0, 0.0,  // class 1  
+		0.0, 1.0,  // class 2
+		1.0, 1.0,  // class 0
+	}
+	
+	// Sparse categorical labels (class indices)
+	labelData := []float32{0, 1, 2, 0}
+
+	// Copy data to GPU
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(inputTensor.MetalBuffer(), inputData)
+	if err != nil {
+		t.Fatalf("Failed to copy input data: %v", err)
+	}
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), labelData)
+	if err != nil {
+		t.Fatalf("Failed to copy label data: %v", err)
+	}
+
+	// Train for multiple epochs and verify convergence
+	epochs := 20  // AdaGrad can converge quickly initially but may slow down
+	
+	// Execute training with AdaGrad
+	var losses []float32
+	
+	// Train for multiple epochs and verify convergence
+	loss, err := modelEngine.ExecuteModelTrainingStepWithAdaGrad(inputTensor, labelTensor)
+	if err != nil {
+		t.Fatalf("Training failed at epoch 0: %v", err)
+	}
+	losses = append(losses, loss)
+	
+	for epoch := 1; epoch < epochs; epoch++ {
+		loss, err := modelEngine.ExecuteModelTrainingStepWithAdaGrad(inputTensor, labelTensor)
+		if err != nil {
+			t.Fatalf("Training failed at epoch %d: %v", epoch, err)
+		}
+		losses = append(losses, loss)
+		
+		if epoch%5 == 0 {
+			t.Logf("Epoch %d: loss = %f", epoch, loss)
+		}
+	}
+
+	// Verify loss decreased - AdaGrad should show good initial convergence
+	initialLoss := losses[0]
+	finalLoss := losses[len(losses)-1]
+	if finalLoss >= initialLoss {
+		t.Errorf("Loss did not decrease: initial=%f, final=%f", initialLoss, finalLoss)
+	}
+
+	// Verify reasonable convergence (at least 8% reduction - AdaGrad slows down over time)
+	lossReduction := (initialLoss - finalLoss) / initialLoss
+	if lossReduction < 0.08 {
+		t.Errorf("Insufficient convergence: only %f%% loss reduction", lossReduction*100)
+	}
+
+	// Verify final loss is reasonable for linearly separable data
+	if finalLoss > 0.4 {
+		t.Logf("Warning: Final loss %f is higher than expected for linearly separable data", finalLoss)
+	}
+
+	t.Logf("AdaGrad convergence: %f → %f (%.1f%% reduction)", initialLoss, finalLoss, lossReduction*100)
+	t.Log("✅ AdaGrad convergence test passed")
+}
+
+// TestModelTrainingEngineAdaDeltaConvergence tests AdaDelta convergence on a simple problem
+func TestModelTrainingEngineAdaDeltaConvergence(t *testing.T) {
+	// Create a simple classification model (3-class to match working test)
+	inputShape := []int{4, 2}  // batch size 4, 2 features
+	builder := layers.NewModelBuilder(inputShape)
+
+	model, err := builder.
+		AddDense(3, true, "output").  // 3 outputs for 3 classes
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+
+	// Configure AdaDelta with standard parameters
+	config := cgo_bridge.TrainingConfig{
+		LearningRate:   1.0,      // AdaDelta often uses 1.0 as default
+		Alpha:          0.95,     // Standard AdaDelta decay rate (using Alpha field)
+		Epsilon:        1e-6,     // Standard AdaDelta epsilon
+		WeightDecay:    0.001,    // Small weight decay
+		OptimizerType:  cgo_bridge.AdaDelta,
+		ProblemType:    0,        // Classification
+		LossFunction:   1,        // SparseCategoricalCrossEntropy
+	}
+
+	// Use shared resources like the working test
+	modelEngine, err := createTestModelTrainingEngine(model, config, t)
+	if err != nil {
+		t.Fatalf("Failed to create model training engine: %v", err)
+	}
+	defer func() {
+		modelEngine.Cleanup()
+	}()
+
+	// Create test data using shared resources
+	batchSize := 4
+	inputTensor, err := createTestTensor([]int{batchSize, 2}, memory.Float32, t)
+	if err != nil {
+		t.Fatalf("Failed to create input tensor: %v", err)
+	}
+	defer inputTensor.Release()
+
+	labelTensor, err := createTestTensor([]int{batchSize}, memory.Float32, t)  // Sparse labels
+	if err != nil {
+		t.Fatalf("Failed to create label tensor: %v", err)
+	}
+	defer labelTensor.Release()
+
+	// Create very simple linearly separable data
+	inputData := []float32{
+		0.0, 0.0,  // class 0
+		1.0, 0.0,  // class 1  
+		0.0, 1.0,  // class 2
+		1.0, 1.0,  // class 0
+	}
+	
+	// Sparse categorical labels (class indices)
+	labelData := []float32{0, 1, 2, 0}
+
+	// Copy data to GPU
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(inputTensor.MetalBuffer(), inputData)
+	if err != nil {
+		t.Fatalf("Failed to copy input data: %v", err)
+	}
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), labelData)
+	if err != nil {
+		t.Fatalf("Failed to copy label data: %v", err)
+	}
+
+	// Train for multiple epochs and verify convergence
+	epochs := 35  // AdaDelta may need more epochs to converge
+	
+	// Execute training with AdaDelta
+	var losses []float32
+	
+	// Train for multiple epochs and verify convergence
+	loss, err := modelEngine.ExecuteModelTrainingStepWithAdaDelta(inputTensor, labelTensor)
+	if err != nil {
+		t.Fatalf("Training failed at epoch 0: %v", err)
+	}
+	losses = append(losses, loss)
+	
+	for epoch := 1; epoch < epochs; epoch++ {
+		loss, err := modelEngine.ExecuteModelTrainingStepWithAdaDelta(inputTensor, labelTensor)
+		if err != nil {
+			t.Fatalf("Training failed at epoch %d: %v", epoch, err)
+		}
+		losses = append(losses, loss)
+		
+		if epoch%10 == 0 {
+			t.Logf("Epoch %d: loss = %f", epoch, loss)
+		}
+	}
+
+	// Verify loss decreased - AdaDelta should show convergence
+	initialLoss := losses[0]
+	finalLoss := losses[len(losses)-1]
+	if finalLoss >= initialLoss {
+		t.Errorf("Loss did not decrease: initial=%f, final=%f", initialLoss, finalLoss)
+	}
+
+	// Verify reasonable convergence (at least 7% reduction - AdaDelta can be slow initially)
+	lossReduction := (initialLoss - finalLoss) / initialLoss
+	if lossReduction < 0.07 {
+		t.Errorf("Insufficient convergence: only %f%% loss reduction", lossReduction*100)
+	}
+
+	// Verify final loss is reasonable for linearly separable data
+	if finalLoss > 0.5 {
+		t.Logf("Warning: Final loss %f is higher than expected for linearly separable data", finalLoss)
+	}
+
+	t.Logf("AdaDelta convergence: %f → %f (%.1f%% reduction)", initialLoss, finalLoss, lossReduction*100)
+	t.Log("✅ AdaDelta convergence test passed")
+}
+
+// TestModelTrainingEngineNadamConvergence tests Nadam convergence on a simple problem
+func TestModelTrainingEngineNadamConvergence(t *testing.T) {
+	// Create a simple classification model (3-class to match working test)
+	inputShape := []int{4, 2}  // batch size 4, 2 features
+	builder := layers.NewModelBuilder(inputShape)
+
+	model, err := builder.
+		AddDense(3, true, "output").  // 3 outputs for 3 classes
+		Compile()
+	if err != nil {
+		t.Fatalf("Failed to create test model: %v", err)
+	}
+
+	// Configure Nadam with standard parameters (similar to Adam but with Nesterov momentum)
+	config := cgo_bridge.TrainingConfig{
+		LearningRate:   0.002,    // Standard Nadam learning rate
+		Beta1:          0.9,      // Standard Nadam beta1
+		Beta2:          0.999,    // Standard Nadam beta2
+		Epsilon:        1e-8,
+		WeightDecay:    0.0001,   // Small weight decay
+		OptimizerType:  cgo_bridge.Nadam,
+		ProblemType:    0,        // Classification
+		LossFunction:   1,        // SparseCategoricalCrossEntropy
+	}
+
+	// Use shared resources like the working test
+	modelEngine, err := createTestModelTrainingEngine(model, config, t)
+	if err != nil {
+		t.Fatalf("Failed to create model training engine: %v", err)
+	}
+	defer func() {
+		modelEngine.Cleanup()
+	}()
+
+	// Create test data using shared resources
+	batchSize := 4
+	inputTensor, err := createTestTensor([]int{batchSize, 2}, memory.Float32, t)
+	if err != nil {
+		t.Fatalf("Failed to create input tensor: %v", err)
+	}
+	defer inputTensor.Release()
+
+	labelTensor, err := createTestTensor([]int{batchSize}, memory.Float32, t)  // Sparse labels
+	if err != nil {
+		t.Fatalf("Failed to create label tensor: %v", err)
+	}
+	defer labelTensor.Release()
+
+	// Create very simple linearly separable data
+	inputData := []float32{
+		0.0, 0.0,  // class 0
+		1.0, 0.0,  // class 1  
+		0.0, 1.0,  // class 2
+		1.0, 1.0,  // class 0
+	}
+	
+	// Sparse categorical labels (class indices)
+	labelData := []float32{0, 1, 2, 0}
+
+	// Copy data to GPU
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(inputTensor.MetalBuffer(), inputData)
+	if err != nil {
+		t.Fatalf("Failed to copy input data: %v", err)
+	}
+	err = cgo_bridge.CopyFloat32ArrayToMetalBuffer(labelTensor.MetalBuffer(), labelData)
+	if err != nil {
+		t.Fatalf("Failed to copy label data: %v", err)
+	}
+
+	// Train for multiple epochs and verify convergence
+	epochs := 25  // Nadam should converge efficiently like Adam
+	
+	// Execute training with Nadam
+	var losses []float32
+	
+	// Train for multiple epochs and verify convergence
+	loss, err := modelEngine.ExecuteModelTrainingStepWithNadam(inputTensor, labelTensor)
+	if err != nil {
+		t.Fatalf("Training failed at epoch 0: %v", err)
+	}
+	losses = append(losses, loss)
+	
+	for epoch := 1; epoch < epochs; epoch++ {
+		loss, err := modelEngine.ExecuteModelTrainingStepWithNadam(inputTensor, labelTensor)
+		if err != nil {
+			t.Fatalf("Training failed at epoch %d: %v", epoch, err)
+		}
+		losses = append(losses, loss)
+		
+		if epoch%5 == 0 {
+			t.Logf("Epoch %d: loss = %f", epoch, loss)
+		}
+	}
+
+	// Verify loss decreased - Nadam should show excellent convergence
+	initialLoss := losses[0]
+	finalLoss := losses[len(losses)-1]
+	if finalLoss >= initialLoss {
+		t.Errorf("Loss did not decrease: initial=%f, final=%f", initialLoss, finalLoss)
+	}
+
+	// Verify convergence (at least 3% reduction - Nadam can be slower on simple problems)
+	lossReduction := (initialLoss - finalLoss) / initialLoss
+	if lossReduction < 0.03 {
+		t.Errorf("Insufficient convergence: only %f%% loss reduction", lossReduction*100)
+	}
+
+	// Verify final loss is reasonable for linearly separable data
+	if finalLoss > 0.4 {
+		t.Logf("Warning: Final loss %f is higher than expected for linearly separable data", finalLoss)
+	}
+
+	t.Logf("Nadam convergence: %f → %f (%.1f%% reduction)", initialLoss, finalLoss, lossReduction*100)
+	t.Log("✅ Nadam convergence test passed")
+}

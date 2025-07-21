@@ -187,6 +187,8 @@ int execute_lbfgs_step_mpsgraph_pooled(
 );
 
 // Nadam optimizer functions
+void cacheNadamScalarTensors(training_engine_t* engine);
+
 int execute_nadam_step_mpsgraph(
     uintptr_t device_ptr,
     uintptr_t* weight_buffers,

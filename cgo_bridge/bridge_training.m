@@ -843,6 +843,115 @@ int execute_training_step_dynamic_with_gradients_pooled(
                 }
             }
             
+            // Feed state placeholders for AdaGrad optimizer
+            if (engine->config.optimizer_type == 4 && engine->squaredGradSumPlaceholders && engine->squaredGradSumBuffers) {
+                for (int i = 0; i < engine->squaredGradSumPlaceholders.count && i < engine->squaredGradSumBuffers.count; i++) {
+                    MPSGraphTensor* squaredGradSumPlaceholder = engine->squaredGradSumPlaceholders[i];
+                    id<MTLBuffer> squaredGradSumBuf = engine->squaredGradSumBuffers[i];
+                    
+                    if (squaredGradSumBuf && squaredGradSumPlaceholder) {
+                        NSArray<NSNumber*>* squaredGradSumShape = squaredGradSumPlaceholder.shape;
+                        MPSGraphTensorData* squaredGradSumData = [[MPSGraphTensorData alloc] 
+                                                                 initWithMTLBuffer:squaredGradSumBuf
+                                                                 shape:squaredGradSumShape
+                                                                 dataType:MPSDataTypeFloat32];
+                        feeds[squaredGradSumPlaceholder] = squaredGradSumData;
+                    }
+                }
+            }
+            
+            // Feed state placeholders for AdaDelta optimizer
+            if (engine->config.optimizer_type == 5 && engine->adadeltaSquaredGradAvgPlaceholders && engine->adadeltaSquaredGradAvgBuffers) {
+                for (int i = 0; i < engine->adadeltaSquaredGradAvgPlaceholders.count && i < engine->adadeltaSquaredGradAvgBuffers.count; i++) {
+                    MPSGraphTensor* squaredGradAvgPlaceholder = engine->adadeltaSquaredGradAvgPlaceholders[i];
+                    id<MTLBuffer> squaredGradAvgBuf = engine->adadeltaSquaredGradAvgBuffers[i];
+                    
+                    if (squaredGradAvgBuf && squaredGradAvgPlaceholder) {
+                        NSArray<NSNumber*>* squaredGradAvgShape = squaredGradAvgPlaceholder.shape;
+                        MPSGraphTensorData* squaredGradAvgData = [[MPSGraphTensorData alloc] 
+                                                                initWithMTLBuffer:squaredGradAvgBuf
+                                                                shape:squaredGradAvgShape
+                                                                dataType:MPSDataTypeFloat32];
+                        feeds[squaredGradAvgPlaceholder] = squaredGradAvgData;
+                    }
+                }
+                
+                // Feed squared delta average placeholders for AdaDelta
+                if (engine->adadeltaSquaredDeltaAvgPlaceholders && engine->adadeltaSquaredDeltaAvgBuffers) {
+                    for (int i = 0; i < engine->adadeltaSquaredDeltaAvgPlaceholders.count && i < engine->adadeltaSquaredDeltaAvgBuffers.count; i++) {
+                        MPSGraphTensor* squaredDeltaAvgPlaceholder = engine->adadeltaSquaredDeltaAvgPlaceholders[i];
+                        id<MTLBuffer> squaredDeltaAvgBuf = engine->adadeltaSquaredDeltaAvgBuffers[i];
+                        
+                        if (squaredDeltaAvgBuf && squaredDeltaAvgPlaceholder) {
+                            NSArray<NSNumber*>* squaredDeltaAvgShape = squaredDeltaAvgPlaceholder.shape;
+                            MPSGraphTensorData* squaredDeltaAvgData = [[MPSGraphTensorData alloc] 
+                                                                     initWithMTLBuffer:squaredDeltaAvgBuf
+                                                                     shape:squaredDeltaAvgShape
+                                                                     dataType:MPSDataTypeFloat32];
+                            feeds[squaredDeltaAvgPlaceholder] = squaredDeltaAvgData;
+                        }
+                    }
+                }
+            }
+            
+            // Feed state placeholders for Nadam optimizer
+            if (engine->config.optimizer_type == 6 && engine->nadamMomentumPlaceholders && engine->nadamVariancePlaceholders) {
+                // Increment step counter and calculate bias correction factors
+                engine->nadamStepCount++;
+                float biasCorr1 = 1.0f - powf(engine->config.beta1, (float)engine->nadamStepCount);
+                float biasCorr2 = 1.0f - powf(engine->config.beta2, (float)engine->nadamStepCount);
+                
+                // Feed bias correction placeholders with proper step-based values
+                if (engine->nadamBiasCorr1Placeholder && engine->nadamBiasCorr2Placeholder && 
+                    engine->nadamCachedBiasCorr1Buffer && engine->nadamCachedBiasCorr2Buffer) {
+                    // PERFORMANCE: Use cached buffers instead of creating new ones each step
+                    *(float*)[engine->nadamCachedBiasCorr1Buffer contents] = biasCorr1;
+                    *(float*)[engine->nadamCachedBiasCorr2Buffer contents] = biasCorr2;
+                    
+                    MPSGraphTensorData* biasCorr1Data = [[MPSGraphTensorData alloc] 
+                                                        initWithMTLBuffer:engine->nadamCachedBiasCorr1Buffer
+                                                        shape:@[@1]
+                                                        dataType:MPSDataTypeFloat32];
+                    MPSGraphTensorData* biasCorr2Data = [[MPSGraphTensorData alloc] 
+                                                        initWithMTLBuffer:engine->nadamCachedBiasCorr2Buffer
+                                                        shape:@[@1]
+                                                        dataType:MPSDataTypeFloat32];
+                    
+                    feeds[engine->nadamBiasCorr1Placeholder] = biasCorr1Data;
+                    feeds[engine->nadamBiasCorr2Placeholder] = biasCorr2Data;
+                }
+                
+                // Feed momentum placeholders
+                for (int i = 0; i < engine->nadamMomentumPlaceholders.count && i < engine->nadamMomentumBuffers.count; i++) {
+                    MPSGraphTensor* momentumPlaceholder = engine->nadamMomentumPlaceholders[i];
+                    id<MTLBuffer> momentumBuf = engine->nadamMomentumBuffers[i];
+                    
+                    if (momentumBuf && momentumPlaceholder) {
+                        NSArray<NSNumber*>* momentumShape = momentumPlaceholder.shape;
+                        MPSGraphTensorData* momentumData = [[MPSGraphTensorData alloc] 
+                                                           initWithMTLBuffer:momentumBuf
+                                                           shape:momentumShape
+                                                           dataType:MPSDataTypeFloat32];
+                        feeds[momentumPlaceholder] = momentumData;
+                    }
+                }
+                
+                // Feed variance placeholders
+                for (int i = 0; i < engine->nadamVariancePlaceholders.count && i < engine->nadamVarianceBuffers.count; i++) {
+                    MPSGraphTensor* variancePlaceholder = engine->nadamVariancePlaceholders[i];
+                    id<MTLBuffer> varianceBuf = engine->nadamVarianceBuffers[i];
+                    
+                    if (varianceBuf && variancePlaceholder) {
+                        NSArray<NSNumber*>* varianceShape = variancePlaceholder.shape;
+                        MPSGraphTensorData* varianceData = [[MPSGraphTensorData alloc] 
+                                                           initWithMTLBuffer:varianceBuf
+                                                           shape:varianceShape
+                                                           dataType:MPSDataTypeFloat32];
+                        feeds[variancePlaceholder] = varianceData;
+                    }
+                }
+            }
+            
             // Get actual loss tensor from the graph
             MPSGraphTensor* actualLoss = engine->lossOutput;
             
@@ -885,6 +994,30 @@ int execute_training_step_dynamic_with_gradients_pooled(
                 updatesMomentumToUse = engine->rmspropPrecompiledUpdatedMomentum;
                 hasPrecompiledOps = YES;
             }
+            // Try AdaGrad-specific arrays (for AdaGrad optimizer)
+            else if (engine->config.optimizer_type == 4 && engine->adagradPrecompiledGradients && engine->adagradPrecompiledUpdatedParams) {
+                // NSLog(@"🚀 Using ADAGRAD-SPECIFIC pre-compiled operations!");
+                gradientsToUse = engine->adagradPrecompiledGradients;
+                updatesParamsToUse = engine->adagradPrecompiledUpdatedParams;
+                updatesMomentumToUse = nil; // AdaGrad doesn't use momentum
+                hasPrecompiledOps = YES;
+            }
+            // Try AdaDelta-specific arrays (for AdaDelta optimizer)
+            else if (engine->config.optimizer_type == 5 && engine->adadeltaPrecompiledGradients && engine->adadeltaPrecompiledUpdatedParams) {
+                // NSLog(@"🚀 Using ADADELTA-SPECIFIC pre-compiled operations!");
+                gradientsToUse = engine->adadeltaPrecompiledGradients;
+                updatesParamsToUse = engine->adadeltaPrecompiledUpdatedParams;
+                updatesMomentumToUse = nil; // AdaDelta doesn't use traditional momentum
+                hasPrecompiledOps = YES;
+            }
+            // Try Nadam-specific arrays (for Nadam optimizer)
+            else if (engine->config.optimizer_type == 6 && engine->nadamPrecompiledGradients && engine->nadamPrecompiledUpdatedParams) {
+                // NSLog(@"🚀 Using NADAM-SPECIFIC pre-compiled operations!");
+                gradientsToUse = engine->nadamPrecompiledGradients;
+                updatesParamsToUse = engine->nadamPrecompiledUpdatedParams;
+                updatesMomentumToUse = engine->nadamPrecompiledUpdatedMomentum;
+                hasPrecompiledOps = YES;
+            }
             // Try legacy arrays (fallback for backward compatibility)
             else if (engine->precompiledGradientTensors && engine->precompiledUpdatedParams) {
                 NSLog(@"🚀 Using LEGACY pre-compiled operations!");
@@ -918,6 +1051,11 @@ int execute_training_step_dynamic_with_gradients_pooled(
                     [targetTensors addObjectsFromArray:engine->precompiledUpdatedVariance];
                 }
                 
+                // Add Adam-specific variance tensors
+                if (engine->adamPrecompiledUpdatedVariance && engine->config.optimizer_type == 1) {
+                    [targetTensors addObjectsFromArray:engine->adamPrecompiledUpdatedVariance];
+                }
+                
                 // Add squared gradient average tensors for RMSProp
                 if (engine->rmspropPrecompiledUpdatedSquaredGrad && engine->config.optimizer_type == 2) {
                     [targetTensors addObjectsFromArray:engine->rmspropPrecompiledUpdatedSquaredGrad];
@@ -926,6 +1064,24 @@ int execute_training_step_dynamic_with_gradients_pooled(
                 // Add gradient average tensors for centered RMSProp
                 if (engine->rmspropPrecompiledUpdatedGradAvg && engine->config.optimizer_type == 2 && engine->config.centered) {
                     [targetTensors addObjectsFromArray:engine->rmspropPrecompiledUpdatedGradAvg];
+                }
+                
+                // Add squared gradient sum tensors for AdaGrad
+                if (engine->adagradPrecompiledUpdatedSquaredGradSum && engine->config.optimizer_type == 4) {
+                    [targetTensors addObjectsFromArray:engine->adagradPrecompiledUpdatedSquaredGradSum];
+                }
+                
+                // Add squared gradient and delta average tensors for AdaDelta
+                if (engine->adadeltaPrecompiledUpdatedSquaredGradAvg && engine->config.optimizer_type == 5) {
+                    [targetTensors addObjectsFromArray:engine->adadeltaPrecompiledUpdatedSquaredGradAvg];
+                }
+                if (engine->adadeltaPrecompiledUpdatedSquaredDeltaAvg && engine->config.optimizer_type == 5) {
+                    [targetTensors addObjectsFromArray:engine->adadeltaPrecompiledUpdatedSquaredDeltaAvg];
+                }
+                
+                // Add variance tensors for Nadam
+                if (engine->nadamPrecompiledUpdatedVariance && engine->config.optimizer_type == 6) {
+                    [targetTensors addObjectsFromArray:engine->nadamPrecompiledUpdatedVariance];
                 }
                 
             } else {
@@ -1114,6 +1270,91 @@ int execute_training_step_dynamic_with_gradients_pooled(
                                             float* momentumPtr = (float*)[momentumBuf contents];
                                             [[updatedMomentumData mpsndarray] readBytes:momentumPtr strideBytes:nil];
                                             [momentumBuf didModifyRange:NSMakeRange(0, [momentumBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Copy updated squared gradient sum buffers back (for AdaGrad)
+                            if (engine->config.optimizer_type == 4 && engine->adagradPrecompiledUpdatedSquaredGradSum) {
+                                for (int i = 0; i < engine->adagradPrecompiledUpdatedSquaredGradSum.count && i < engine->squaredGradSumBuffers.count; i++) {
+                                    MPSGraphTensor* updatedSquaredGradSumTensor = engine->adagradPrecompiledUpdatedSquaredGradSum[i];
+                                    MPSGraphTensorData* updatedSquaredGradSumData = results[updatedSquaredGradSumTensor];
+                                    
+                                    if (updatedSquaredGradSumData) {
+                                        id<MTLBuffer> squaredGradSumBuf = engine->squaredGradSumBuffers[i];
+                                        if (squaredGradSumBuf) {
+                                            float* squaredGradSumPtr = (float*)[squaredGradSumBuf contents];
+                                            [[updatedSquaredGradSumData mpsndarray] readBytes:squaredGradSumPtr strideBytes:nil];
+                                            [squaredGradSumBuf didModifyRange:NSMakeRange(0, [squaredGradSumBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Copy updated squared gradient average buffers back (for AdaDelta)
+                            if (engine->config.optimizer_type == 5 && engine->adadeltaPrecompiledUpdatedSquaredGradAvg) {
+                                for (int i = 0; i < engine->adadeltaPrecompiledUpdatedSquaredGradAvg.count && i < engine->adadeltaSquaredGradAvgBuffers.count; i++) {
+                                    MPSGraphTensor* updatedSquaredGradAvgTensor = engine->adadeltaPrecompiledUpdatedSquaredGradAvg[i];
+                                    MPSGraphTensorData* updatedSquaredGradAvgData = results[updatedSquaredGradAvgTensor];
+                                    
+                                    if (updatedSquaredGradAvgData) {
+                                        id<MTLBuffer> squaredGradAvgBuf = engine->adadeltaSquaredGradAvgBuffers[i];
+                                        if (squaredGradAvgBuf) {
+                                            float* squaredGradAvgPtr = (float*)[squaredGradAvgBuf contents];
+                                            [[updatedSquaredGradAvgData mpsndarray] readBytes:squaredGradAvgPtr strideBytes:nil];
+                                            [squaredGradAvgBuf didModifyRange:NSMakeRange(0, [squaredGradAvgBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Copy updated squared delta average buffers back (for AdaDelta)
+                            if (engine->config.optimizer_type == 5 && engine->adadeltaPrecompiledUpdatedSquaredDeltaAvg) {
+                                for (int i = 0; i < engine->adadeltaPrecompiledUpdatedSquaredDeltaAvg.count && i < engine->adadeltaSquaredDeltaAvgBuffers.count; i++) {
+                                    MPSGraphTensor* updatedSquaredDeltaAvgTensor = engine->adadeltaPrecompiledUpdatedSquaredDeltaAvg[i];
+                                    MPSGraphTensorData* updatedSquaredDeltaAvgData = results[updatedSquaredDeltaAvgTensor];
+                                    
+                                    if (updatedSquaredDeltaAvgData) {
+                                        id<MTLBuffer> squaredDeltaAvgBuf = engine->adadeltaSquaredDeltaAvgBuffers[i];
+                                        if (squaredDeltaAvgBuf) {
+                                            float* squaredDeltaAvgPtr = (float*)[squaredDeltaAvgBuf contents];
+                                            [[updatedSquaredDeltaAvgData mpsndarray] readBytes:squaredDeltaAvgPtr strideBytes:nil];
+                                            [squaredDeltaAvgBuf didModifyRange:NSMakeRange(0, [squaredDeltaAvgBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Copy updated momentum buffers back (for Nadam)
+                            if (engine->config.optimizer_type == 6 && engine->nadamPrecompiledUpdatedMomentum) {
+                                for (int i = 0; i < engine->nadamPrecompiledUpdatedMomentum.count && i < engine->nadamMomentumBuffers.count; i++) {
+                                    MPSGraphTensor* updatedMomentumTensor = engine->nadamPrecompiledUpdatedMomentum[i];
+                                    MPSGraphTensorData* updatedMomentumData = results[updatedMomentumTensor];
+                                    
+                                    if (updatedMomentumData) {
+                                        id<MTLBuffer> momentumBuf = engine->nadamMomentumBuffers[i];
+                                        if (momentumBuf) {
+                                            float* momentumPtr = (float*)[momentumBuf contents];
+                                            [[updatedMomentumData mpsndarray] readBytes:momentumPtr strideBytes:nil];
+                                            [momentumBuf didModifyRange:NSMakeRange(0, [momentumBuf length])];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Copy updated variance buffers back (for Nadam)
+                            if (engine->config.optimizer_type == 6 && engine->nadamPrecompiledUpdatedVariance) {
+                                for (int i = 0; i < engine->nadamPrecompiledUpdatedVariance.count && i < engine->nadamVarianceBuffers.count; i++) {
+                                    MPSGraphTensor* updatedVarianceTensor = engine->nadamPrecompiledUpdatedVariance[i];
+                                    MPSGraphTensorData* updatedVarianceData = results[updatedVarianceTensor];
+                                    
+                                    if (updatedVarianceData) {
+                                        id<MTLBuffer> varianceBuf = engine->nadamVarianceBuffers[i];
+                                        if (varianceBuf) {
+                                            float* variancePtr = (float*)[varianceBuf contents];
+                                            [[updatedVarianceData mpsndarray] readBytes:variancePtr strideBytes:nil];
+                                            [varianceBuf didModifyRange:NSMakeRange(0, [varianceBuf length])];
                                         }
                                     }
                                 }

@@ -177,8 +177,10 @@ typedef struct {
     BOOL sgdStateInitialized;                              // Flag indicating SGD state is ready
     
     // PERFORMANCE: Cached bias correction buffers to avoid per-step allocations
-    id<MTLBuffer> cachedBiasCorr1Buffer;                    // Reusable buffer for bias correction 1
-    id<MTLBuffer> cachedBiasCorr2Buffer;                    // Reusable buffer for bias correction 2
+    id<MTLBuffer> cachedBiasCorr1Buffer;                    // Reusable buffer for bias correction 1 (Adam)
+    id<MTLBuffer> cachedBiasCorr2Buffer;                    // Reusable buffer for bias correction 2 (Adam)
+    id<MTLBuffer> nadamCachedBiasCorr1Buffer;               // Reusable buffer for Nadam bias correction 1
+    id<MTLBuffer> nadamCachedBiasCorr2Buffer;               // Reusable buffer for Nadam bias correction 2
     
     // TRUE PRE-COMPILATION: Pre-compiled gradient and optimizer operations
     NSMutableArray* precompiledGradientTensors;             // Pre-compiled gradient tensors
@@ -247,6 +249,71 @@ typedef struct {
     NSMutableArray* lbfgsSearchDirBuffers;                  // Search direction buffers p_k
     id<MTLBuffer> lbfgsAlphaBuffer;                         // Alpha values for two-loop recursion
     
+    // AdaGrad-specific graph compilation
+    BOOL adagradGraphCompiled;                              // Flag indicating AdaGrad graph is compiled
+    BOOL adagradStateInitialized;                           // Flag indicating AdaGrad state is ready
+    NSMutableArray* adagradPrecompiledGradients;            // AdaGrad pre-compiled gradient tensors
+    NSMutableArray* adagradPrecompiledUpdatedParams;        // AdaGrad pre-compiled parameter updates
+    NSMutableArray* adagradPrecompiledUpdatedSquaredGradSum; // AdaGrad pre-compiled squared gradient sum updates
+    
+    // AdaGrad-specific state arrays
+    NSMutableArray* squaredGradSumPlaceholders;             // Squared gradient sum state for each parameter
+    NSMutableArray* squaredGradSumVariables;                // MPSGraph variables for squared gradient sum state
+    NSMutableArray* squaredGradSumBuffers;                  // Metal buffers for squared gradient sum state
+    
+    // AdaGrad-specific cached scalars
+    MPSGraphTensor* adagradCachedEpsilonTensor;             // Cached AdaGrad epsilon scalar
+    BOOL adagradScalarsCached;                              // Flag indicating AdaGrad scalars are cached
+    
+    // AdaDelta-specific graph compilation
+    BOOL adadeltaGraphCompiled;                             // Flag indicating AdaDelta graph is compiled
+    BOOL adadeltaStateInitialized;                          // Flag indicating AdaDelta state is ready
+    NSMutableArray* adadeltaPrecompiledGradients;           // AdaDelta pre-compiled gradient tensors
+    NSMutableArray* adadeltaPrecompiledUpdatedParams;       // AdaDelta pre-compiled parameter updates
+    NSMutableArray* adadeltaPrecompiledUpdatedSquaredGradAvg; // AdaDelta pre-compiled squared gradient averages
+    NSMutableArray* adadeltaPrecompiledUpdatedSquaredDeltaAvg; // AdaDelta pre-compiled squared delta averages
+    
+    // AdaDelta-specific state arrays
+    NSMutableArray* adadeltaSquaredGradAvgPlaceholders;     // AdaDelta squared gradient average state for each parameter
+    NSMutableArray* adadeltaSquaredGradAvgVariables;        // MPSGraph variables for squared gradient average state
+    NSMutableArray* adadeltaSquaredGradAvgBuffers;          // Metal buffers for squared gradient average state
+    NSMutableArray* adadeltaSquaredDeltaAvgPlaceholders;    // AdaDelta squared delta average state for each parameter
+    NSMutableArray* adadeltaSquaredDeltaAvgVariables;       // MPSGraph variables for squared delta average state
+    NSMutableArray* adadeltaSquaredDeltaAvgBuffers;         // Metal buffers for squared delta average state
+    
+    // AdaDelta-specific cached scalars
+    MPSGraphTensor* adadeltaCachedRhoTensor;                // Cached AdaDelta rho (decay factor) scalar
+    MPSGraphTensor* adadeltaCachedOneMinusRhoTensor;        // Cached (1 - rho) scalar
+    MPSGraphTensor* adadeltaCachedEpsilonTensor;            // Cached AdaDelta epsilon scalar
+    BOOL adadeltaScalarsCached;                             // Flag indicating AdaDelta scalars are cached
+    
+    // Nadam-specific graph compilation
+    BOOL nadamGraphCompiled;                                // Flag indicating Nadam graph is compiled
+    BOOL nadamStateInitialized;                             // Flag indicating Nadam state is ready
+    NSMutableArray* nadamPrecompiledGradients;              // Nadam pre-compiled gradient tensors
+    NSMutableArray* nadamPrecompiledUpdatedParams;          // Nadam pre-compiled parameter updates
+    NSMutableArray* nadamPrecompiledUpdatedMomentum;        // Nadam pre-compiled momentum updates
+    NSMutableArray* nadamPrecompiledUpdatedVariance;        // Nadam pre-compiled variance updates
+    
+    // Nadam-specific state arrays (shares momentum/variance with Adam but separate for clarity)
+    NSMutableArray* nadamMomentumPlaceholders;              // Nadam momentum state for each parameter
+    NSMutableArray* nadamMomentumVariables;                 // MPSGraph variables for Nadam momentum state
+    NSMutableArray* nadamMomentumBuffers;                   // Metal buffers for Nadam momentum state
+    NSMutableArray* nadamVariancePlaceholders;              // Nadam variance state for each parameter
+    NSMutableArray* nadamVarianceVariables;                 // MPSGraph variables for Nadam variance state
+    NSMutableArray* nadamVarianceBuffers;                   // Metal buffers for Nadam variance state
+    
+    // Nadam-specific cached scalars
+    MPSGraphTensor* nadamCachedBeta1Tensor;                 // Cached Nadam beta1 scalar
+    MPSGraphTensor* nadamCachedBeta2Tensor;                 // Cached Nadam beta2 scalar
+    MPSGraphTensor* nadamCachedOneMinusBeta1Tensor;         // Cached (1 - beta1) scalar
+    MPSGraphTensor* nadamCachedOneMinusBeta2Tensor;         // Cached (1 - beta2) scalar
+    MPSGraphTensor* nadamCachedEpsilonTensor;               // Cached Nadam epsilon scalar
+    MPSGraphTensor* nadamBiasCorr1Placeholder;              // Dynamic bias correction 1 placeholder
+    MPSGraphTensor* nadamBiasCorr2Placeholder;              // Dynamic bias correction 2 placeholder
+    int nadamStepCount;                                     // Training step counter for bias correction (Nadam)
+    BOOL nadamScalarsCached;                                // Flag indicating Nadam scalars are cached
+    
     // L-BFGS-specific configuration
     int lbfgsHistorySize;                                   // Number of past gradients to store (m parameter)
     int lbfgsHistoryCount;                                  // Current number of stored history pairs
@@ -258,15 +325,6 @@ typedef struct {
     // L-BFGS-specific cached scalars
     MPSGraphTensor* lbfgsCachedInitialStepTensor;          // Cached initial step size scalar
     BOOL lbfgsScalarsCached;                                // Flag indicating L-BFGS scalars are cached
-    
-    // AdaGrad-specific cached scalars
-    BOOL adagradScalarsCached;                              // Flag indicating AdaGrad scalars are cached
-    
-    // AdaDelta-specific cached scalars
-    BOOL adadeltaScalarsCached;                             // Flag indicating AdaDelta scalars are cached
-    
-    // Nadam-specific cached scalars
-    BOOL nadamScalarsCached;                                // Flag indicating Nadam scalars are cached
     
     // Model configuration for dynamic dimensions
     model_config_t model_config;                             // Model architecture configuration

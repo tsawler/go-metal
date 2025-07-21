@@ -1982,3 +1982,32 @@ int execute_nadam_step_mpsgraph(
         }
     }
 }
+
+// PRODUCTION OPTIMIZATION: Cache Nadam scalar tensors to eliminate allocation overhead
+void cacheNadamScalarTensors(training_engine_t* engine) {
+    @autoreleasepool {
+        if (engine->nadamScalarsCached || !engine->graph || !engine->device) {
+            return; // Already cached or no graph/device available
+        }
+        
+        // Create scalar tensors for Nadam hyperparameters ONCE
+        float lr = engine->config.learning_rate;
+        float beta1 = engine->config.beta1;
+        float beta2 = engine->config.beta2;
+        float epsilon = engine->config.epsilon;
+        
+        engine->cachedLrTensor = [engine->graph constantWithScalar:lr dataType:MPSDataTypeFloat32];
+        engine->nadamCachedBeta1Tensor = [engine->graph constantWithScalar:beta1 dataType:MPSDataTypeFloat32];
+        engine->nadamCachedBeta2Tensor = [engine->graph constantWithScalar:beta2 dataType:MPSDataTypeFloat32];
+        engine->nadamCachedOneMinusBeta1Tensor = [engine->graph constantWithScalar:(1.0f - beta1) dataType:MPSDataTypeFloat32];
+        engine->nadamCachedOneMinusBeta2Tensor = [engine->graph constantWithScalar:(1.0f - beta2) dataType:MPSDataTypeFloat32];
+        engine->nadamCachedEpsilonTensor = [engine->graph constantWithScalar:epsilon dataType:MPSDataTypeFloat32];
+        
+        // Create bias correction placeholders for Nadam (dynamic values updated per step)
+        engine->nadamBiasCorr1Placeholder = [engine->graph placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"nadam_bias_corr_1"];
+        engine->nadamBiasCorr2Placeholder = [engine->graph placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"nadam_bias_corr_2"];
+        
+        engine->nadamScalarsCached = YES;
+        // NSLog(@"✅ PRODUCTION OPTIMIZATION: Nadam scalar tensors cached");
+    }
+}

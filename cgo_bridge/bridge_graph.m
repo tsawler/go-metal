@@ -1012,6 +1012,181 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             //       engine->config.centered ? "enabled" : "disabled");
         }
         
+        // ADAGRAD OPTIMIZER: Initialize AdaGrad state arrays
+        if (engine->config.optimizer_type == 4) { // AdaGrad optimizer
+            
+            // Cache AdaGrad scalar tensors during graph building phase
+            cacheAdaGradScalarTensors(engine);
+            
+            // Initialize AdaGrad state arrays for squared gradient sums
+            engine->squaredGradSumPlaceholders = [[NSMutableArray alloc] init];
+            engine->squaredGradSumVariables = [[NSMutableArray alloc] init];
+            engine->squaredGradSumBuffers = [[NSMutableArray alloc] init];
+            
+            // Initialize state buffers for each parameter
+            for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
+                id paramObj = [engine->allWeightPlaceholders objectAtIndex:i];
+                
+                // Skip NSNull placeholders from corrupted BatchNorm layers
+                if ([paramObj isKindOfClass:[NSNull class]]) {
+                    [engine->squaredGradSumPlaceholders addObject:[NSNull null]];
+                    continue;
+                }
+                
+                MPSGraphTensor* paramTensor = (MPSGraphTensor*)paramObj;
+                NSArray<NSNumber*>* paramShape = [paramTensor shape];
+                
+                // Calculate total elements and buffer size
+                NSUInteger elementCount = 1;
+                for (NSNumber* dim in paramShape) {
+                    elementCount *= [dim unsignedIntegerValue];
+                }
+                NSUInteger bufferSize = elementCount * sizeof(float);
+                
+                // Create Metal buffer for squared gradient sum (initialized to zero)
+                id<MTLBuffer> squaredGradSumBuffer = [engine->device newBufferWithLength:bufferSize 
+                                                                                 options:MTLResourceStorageModeShared];
+                memset([squaredGradSumBuffer contents], 0, bufferSize);
+                [engine->squaredGradSumBuffers addObject:squaredGradSumBuffer];
+                
+                // Create placeholder for squared gradient sum state
+                MPSGraphTensor* squaredGradSumPlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                       dataType:MPSDataTypeFloat32
+                                                                                           name:[NSString stringWithFormat:@"squared_grad_sum_%d", i]];
+                [engine->squaredGradSumPlaceholders addObject:squaredGradSumPlaceholder];
+            }
+            
+            engine->adagradStateInitialized = YES;
+            // NSLog(@"✅ AdaGrad state initialized for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
+        // ADADELTA OPTIMIZER: Initialize AdaDelta state arrays
+        if (engine->config.optimizer_type == 5) { // AdaDelta optimizer
+            
+            // Cache AdaDelta scalar tensors during graph building phase
+            cacheAdaDeltaScalarTensors(engine);
+            
+            // Initialize AdaDelta state arrays for squared gradient and delta averages
+            engine->adadeltaSquaredGradAvgPlaceholders = [[NSMutableArray alloc] init];
+            engine->adadeltaSquaredGradAvgVariables = [[NSMutableArray alloc] init];
+            engine->adadeltaSquaredGradAvgBuffers = [[NSMutableArray alloc] init];
+            engine->adadeltaSquaredDeltaAvgPlaceholders = [[NSMutableArray alloc] init];
+            engine->adadeltaSquaredDeltaAvgVariables = [[NSMutableArray alloc] init];
+            engine->adadeltaSquaredDeltaAvgBuffers = [[NSMutableArray alloc] init];
+            
+            // Initialize state buffers for each parameter
+            for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
+                id paramObj = [engine->allWeightPlaceholders objectAtIndex:i];
+                
+                // Skip NSNull placeholders from corrupted BatchNorm layers
+                if ([paramObj isKindOfClass:[NSNull class]]) {
+                    [engine->adadeltaSquaredGradAvgPlaceholders addObject:[NSNull null]];
+                    [engine->adadeltaSquaredDeltaAvgPlaceholders addObject:[NSNull null]];
+                    continue;
+                }
+                
+                MPSGraphTensor* paramTensor = (MPSGraphTensor*)paramObj;
+                NSArray<NSNumber*>* paramShape = [paramTensor shape];
+                
+                // Calculate total elements and buffer size
+                NSUInteger elementCount = 1;
+                for (NSNumber* dim in paramShape) {
+                    elementCount *= [dim unsignedIntegerValue];
+                }
+                NSUInteger bufferSize = elementCount * sizeof(float);
+                
+                // Create Metal buffers for squared gradient and delta averages (initialized to zero)
+                id<MTLBuffer> squaredGradAvgBuffer = [engine->device newBufferWithLength:bufferSize 
+                                                                                 options:MTLResourceStorageModeShared];
+                id<MTLBuffer> squaredDeltaAvgBuffer = [engine->device newBufferWithLength:bufferSize 
+                                                                                  options:MTLResourceStorageModeShared];
+                memset([squaredGradAvgBuffer contents], 0, bufferSize);
+                memset([squaredDeltaAvgBuffer contents], 0, bufferSize);
+                [engine->adadeltaSquaredGradAvgBuffers addObject:squaredGradAvgBuffer];
+                [engine->adadeltaSquaredDeltaAvgBuffers addObject:squaredDeltaAvgBuffer];
+                
+                // Create placeholders for squared gradient and delta average states
+                MPSGraphTensor* squaredGradAvgPlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                       dataType:MPSDataTypeFloat32
+                                                                                           name:[NSString stringWithFormat:@"adadelta_grad_avg_%d", i]];
+                MPSGraphTensor* squaredDeltaAvgPlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                        dataType:MPSDataTypeFloat32
+                                                                                            name:[NSString stringWithFormat:@"adadelta_delta_avg_%d", i]];
+                [engine->adadeltaSquaredGradAvgPlaceholders addObject:squaredGradAvgPlaceholder];
+                [engine->adadeltaSquaredDeltaAvgPlaceholders addObject:squaredDeltaAvgPlaceholder];
+            }
+            
+            engine->adadeltaStateInitialized = YES;
+            // NSLog(@"✅ AdaDelta state initialized for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
+        // NADAM OPTIMIZER: Initialize Nadam state arrays
+        if (engine->config.optimizer_type == 6) { // Nadam optimizer
+            
+            // Cache Nadam scalar tensors during graph building phase
+            cacheNadamScalarTensors(engine);
+            
+            // Initialize Nadam state arrays for momentum and variance (similar to Adam)
+            engine->nadamMomentumPlaceholders = [[NSMutableArray alloc] init];
+            engine->nadamMomentumVariables = [[NSMutableArray alloc] init];
+            engine->nadamMomentumBuffers = [[NSMutableArray alloc] init];
+            engine->nadamVariancePlaceholders = [[NSMutableArray alloc] init];
+            engine->nadamVarianceVariables = [[NSMutableArray alloc] init];
+            engine->nadamVarianceBuffers = [[NSMutableArray alloc] init];
+            
+            // Initialize state buffers for each parameter
+            for (int i = 0; i < [engine->allWeightPlaceholders count]; i++) {
+                id paramObj = [engine->allWeightPlaceholders objectAtIndex:i];
+                
+                // Skip NSNull placeholders from corrupted BatchNorm layers
+                if ([paramObj isKindOfClass:[NSNull class]]) {
+                    [engine->nadamMomentumPlaceholders addObject:[NSNull null]];
+                    [engine->nadamVariancePlaceholders addObject:[NSNull null]];
+                    continue;
+                }
+                
+                MPSGraphTensor* paramTensor = (MPSGraphTensor*)paramObj;
+                NSArray<NSNumber*>* paramShape = [paramTensor shape];
+                
+                // Calculate total elements and buffer size
+                NSUInteger elementCount = 1;
+                for (NSNumber* dim in paramShape) {
+                    elementCount *= [dim unsignedIntegerValue];
+                }
+                NSUInteger bufferSize = elementCount * sizeof(float);
+                
+                // Create Metal buffers for momentum and variance (initialized to zero)
+                id<MTLBuffer> momentumBuffer = [engine->device newBufferWithLength:bufferSize 
+                                                                             options:MTLResourceStorageModeShared];
+                id<MTLBuffer> varianceBuffer = [engine->device newBufferWithLength:bufferSize 
+                                                                             options:MTLResourceStorageModeShared];
+                memset([momentumBuffer contents], 0, bufferSize);
+                memset([varianceBuffer contents], 0, bufferSize);
+                [engine->nadamMomentumBuffers addObject:momentumBuffer];
+                [engine->nadamVarianceBuffers addObject:varianceBuffer];
+                
+                // Create placeholders for momentum and variance states
+                MPSGraphTensor* momentumPlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                 dataType:MPSDataTypeFloat32
+                                                                                     name:[NSString stringWithFormat:@"nadam_momentum_%d", i]];
+                MPSGraphTensor* variancePlaceholder = [engine->graph placeholderWithShape:paramShape
+                                                                                 dataType:MPSDataTypeFloat32
+                                                                                     name:[NSString stringWithFormat:@"nadam_variance_%d", i]];
+                [engine->nadamMomentumPlaceholders addObject:momentumPlaceholder];
+                [engine->nadamVariancePlaceholders addObject:variancePlaceholder];
+            }
+            
+            // Initialize Nadam step counter
+            engine->nadamStepCount = 0;
+            
+            // Create cached bias correction buffers for Nadam to avoid per-step allocations
+            engine->nadamCachedBiasCorr1Buffer = [engine->device newBufferWithLength:sizeof(float) options:MTLResourceStorageModeShared];
+            engine->nadamCachedBiasCorr2Buffer = [engine->device newBufferWithLength:sizeof(float) options:MTLResourceStorageModeShared];
+            
+            engine->nadamStateInitialized = YES;
+            // NSLog(@"✅ Nadam state initialized for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
         // OPTIMIZER-SPECIFIC PRE-COMPILATION: Build optimizer-specific graphs to avoid conflicts
         // This eliminates runtime operation creation and prevents placeholder issues
         // NSLog(@"🔍 PRE-COMPILATION DEBUG: optimizer=%d, params=%lu, adam_state=%d, sgd_state=%d", 
@@ -1606,10 +1781,305 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
             
             engine->rmspropGraphCompiled = YES;
             // NSLog(@"✅ PRE-COMPILATION: Successfully built RMSProp operations for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
+        // ADAGRAD-SPECIFIC GRAPH COMPILATION: Build AdaGrad graph 
+        else if (engine->config.optimizer_type == 4 && engine->allWeightPlaceholders.count > 0 && engine->adagradStateInitialized && !engine->adagradGraphCompiled) { // AdaGrad optimizer
+            
+            // NSLog(@"🚀 PRE-COMPILATION: Building gradient and AdaGrad operations in graph...");
+            
+            // Pre-compile gradient computation using automatic differentiation ONCE during graph building
+            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
+                [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                                            withTensors:engine->validPlaceholdersForGradients
+                                                   name:@"precompiled_adagrad_gradients"];
+            
+            // Store gradient tensors for execution (these are pre-compiled, not runtime-created)
+            NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
+            for (int i = 0; i < engine->validPlaceholdersForGradients.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->validPlaceholdersForGradients[i];
+                MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
+                if (gradTensor) {
+                    [precompiledGradientTensors addObject:gradTensor];
+                } else {
+                    NSLog(@"❌ Failed to pre-compile gradient for AdaGrad parameter %d", i);
+                    return NO;
+                }
+            }
+            
+            // Store pre-compiled gradients in AdaGrad-specific arrays
+            engine->adagradPrecompiledGradients = precompiledGradientTensors;
+            
+            // Pre-compile AdaGrad parameter update operations
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedSquaredGradSums = [[NSMutableArray alloc] init];
+            
+            for (int i = 0; i < engine->validPlaceholdersForGradients.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->validPlaceholdersForGradients[i];
+                MPSGraphTensor* gradTensor = precompiledGradientTensors[i];
+                MPSGraphTensor* squaredGradSumPlaceholder = engine->squaredGradSumPlaceholders[i];
+                
+                // AdaGrad update: squared_grad_sum = squared_grad_sum + grad^2
+                MPSGraphTensor* gradSquared = [engine->graph squareWithTensor:gradTensor name:@"grad_squared"];
+                MPSGraphTensor* updatedSquaredGradSum = [engine->graph additionWithPrimaryTensor:squaredGradSumPlaceholder
+                                                                                   secondaryTensor:gradSquared
+                                                                                              name:@"updated_squared_grad_sum"];
+                
+                // AdaGrad update: param = param - learning_rate * grad / (sqrt(squared_grad_sum + epsilon))
+                MPSGraphTensor* sqrtDenominator = [engine->graph additionWithPrimaryTensor:updatedSquaredGradSum
+                                                                           secondaryTensor:engine->cachedEpsilonTensor
+                                                                                      name:@"adagrad_denominator"];
+                MPSGraphTensor* denominator = [engine->graph squareRootWithTensor:sqrtDenominator name:@"adagrad_sqrt_denominator"];
+                MPSGraphTensor* gradNormalized = [engine->graph divisionWithPrimaryTensor:gradTensor
+                                                                          secondaryTensor:denominator
+                                                                                     name:@"grad_normalized"];
+                MPSGraphTensor* update = [engine->graph multiplicationWithPrimaryTensor:engine->cachedLrTensor
+                                                                        secondaryTensor:gradNormalized
+                                                                                   name:@"lr_times_grad_normalized"];
+                MPSGraphTensor* updatedParam = [engine->graph subtractionWithPrimaryTensor:paramPlaceholder
+                                                                           secondaryTensor:update
+                                                                                      name:@"updated_param"];
+                
+                [precompiledUpdatedParams addObject:updatedParam];
+                [precompiledUpdatedSquaredGradSums addObject:updatedSquaredGradSum];
+            }
+            
+            // Store pre-compiled AdaGrad operations
+            engine->adagradPrecompiledUpdatedParams = precompiledUpdatedParams;
+            engine->adagradPrecompiledUpdatedSquaredGradSum = precompiledUpdatedSquaredGradSums;
+            
+            // Also store in legacy arrays for backward compatibility
+            engine->precompiledGradientTensors = precompiledGradientTensors;
+            engine->precompiledUpdatedParams = precompiledUpdatedParams;
+            
+            engine->adagradGraphCompiled = YES;
+            // NSLog(@"✅ PRE-COMPILATION: Successfully built AdaGrad operations for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
+        // ADADELTA-SPECIFIC GRAPH COMPILATION: Build AdaDelta graph
+        else if (engine->config.optimizer_type == 5 && engine->allWeightPlaceholders.count > 0 && engine->adadeltaStateInitialized && !engine->adadeltaGraphCompiled) { // AdaDelta optimizer
+            
+            // NSLog(@"🚀 PRE-COMPILATION: Building gradient and AdaDelta operations in graph...");
+            
+            // Pre-compile gradient computation using automatic differentiation
+            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
+                [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                                            withTensors:engine->validPlaceholdersForGradients
+                                                   name:@"precompiled_adadelta_gradients"];
+            
+            // Store gradient tensors for execution
+            NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
+            for (int i = 0; i < engine->validPlaceholdersForGradients.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->validPlaceholdersForGradients[i];
+                MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
+                if (gradTensor) {
+                    [precompiledGradientTensors addObject:gradTensor];
+                } else {
+                    NSLog(@"❌ Failed to pre-compile gradient for AdaDelta parameter %d", i);
+                    return NO;
+                }
+            }
+            
+            // Store pre-compiled gradients in AdaDelta-specific arrays
+            engine->adadeltaPrecompiledGradients = precompiledGradientTensors;
+            
+            // Pre-compile AdaDelta parameter update operations
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedSquaredGradAvgs = [[NSMutableArray alloc] init];
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedSquaredDeltaAvgs = [[NSMutableArray alloc] init];
+            
+            for (int i = 0; i < engine->validPlaceholdersForGradients.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->validPlaceholdersForGradients[i];
+                MPSGraphTensor* gradTensor = precompiledGradientTensors[i];
+                MPSGraphTensor* squaredGradAvgPlaceholder = engine->adadeltaSquaredGradAvgPlaceholders[i];
+                MPSGraphTensor* squaredDeltaAvgPlaceholder = engine->adadeltaSquaredDeltaAvgPlaceholders[i];
+                
+                // AdaDelta update: squared_grad_avg = rho * squared_grad_avg + (1 - rho) * grad^2
+                MPSGraphTensor* gradSquared = [engine->graph squareWithTensor:gradTensor name:@"grad_squared"];
+                MPSGraphTensor* rhoTimesSquaredGradAvg = [engine->graph multiplicationWithPrimaryTensor:engine->cachedAlphaTensor
+                                                                                        secondaryTensor:squaredGradAvgPlaceholder
+                                                                                                   name:@"rho_times_squared_grad_avg"];
+                MPSGraphTensor* oneMinusRhoTimesGradSquared = [engine->graph multiplicationWithPrimaryTensor:engine->cachedOneMinusAlphaTensor
+                                                                                              secondaryTensor:gradSquared
+                                                                                                         name:@"one_minus_rho_times_grad_squared"];
+                MPSGraphTensor* updatedSquaredGradAvg = [engine->graph additionWithPrimaryTensor:rhoTimesSquaredGradAvg
+                                                                                secondaryTensor:oneMinusRhoTimesGradSquared
+                                                                                           name:@"updated_squared_grad_avg"];
+                
+                // AdaDelta update: delta = sqrt(squared_delta_avg + epsilon) / sqrt(squared_grad_avg + epsilon) * grad
+                MPSGraphTensor* squaredDeltaAvgPlusEpsilon = [engine->graph additionWithPrimaryTensor:squaredDeltaAvgPlaceholder
+                                                                                      secondaryTensor:engine->cachedEpsilonTensor
+                                                                                                 name:@"squared_delta_avg_plus_epsilon"];
+                MPSGraphTensor* squaredGradAvgPlusEpsilon = [engine->graph additionWithPrimaryTensor:updatedSquaredGradAvg
+                                                                                     secondaryTensor:engine->cachedEpsilonTensor
+                                                                                                name:@"squared_grad_avg_plus_epsilon"];
+                MPSGraphTensor* deltaRMS = [engine->graph squareRootWithTensor:squaredDeltaAvgPlusEpsilon name:@"delta_rms"];
+                MPSGraphTensor* gradRMS = [engine->graph squareRootWithTensor:squaredGradAvgPlusEpsilon name:@"grad_rms"];
+                MPSGraphTensor* deltaCoeff = [engine->graph divisionWithPrimaryTensor:deltaRMS
+                                                                      secondaryTensor:gradRMS
+                                                                                 name:@"delta_coefficient"];
+                MPSGraphTensor* delta = [engine->graph multiplicationWithPrimaryTensor:deltaCoeff
+                                                                       secondaryTensor:gradTensor
+                                                                                  name:@"delta"];
+                
+                // AdaDelta update: squared_delta_avg = rho * squared_delta_avg + (1 - rho) * delta^2
+                MPSGraphTensor* deltaSquared = [engine->graph squareWithTensor:delta name:@"delta_squared"];
+                MPSGraphTensor* rhoTimesSquaredDeltaAvg = [engine->graph multiplicationWithPrimaryTensor:engine->cachedAlphaTensor
+                                                                                        secondaryTensor:squaredDeltaAvgPlaceholder
+                                                                                                   name:@"rho_times_squared_delta_avg"];
+                MPSGraphTensor* oneMinusRhoTimesDeltaSquared = [engine->graph multiplicationWithPrimaryTensor:engine->cachedOneMinusAlphaTensor
+                                                                                               secondaryTensor:deltaSquared
+                                                                                                          name:@"one_minus_rho_times_delta_squared"];
+                MPSGraphTensor* updatedSquaredDeltaAvg = [engine->graph additionWithPrimaryTensor:rhoTimesSquaredDeltaAvg
+                                                                                secondaryTensor:oneMinusRhoTimesDeltaSquared
+                                                                                           name:@"updated_squared_delta_avg"];
+                
+                // AdaDelta update: param = param - delta
+                MPSGraphTensor* updatedParam = [engine->graph subtractionWithPrimaryTensor:paramPlaceholder
+                                                                           secondaryTensor:delta
+                                                                                      name:@"updated_param"];
+                
+                [precompiledUpdatedParams addObject:updatedParam];
+                [precompiledUpdatedSquaredGradAvgs addObject:updatedSquaredGradAvg];
+                [precompiledUpdatedSquaredDeltaAvgs addObject:updatedSquaredDeltaAvg];
+            }
+            
+            // Store pre-compiled AdaDelta operations
+            engine->adadeltaPrecompiledUpdatedParams = precompiledUpdatedParams;
+            engine->adadeltaPrecompiledUpdatedSquaredGradAvg = precompiledUpdatedSquaredGradAvgs;
+            engine->adadeltaPrecompiledUpdatedSquaredDeltaAvg = precompiledUpdatedSquaredDeltaAvgs;
+            
+            // Also store in legacy arrays for backward compatibility
+            engine->precompiledGradientTensors = precompiledGradientTensors;
+            engine->precompiledUpdatedParams = precompiledUpdatedParams;
+            
+            engine->adadeltaGraphCompiled = YES;
+            // NSLog(@"✅ PRE-COMPILATION: Successfully built AdaDelta operations for %lu parameters", [engine->allWeightPlaceholders count]);
+        }
+        
+        // NADAM-SPECIFIC GRAPH COMPILATION: Build Nadam graph (Nesterov Adam)
+        else if (engine->config.optimizer_type == 6 && engine->allWeightPlaceholders.count > 0 && engine->nadamStateInitialized && !engine->nadamGraphCompiled) { // Nadam optimizer
+            
+            // NSLog(@"🚀 PRE-COMPILATION: Building gradient and Nadam operations in graph...");
+            
+            // Pre-compile gradient computation using automatic differentiation
+            NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* precompiledGradients = 
+                [engine->graph gradientForPrimaryTensor:engine->lossOutput
+                                            withTensors:engine->validPlaceholdersForGradients
+                                                   name:@"precompiled_nadam_gradients"];
+            
+            // Store gradient tensors for execution
+            NSMutableArray<MPSGraphTensor*>* precompiledGradientTensors = [[NSMutableArray alloc] init];
+            for (int i = 0; i < engine->validPlaceholdersForGradients.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->validPlaceholdersForGradients[i];
+                MPSGraphTensor* gradTensor = precompiledGradients[paramPlaceholder];
+                if (gradTensor) {
+                    [precompiledGradientTensors addObject:gradTensor];
+                } else {
+                    NSLog(@"❌ Failed to pre-compile gradient for Nadam parameter %d", i);
+                    return NO;
+                }
+            }
+            
+            // Store pre-compiled gradients in Nadam-specific arrays
+            engine->nadamPrecompiledGradients = precompiledGradientTensors;
+            
+            // Pre-compile Nadam parameter update operations
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedParams = [[NSMutableArray alloc] init];
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedMomentum = [[NSMutableArray alloc] init];
+            NSMutableArray<MPSGraphTensor*>* precompiledUpdatedVariance = [[NSMutableArray alloc] init];
+            
+            for (int i = 0; i < engine->validPlaceholdersForGradients.count; i++) {
+                MPSGraphTensor* paramPlaceholder = engine->validPlaceholdersForGradients[i];
+                MPSGraphTensor* gradTensor = precompiledGradientTensors[i];
+                MPSGraphTensor* momentumPlaceholder = engine->nadamMomentumPlaceholders[i];
+                MPSGraphTensor* variancePlaceholder = engine->nadamVariancePlaceholders[i];
+                
+                // Nadam update: momentum = beta1 * momentum + (1 - beta1) * grad
+                MPSGraphTensor* beta1TimesMomentum = [engine->graph multiplicationWithPrimaryTensor:engine->nadamCachedBeta1Tensor
+                                                                                    secondaryTensor:momentumPlaceholder
+                                                                                               name:@"beta1_times_momentum"];
+                MPSGraphTensor* oneMinusBeta1TimesGrad = [engine->graph multiplicationWithPrimaryTensor:engine->nadamCachedOneMinusBeta1Tensor
+                                                                                       secondaryTensor:gradTensor
+                                                                                                  name:@"one_minus_beta1_times_grad"];
+                MPSGraphTensor* updatedMomentum = [engine->graph additionWithPrimaryTensor:beta1TimesMomentum
+                                                                          secondaryTensor:oneMinusBeta1TimesGrad
+                                                                                     name:@"updated_momentum"];
+                
+                // Nadam update: variance = beta2 * variance + (1 - beta2) * grad^2
+                MPSGraphTensor* gradSquared = [engine->graph squareWithTensor:gradTensor name:@"grad_squared"];
+                MPSGraphTensor* beta2TimesVariance = [engine->graph multiplicationWithPrimaryTensor:engine->nadamCachedBeta2Tensor
+                                                                                    secondaryTensor:variancePlaceholder
+                                                                                               name:@"beta2_times_variance"];
+                MPSGraphTensor* oneMinusBeta2TimesGradSquared = [engine->graph multiplicationWithPrimaryTensor:engine->nadamCachedOneMinusBeta2Tensor
+                                                                                               secondaryTensor:gradSquared
+                                                                                                          name:@"one_minus_beta2_times_grad_squared"];
+                MPSGraphTensor* updatedVariance = [engine->graph additionWithPrimaryTensor:beta2TimesVariance
+                                                                          secondaryTensor:oneMinusBeta2TimesGradSquared
+                                                                                     name:@"updated_variance"];
+                
+                // Nadam update: corrected_momentum = updated_momentum / (1 - beta1^t)
+                MPSGraphTensor* correctedMomentum = [engine->graph divisionWithPrimaryTensor:updatedMomentum
+                                                                             secondaryTensor:engine->nadamBiasCorr1Placeholder
+                                                                                        name:@"corrected_momentum"];
+                
+                // Nadam update: corrected_variance = updated_variance / (1 - beta2^t)
+                MPSGraphTensor* correctedVariance = [engine->graph divisionWithPrimaryTensor:updatedVariance
+                                                                             secondaryTensor:engine->nadamBiasCorr2Placeholder
+                                                                                        name:@"corrected_variance"];
+                
+                // Nadam update: nesterov_momentum = beta1 * corrected_momentum + (1 - beta1) * grad / (1 - beta1^t)
+                MPSGraphTensor* gradCorrected = [engine->graph divisionWithPrimaryTensor:gradTensor
+                                                                         secondaryTensor:engine->nadamBiasCorr1Placeholder
+                                                                                    name:@"grad_corrected"];
+                MPSGraphTensor* beta1TimesCorrectedMomentum = [engine->graph multiplicationWithPrimaryTensor:engine->nadamCachedBeta1Tensor
+                                                                                             secondaryTensor:correctedMomentum
+                                                                                                        name:@"beta1_times_corrected_momentum"];
+                MPSGraphTensor* oneMinusBeta1TimesGradCorrected = [engine->graph multiplicationWithPrimaryTensor:engine->nadamCachedOneMinusBeta1Tensor
+                                                                                                 secondaryTensor:gradCorrected
+                                                                                                            name:@"one_minus_beta1_times_grad_corrected"];
+                MPSGraphTensor* nesterovMomentum = [engine->graph additionWithPrimaryTensor:beta1TimesCorrectedMomentum
+                                                                           secondaryTensor:oneMinusBeta1TimesGradCorrected
+                                                                                      name:@"nesterov_momentum"];
+                
+                // Nadam update: param = param - learning_rate * nesterov_momentum / (sqrt(corrected_variance) + epsilon)
+                MPSGraphTensor* sqrtCorrectedVariance = [engine->graph squareRootWithTensor:correctedVariance name:@"sqrt_corrected_variance"];
+                MPSGraphTensor* denominator = [engine->graph additionWithPrimaryTensor:sqrtCorrectedVariance
+                                                                       secondaryTensor:engine->nadamCachedEpsilonTensor
+                                                                                  name:@"denominator"];
+                MPSGraphTensor* normalizedMomentum = [engine->graph divisionWithPrimaryTensor:nesterovMomentum
+                                                                              secondaryTensor:denominator
+                                                                                         name:@"normalized_momentum"];
+                MPSGraphTensor* update = [engine->graph multiplicationWithPrimaryTensor:engine->cachedLrTensor
+                                                                        secondaryTensor:normalizedMomentum
+                                                                                   name:@"lr_times_normalized_momentum"];
+                MPSGraphTensor* updatedParam = [engine->graph subtractionWithPrimaryTensor:paramPlaceholder
+                                                                           secondaryTensor:update
+                                                                                      name:@"updated_param"];
+                
+                [precompiledUpdatedParams addObject:updatedParam];
+                [precompiledUpdatedMomentum addObject:updatedMomentum];
+                [precompiledUpdatedVariance addObject:updatedVariance];
+            }
+            
+            // Store pre-compiled Nadam operations
+            engine->nadamPrecompiledUpdatedParams = precompiledUpdatedParams;
+            engine->nadamPrecompiledUpdatedMomentum = precompiledUpdatedMomentum;
+            engine->nadamPrecompiledUpdatedVariance = precompiledUpdatedVariance;
+            
+            // Also store in legacy arrays for backward compatibility
+            engine->precompiledGradientTensors = precompiledGradientTensors;
+            engine->precompiledUpdatedParams = precompiledUpdatedParams;
+            engine->precompiledUpdatedMomentum = precompiledUpdatedMomentum;
+            engine->precompiledUpdatedVariance = precompiledUpdatedVariance;
+            
+            engine->nadamGraphCompiled = YES;
+            // NSLog(@"✅ PRE-COMPILATION: Successfully built Nadam operations for %lu parameters", [engine->allWeightPlaceholders count]);
         } else {
-            NSLog(@"⚠️ PRE-COMPILATION: Skipping pre-compilation (optimizer: %d, params: %lu, adam_state: %d, sgd_state: %d)", 
+            NSLog(@"⚠️ PRE-COMPILATION: Skipping pre-compilation (optimizer: %d, params: %lu, adam_state: %d, sgd_state: %d, rmsprop_state: %d, adagrad_state: %d, adadelta_state: %d, nadam_state: %d)", 
                   engine->config.optimizer_type, [engine->allWeightPlaceholders count], 
-                  engine->adamStateInitialized, engine->sgdStateInitialized);
+                  engine->adamStateInitialized, engine->sgdStateInitialized, engine->rmspropStateInitialized,
+                  engine->adagradStateInitialized, engine->adadeltaStateInitialized, engine->nadamStateInitialized);
         }
         
         // Note: We no longer need to create separate convolution output placeholders
