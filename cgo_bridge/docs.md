@@ -199,7 +199,9 @@ DestroyMetalDevice destroys a Metal device
 ```go
 func DestroyTrainingEngine(engine unsafe.Pointer)
 ```
-DestroyTrainingEngine destroys a training engine
+DestroyTrainingEngine destroys a training engine with comprehensive cleanup This
+function properly handles all optimizer states, cached resources, and
+pre-compiled operations with robust resource management
 
 #### func  DrainAutoreleasePool
 

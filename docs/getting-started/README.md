@@ -113,10 +113,10 @@ cd examples/house-price-prediction
 go run main.go
 ```
 
-### 🖼️ CNN Example
-Build a convolutional neural network for image classification:
+### 🖼️ Computer Vision Example
+Build a CNN for image classification with full data pipeline:
 ```bash
-cd examples/cnn-image-classification
+cd examples/computer-vision-pipeline
 go run main.go
 ```
 
@@ -152,9 +152,10 @@ Ready to dive deeper? Here's your learning path:
 
 1. **[Quick Start](quick-start.md)** - Train your first model in 5 minutes
 2. **[Basic Concepts](basic-concepts.md)** - Understand the architecture
-3. **[MLP Tutorial](../tutorials/mlp-tutorial.md)** - Build complex networks
-4. **[CNN Tutorial](../tutorials/cnn-tutorial.md)** - Convolutional networks
-5. **[Performance Guide](../guides/performance.md)** - Optimize training speed
+3. **[Computer Vision](../guides/computer-vision.md)** - Image classification pipeline
+4. **[MLP Tutorial](../tutorials/mlp-tutorial.md)** - Build complex networks
+5. **[CNN Tutorial](../tutorials/cnn-tutorial.md)** - Convolutional networks
+6. **[Performance Guide](../guides/performance.md)** - Optimize training speed
 
 ## 💡 Pro Tips
 

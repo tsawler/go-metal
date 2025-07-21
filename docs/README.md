@@ -18,6 +18,7 @@ Go-Metal is a native Go machine learning framework that leverages Apple's Metal 
 ### Supported Capabilities
 
 **Layer Types**: Dense, Conv2D, BatchNorm, ReLU, LeakyReLU, ELU, Dropout, and more  
+**Computer Vision**: Image datasets, preprocessing, caching, multi-class classification  
 **Optimizers**: Adam, SGD, RMSProp, AdaGrad, AdaDelta, Nadam, L-BFGS  
 **Loss Functions**: CrossEntropy, SparseCrossEntropy, MSE, MAE, Huber, BCE  
 **Data Precision**: Float32, Float16 (mixed precision), Int32  
@@ -34,6 +35,7 @@ Go-Metal is a native Go machine learning framework that leverages Apple's Metal 
 ### 📖 Guides
 - **[Architecture](guides/architecture.md)** - Design principles and GPU-resident computing
 - **[Layers](guides/layers.md)** - Complete layer reference and usage
+- **[Computer Vision](guides/computer-vision.md)** - Image datasets, preprocessing, and CNN training
 - **[Optimizers](guides/optimizers.md)** - Optimizer selection and configuration
 - **[Loss Functions](guides/loss-functions.md)** - Loss function reference
 - **[Inference Engine](guides/inference-engine.md)** - High-performance model inference
@@ -50,10 +52,11 @@ Go-Metal is a native Go machine learning framework that leverages Apple's Metal 
 - **[Mixed Precision](tutorials/mixed-precision.md)** - FP16 training for maximum performance
 
 ### 💡 Examples
-- **[Cats & Dogs Classification](examples/cats-dogs-classification.md)** - Complete CNN example
+- **[Computer Vision Pipeline](examples/computer-vision-pipeline.md)** - Complete image classification with synthetic data
+- **[Computer Vision Guide](guides/computer-vision.md)** - Comprehensive vision documentation
+- **[Cats & Dogs Classification](examples/cats-dogs-classification.md)** - CNN binary classification
 - **[House Price Regression](examples/house-price-regression.md)** - Regression with visualization
-- **[SparseCrossEntropy Demo](examples/sparse-cross-entropy.md)** - Integer label classification
-- **[Inference Engine Demo](examples/inference-engine-demo.md)** - Complete inference workflow example
+- **[Inference Engine Demo](examples/inference-engine-demo.md)** - Complete inference workflow
 
 ### 📋 Reference
 - **[API Overview](reference/api-overview.md)** - High-level API tour
@@ -115,11 +118,11 @@ This architecture delivers exceptional performance while maintaining a clean, Go
 
 ## 🎯 Perfect For
 
+- **Computer Vision Projects**: CNN training with optimized image processing
 - **iOS/macOS ML Applications**: Native Apple Silicon optimization
 - **Research & Prototyping**: Fast iteration with comprehensive visualization
 - **Production Deployment**: Robust memory management and error handling
 - **Performance-Critical Applications**: GPU-resident computing eliminates bottlenecks
-- **Computer Vision**: Optimized CNN performance with mixed precision
 
 ## 🤝 Community & Support
 

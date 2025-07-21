@@ -38,7 +38,7 @@ in new code.
 ```go
 func (bt *BatchTrainer) Cleanup()
 ```
-Cleanup releases resources
+Cleanup releases resources with enhanced robustness
 
 #### func (*BatchTrainer) GetCurrentStep
 
@@ -93,7 +93,7 @@ NewMPSInferenceEngine creates a new inference-only engine
 ```go
 func (ie *MPSInferenceEngine) Cleanup()
 ```
-Cleanup performs deterministic resource cleanup (reference counting principle)
+Cleanup performs deterministic resource cleanup with enhanced robustness
 
 #### type MPSTrainingEngine
 
@@ -128,7 +128,7 @@ should not be used in new code.
 ```go
 func (e *MPSTrainingEngine) Cleanup()
 ```
-Cleanup releases resources
+Cleanup releases resources with enhanced robustness and deterministic ordering
 
 #### func (*MPSTrainingEngine) ExecuteStep
 
@@ -227,7 +227,7 @@ any architecture supported by the dynamic training engine
 ```go
 func (mie *ModelInferenceEngine) Cleanup()
 ```
-Cleanup performs complete resource cleanup
+Cleanup performs complete resource cleanup with enhanced robustness
 
 #### func (*ModelInferenceEngine) GetModelSpec
 
@@ -341,7 +341,8 @@ optimizer
 ```go
 func (mte *ModelTrainingEngine) Cleanup()
 ```
-Cleanup releases all resources including model parameters
+Cleanup releases all resources including model parameters with enhanced
+robustness
 
 #### func (*ModelTrainingEngine) ExecuteInference
 
