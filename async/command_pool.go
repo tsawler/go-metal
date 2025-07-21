@@ -133,11 +133,10 @@ func (cbp *CommandBufferPool) ReturnBuffer(buffer *CommandBuffer) {
 	buffer.inUse = false
 	
 	cbp.mutex.Lock()
-	closed := cbp.closed
-	cbp.mutex.Unlock()
+	defer cbp.mutex.Unlock()
 	
 	// Don't try to return to a closed pool
-	if closed {
+	if cbp.closed {
 		return
 	}
 	

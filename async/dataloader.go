@@ -162,16 +162,18 @@ func (adl *AsyncDataLoader) Start() error {
 // Stop stops the async data loading pipeline
 func (adl *AsyncDataLoader) Stop() error {
 	adl.mutex.Lock()
-	defer adl.mutex.Unlock()
 	
 	if !adl.isRunning {
+		adl.mutex.Unlock()
 		return nil
 	}
 	
 	// Cancel context to stop workers
 	adl.cancel()
+	adl.isRunning = false
+	adl.mutex.Unlock()
 	
-	// Wait for all workers to finish
+	// Wait for all workers to finish (must be done without holding mutex)
 	adl.wg.Wait()
 	
 	// Drain remaining batches and release them
@@ -183,7 +185,6 @@ func (adl *AsyncDataLoader) Stop() error {
 	// Cleanup staging pool
 	adl.stagingPool.Cleanup()
 	
-	adl.isRunning = false
 	return nil
 }
 
