@@ -3,7 +3,8 @@ package preprocessing
 import (
 	"fmt"
 	"image"
-	"image/jpeg"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"os"
 	"sync"
@@ -32,13 +33,13 @@ type ProcessedImage struct {
 	Channels int
 }
 
-// DecodeAndPreprocess decodes a JPEG image and preprocesses it for neural network input
+// DecodeAndPreprocess decodes an image (JPEG, PNG, etc.) and preprocesses it for neural network input
 // Returns data in CHW format (channels, height, width) normalized to [0, 1]
 func (p *ImageProcessor) DecodeAndPreprocess(reader io.Reader) (*ProcessedImage, error) {
-	// Decode JPEG
-	img, err := jpeg.Decode(reader)
+	// Decode image (supports JPEG, PNG, etc.)
+	img, _, err := image.Decode(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode JPEG: %w", err)
+		return nil, fmt.Errorf("failed to decode image: %w", err)
 	}
 
 	// Convert to RGBA if needed

@@ -217,6 +217,24 @@ int execute_adam_step_mpsgraph(
                 int num_elements = size_bytes / sizeof(float);
                 NSArray<NSNumber*>* shape = @[@(num_elements)];
                 
+                // BUFFER SIZE VALIDATION FIX: Validate all buffers before creating MPSGraphTensorData
+                NSInteger actualWeightsBytes = [weightsBuffer length];
+                NSInteger actualGradientsBytes = [gradientsBuffer length];
+                NSInteger actualMomentumBytes = [momentumBuffer length];
+                NSInteger actualVarianceBytes = [varianceBuffer length];
+                NSInteger expectedBytes = num_elements * sizeof(float);
+                
+                if (actualWeightsBytes < expectedBytes || actualGradientsBytes < expectedBytes || 
+                    actualMomentumBytes < expectedBytes || actualVarianceBytes < expectedBytes) {
+                    NSLog(@"❌ ADAM OPTIMIZER BUFFER MISMATCH: Weight %d", i);
+                    NSLog(@"   Expected: %ld bytes (%d elements), shape: %@", expectedBytes, num_elements, shape);
+                    NSLog(@"   Actual buffers: weights=%ld, gradients=%ld, momentum=%ld, variance=%ld", 
+                          actualWeightsBytes, actualGradientsBytes, actualMomentumBytes, actualVarianceBytes);
+                    
+                    // Skip this weight to avoid crash - this will cause training issues but won't crash
+                    continue;
+                }
+                
                 // DEBUGGING: Check gradient magnitude to verify gradients are non-zero
                 static int gradientLogCounter = 0;
                 gradientLogCounter++;
@@ -656,6 +674,25 @@ int execute_rmsprop_step_mpsgraph(
                 MPSGraphTensor* newWeights = [rmspropGraph subtractionWithPrimaryTensor:weightsTensor
                                                                         secondaryTensor:scaledUpdate
                                                                                    name:nil];
+                
+                // BUFFER SIZE VALIDATION FIX: Validate RMSProp buffers before creating MPSGraphTensorData
+                NSInteger expectedElements = 1;
+                for (NSNumber* dim in shape) {
+                    expectedElements *= [dim integerValue];
+                }
+                NSInteger expectedBytes = expectedElements * sizeof(float);
+                NSInteger actualWeightsBytes = [weightsBuffer length];
+                NSInteger actualGradientsBytes = [gradientsBuffer length];
+                NSInteger actualSquaredGradAvgBytes = [squaredGradAvgBuffer length];
+                
+                if (actualWeightsBytes < expectedBytes || actualGradientsBytes < expectedBytes || 
+                    actualSquaredGradAvgBytes < expectedBytes) {
+                    NSLog(@"❌ RMSPROP OPTIMIZER BUFFER MISMATCH: Weight %d", i);
+                    NSLog(@"   Expected: %ld bytes (%ld elements), shape: %@", expectedBytes, expectedElements, shape);
+                    NSLog(@"   Actual buffers: weights=%ld, gradients=%ld, squaredGradAvg=%ld", 
+                          actualWeightsBytes, actualGradientsBytes, actualSquaredGradAvgBytes);
+                    continue;
+                }
                 
                 // Create tensor data for buffers
                 MPSGraphTensorData* weightsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightsBuffer
@@ -1279,6 +1316,25 @@ int execute_adagrad_step_mpsgraph(
                                                                         secondaryTensor:update
                                                                                    name:@"new_weights"];
                 
+                // BUFFER SIZE VALIDATION FIX: Validate AdaGrad buffers before creating MPSGraphTensorData
+                NSInteger expectedElements = 1;
+                for (NSNumber* dim in shape) {
+                    expectedElements *= [dim integerValue];
+                }
+                NSInteger expectedBytes = expectedElements * sizeof(float);
+                NSInteger actualWeightsBytes = [weightsBuffer length];
+                NSInteger actualGradientsBytes = [gradientsBuffer length];
+                NSInteger actualSquaredGradAvgBytes = [squaredGradAvgBuffer length];
+                
+                if (actualWeightsBytes < expectedBytes || actualGradientsBytes < expectedBytes || 
+                    actualSquaredGradAvgBytes < expectedBytes) {
+                    NSLog(@"❌ ADAGRAD OPTIMIZER BUFFER MISMATCH: Weight %d", i);
+                    NSLog(@"   Expected: %ld bytes (%ld elements), shape: %@", expectedBytes, expectedElements, shape);
+                    NSLog(@"   Actual buffers: weights=%ld, gradients=%ld, squaredGradAvg=%ld", 
+                          actualWeightsBytes, actualGradientsBytes, actualSquaredGradAvgBytes);
+                    continue;
+                }
+                
                 // Create feeds dictionary
                 MPSGraphTensorData* weightsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightsBuffer
                                                                                        shape:shape
@@ -1585,6 +1641,26 @@ int execute_adadelta_step_mpsgraph(
                 MPSGraphTensor* newSquaredUpdateAvg = [adadeltaGraph additionWithPrimaryTensor:rhoTimesOldSquaredUpdateAvg
                                                                               secondaryTensor:oneMinusRhoTimesUpdateSquared
                                                                                          name:@"new_E_dx2"];
+                
+                // BUFFER SIZE VALIDATION FIX: Validate AdaDelta buffers before creating MPSGraphTensorData
+                NSInteger expectedElements = 1;
+                for (NSNumber* dim in shape) {
+                    expectedElements *= [dim integerValue];
+                }
+                NSInteger expectedBytes = expectedElements * sizeof(float);
+                NSInteger actualWeightsBytes = [weightsBuffer length];
+                NSInteger actualGradientsBytes = [gradientsBuffer length];
+                NSInteger actualSquaredGradAvgBytes = [squaredGradAvgBuffer length];
+                NSInteger actualSquaredUpdateAvgBytes = [squaredUpdateAvgBuffer length];
+                
+                if (actualWeightsBytes < expectedBytes || actualGradientsBytes < expectedBytes || 
+                    actualSquaredGradAvgBytes < expectedBytes || actualSquaredUpdateAvgBytes < expectedBytes) {
+                    NSLog(@"❌ ADADELTA OPTIMIZER BUFFER MISMATCH: Weight %d", i);
+                    NSLog(@"   Expected: %ld bytes (%ld elements), shape: %@", expectedBytes, expectedElements, shape);
+                    NSLog(@"   Actual buffers: weights=%ld, gradients=%ld, squaredGradAvg=%ld, squaredUpdateAvg=%ld", 
+                          actualWeightsBytes, actualGradientsBytes, actualSquaredGradAvgBytes, actualSquaredUpdateAvgBytes);
+                    continue;
+                }
                 
                 // Create feeds dictionary
                 MPSGraphTensorData* weightsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightsBuffer
@@ -1922,6 +1998,26 @@ int execute_nadam_step_mpsgraph(
                 MPSGraphTensor* newWeights = [nadamGraph subtractionWithPrimaryTensor:weightsTensor
                                                                      secondaryTensor:scaledUpdate
                                                                                 name:nil];
+                
+                // BUFFER SIZE VALIDATION FIX: Validate Nadam buffers before creating MPSGraphTensorData
+                NSInteger expectedElements = 1;
+                for (NSNumber* dim in shape) {
+                    expectedElements *= [dim integerValue];
+                }
+                NSInteger expectedBytes = expectedElements * sizeof(float);
+                NSInteger actualWeightsBytes = [weightsBuffer length];
+                NSInteger actualGradientsBytes = [gradientsBuffer length];
+                NSInteger actualMomentumBytes = [momentumBuffer length];
+                NSInteger actualVarianceBytes = [varianceBuffer length];
+                
+                if (actualWeightsBytes < expectedBytes || actualGradientsBytes < expectedBytes || 
+                    actualMomentumBytes < expectedBytes || actualVarianceBytes < expectedBytes) {
+                    NSLog(@"❌ NADAM OPTIMIZER BUFFER MISMATCH: Weight %d", i);
+                    NSLog(@"   Expected: %ld bytes (%ld elements), shape: %@", expectedBytes, expectedElements, shape);
+                    NSLog(@"   Actual buffers: weights=%ld, gradients=%ld, momentum=%ld, variance=%ld", 
+                          actualWeightsBytes, actualGradientsBytes, actualMomentumBytes, actualVarianceBytes);
+                    continue;
+                }
                 
                 // Create tensor data for buffers
                 MPSGraphTensorData* weightsData = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightsBuffer

@@ -132,6 +132,7 @@ typedef struct {
     NSMutableArray* allBiasPlaceholders;                    // All bias placeholders in order
     NSMutableArray* batchnormRunningStatsPlaceholders;      // BatchNorm running mean/variance placeholders
     NSMutableArray* validPlaceholdersForGradients;          // Filtered placeholders for gradient computation (excludes NSNull)
+    NSMutableArray* dropoutTrainingPlaceholders;            // Dropout training mode placeholders for each dropout layer
     
     // MEMORY LEAK FIX: Cached buffers to avoid per-step allocations
     id<MTLBuffer> cachedConvOutputBuffer;                   // Reusable buffer for conv output

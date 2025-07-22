@@ -1910,13 +1910,15 @@ func (mte *ModelTrainingEngine) ExecuteInference(
 	numClasses := outputShape[len(outputShape)-1] // Last dimension is number of classes
 	
 	// Single CGO call for complete inference (design compliant)
-	result, err := cgo_bridge.ExecuteInference(
+	// CRITICAL FIX: Use ExecuteInferenceOnly with batchNormInferenceMode=true to properly handle dropout and batch normalization during validation
+	result, err := cgo_bridge.ExecuteInferenceOnly(
 		mte.MPSTrainingEngine.engine,
 		inputTensor.MetalBuffer(),
 		weightBuffers,
 		batchSize,
 		numClasses,
 		true, // Always use dynamic engine
+		true, // batchNormInferenceMode=true - ensures dropout is disabled and batch norm uses running stats
 	)
 	
 	if err != nil {

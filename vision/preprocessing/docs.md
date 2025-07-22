@@ -26,8 +26,9 @@ NewImageProcessor creates a new image processor with the specified target size
 ```go
 func (p *ImageProcessor) DecodeAndPreprocess(reader io.Reader) (*ProcessedImage, error)
 ```
-DecodeAndPreprocess decodes a JPEG image and preprocesses it for neural network
-input Returns data in CHW format (channels, height, width) normalized to [0, 1]
+DecodeAndPreprocess decodes an image (JPEG, PNG, etc.) and preprocesses it for
+neural network input Returns data in CHW format (channels, height, width)
+normalized to [0, 1]
 
 #### type ProcessedImage
 
