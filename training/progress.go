@@ -298,10 +298,7 @@ func NewTrainingSession(
 
 // StartTraining begins the training session with model architecture display
 func (ts *TrainingSession) StartTraining() {
-	// TEMP DEBUG: Skip architecture printing to test if this is where the dropout hang occurs
-	fmt.Println("🔥 DEBUG: Skipping PrintArchitecture to test dropout hang...")
-	// ts.architecturePrinter.PrintArchitecture(ts.trainer.GetModelSpec())
-	
+	ts.architecturePrinter.PrintArchitecture(ts.trainer.GetModelSpec())
 	fmt.Println("Starting training...")
 }
 
