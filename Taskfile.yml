@@ -13,6 +13,11 @@ tasks:
     cmds:
       - env CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go test ./... -count=1 
 
+  clean:
+    desc: "Clean build cache"
+    cmds:
+      - go clean -cache
+
   coverage:
     desc: "Display test coverage"
     cmds:
