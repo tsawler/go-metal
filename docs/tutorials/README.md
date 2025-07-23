@@ -59,14 +59,16 @@ Extend Go-Metal with your own layer types:
 - **Difficulty**: Advanced
 - **Time**: 60 minutes
 
-#### [ONNX Integration](onnx-integration.md)
-Import and export models with ONNX:
-- Loading pre-trained ONNX models
-- Converting Go-Metal models to ONNX
-- Cross-framework compatibility
-- Deployment strategies
+#### [ONNX Integration](onnx-integration.md) 🔗
+**Cross-framework model compatibility** with PyTorch, TensorFlow, and more:
+- Export Go-Metal models to ONNX format for deployment
+- Import ONNX models from other frameworks into Go-Metal
+- Bidirectional model conversion workflows
+- Cross-platform compatibility testing
+- Production deployment strategies
 - **Difficulty**: Intermediate
-- **Time**: 35 minutes
+- **Time**: 45 minutes
+- **Compatibility**: Works with PyTorch, TensorFlow, ONNX Runtime
 
 ## 🚀 Tutorial Learning Path
 
