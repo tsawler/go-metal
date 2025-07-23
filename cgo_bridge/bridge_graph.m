@@ -178,7 +178,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                             NSLog(@"❌ Dropout layer %d returned nil tensor", layerIdx);
                             return NO;
                         }
-                        NSLog(@"✅ Dropout layer %d processed successfully", layerIdx);
+                        // NSLog(@"✅ Dropout layer %d processed successfully", layerIdx);
                     }
                     break;
                     

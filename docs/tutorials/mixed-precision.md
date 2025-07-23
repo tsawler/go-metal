@@ -398,7 +398,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"time"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/layers"
