@@ -1060,6 +1060,7 @@ python -c "import onnx; onnx.checker.check_model('model.onnx')"
 
 Master ONNX integration with go-metal:
 
+- **[Mixed Precision Tutorial](mixed-precision.md)** - Optimize models before deployment
 - **[Performance Guide](../guides/performance.md)** - Optimize model conversion workflows
 - **[Model Serialization](../examples/model-serialization/)** - Complete serialization examples
 - **[Production Deployment](../advanced/deployment.md)** - Deploy ONNX models in production

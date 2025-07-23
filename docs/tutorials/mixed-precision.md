@@ -724,6 +724,7 @@ config := training.TrainerConfig{
 Master mixed precision training with go-metal:
 
 - **[Performance Guide](../guides/performance.md)** - Advanced optimization techniques
+- **[ONNX Integration Tutorial](onnx-integration.md)** - Deploy optimized models cross-platform
 - **[Visualization Guide](../guides/visualization.md)** - Monitor training with real-time plots
 - **[Advanced Examples](../examples/)** - See mixed precision in production applications
 
