@@ -206,7 +206,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                         currentTensor = [engine->graph leakyReLUWithTensor:currentTensor
                                                                      alpha:negativeSlope
                                                                       name:[NSString stringWithFormat:@"leaky_relu_%d", layerIdx]];
-                        NSLog(@"✅ LeakyReLU layer %d processed successfully", layerIdx);
+                        // NSLog(@"✅ LeakyReLU layer %d processed successfully", layerIdx);
                     }
                     break;
                     
