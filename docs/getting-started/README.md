@@ -156,8 +156,9 @@ Ready to dive deeper? Here's your learning path:
 4. **[MLP Tutorial](../tutorials/mlp-tutorial.md)** - Build complex networks
 5. **[CNN Tutorial](../tutorials/cnn-tutorial.md)** - Convolutional networks
 6. **[Mixed Precision](../tutorials/mixed-precision.md)** - FP16 training for maximum speed
-7. **[ONNX Integration](../tutorials/onnx-integration.md)** - Cross-framework compatibility
-8. **[Performance Guide](../guides/performance.md)** - Advanced optimization techniques
+7. **[Custom Layers](../tutorials/custom-layers.md)** - Extend the framework with your own layers
+8. **[ONNX Integration](../tutorials/onnx-integration.md)** - Cross-framework compatibility
+9. **[Performance Guide](../guides/performance.md)** - Advanced optimization techniques
 
 ## 💡 Pro Tips
 

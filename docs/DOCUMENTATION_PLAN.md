@@ -240,7 +240,8 @@ The documentation has grown significantly beyond the original scope:
 
 ### Additional Tutorials
 - [x] `tutorials/onnx-integration.md` - Cross-framework compatibility (1,079 lines)
-- [x] `tutorials/README.md` - Tutorial overview and navigation (163 lines)
+- [x] `tutorials/custom-layers.md` - Creating custom layer types (1,127 lines)
+- [x] `tutorials/README.md` - Tutorial overview and navigation (167 lines)
 
 ## 📊 **COMPLETION STATUS**
 
@@ -267,7 +268,6 @@ The documentation has grown significantly beyond the original scope:
 ### Medium Priority Missing Items
 - [ ] `guides/troubleshooting.md` - Common issues & solutions
 - [ ] `advanced/contributing.md` - Contribution guide
-- [ ] `tutorials/custom-layers.md` - Creating custom layers
 - [ ] `examples/sparse-cross-entropy.md` - SparseCrossEntropy demo
 - [ ] `examples/mixed-precision-demo.md` - FP16 training example
 - [ ] `examples/visualization-demo.md` - Plotting and metrics

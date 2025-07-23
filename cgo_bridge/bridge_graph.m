@@ -69,9 +69,9 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                         
                         // UNIVERSAL DYNAMIC FLATTENING: Use MPSGraph's flatten operation
                         // This properly handles ANY input shape without hardcoding dimensions
-                        NSLog(@"🔧 Adaptive flatten: %dD→2D for Dense layer %d", 
-                              (int)currentShape.count, layerIdx);
-                        NSLog(@"🔧 Input tensor shape: %@", currentShape);
+                        // NSLog(@"🔧 Adaptive flatten: %dD→2D for Dense layer %d", 
+                        //       (int)currentShape.count, layerIdx);
+                        // NSLog(@"🔧 Input tensor shape: %@", currentShape);
                         
                         // MPSGraph's flatten2DTensor automatically handles dynamic shapes
                         // It preserves the batch dimension and flattens all others
@@ -80,7 +80,7 @@ BOOL buildDynamicGraphFromLayers(training_engine_t* engine,
                                                                   axis:1
                                                                   name:[NSString stringWithFormat:@"adaptive_flatten_%d", layerIdx]];
                         
-                        NSLog(@"🔧 Flattened tensor shape: %@", currentTensor.shape);
+                        // NSLog(@"🔧 Flattened tensor shape: %@", currentTensor.shape);
                     }
                     // If already 2D, no reshaping needed - direct dense layer application
                     

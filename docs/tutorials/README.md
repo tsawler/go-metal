@@ -50,14 +50,17 @@ Solve real-world prediction problems:
 
 ### 🛠️ Advanced Tutorials
 
-#### [Custom Layers](custom-layers.md)
-Extend Go-Metal with your own layer types:
-- Layer interface and requirements
-- Implementing forward and backward passes
-- Metal shader integration
-- Testing custom layers
+#### [Custom Layers](custom-layers.md) ⚙️
+**Extend Go-Metal** with your own high-performance layer types:
+- Understanding Go-Metal's layer architecture and extension points
+- Implementing custom activation functions (Swish, PReLU)
+- Creating parametric layers with learnable parameters
+- Metal Performance Shaders integration for GPU acceleration
+- Complex transformation layers (GLU, attention mechanisms)
+- Testing, validation, and production deployment strategies
 - **Difficulty**: Advanced
-- **Time**: 60 minutes
+- **Time**: 75 minutes
+- **GPU Integration**: Metal Performance Shaders required
 
 #### [ONNX Integration](onnx-integration.md) 🔗
 **Cross-framework model compatibility** with PyTorch, TensorFlow, and more:

@@ -813,6 +813,7 @@ top -pid $(pgrep -f your_program)
 
 - **[Memory Management Guide](memory-management.md)** - GPU memory optimization and best practices
 - **[Mixed Precision Tutorial](../tutorials/mixed-precision.md)** - Further speed improvements
+- **[Custom Layers Tutorial](../tutorials/custom-layers.md)** - High-performance layer extensions
 - **[ONNX Integration Tutorial](../tutorials/onnx-integration.md)** - Cross-framework deployment
 - **[Visualization Guide](visualization.md)** - Monitor training progress
 - **[Advanced Examples](../examples/)** - Production-ready optimizations

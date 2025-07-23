@@ -50,6 +50,7 @@ Go-Metal is a native Go machine learning framework that leverages Apple's Metal 
 - **[CNN Tutorial](tutorials/cnn-tutorial.md)** - Building Convolutional Neural Networks
 - **[Regression Tutorial](tutorials/regression-tutorial.md)** - Solving regression problems
 - **[Mixed Precision](tutorials/mixed-precision.md)** - FP16 training for maximum performance
+- **[Custom Layers](tutorials/custom-layers.md)** - Extend Go-Metal with your own layer types
 - **[ONNX Integration](tutorials/onnx-integration.md)** - Cross-framework model compatibility
 
 ### 💡 Examples
