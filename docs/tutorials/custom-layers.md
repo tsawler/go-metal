@@ -1,14 +1,14 @@
 # Custom Layers Tutorial
 
-Extend Go-Metal with your own layer types using Metal Performance Shaders for maximum performance on Apple Silicon.
+Extend Go-Metal with your own layer types using MPSGraph operations for maximum performance on Apple Silicon.
 
 ## 🎯 What You'll Learn
 
 By the end of this tutorial, you'll be able to:
 - Understand Go-Metal's layer architecture and extension points
 - Implement custom layers with learnable parameters
-- Integrate Metal Performance Shaders for GPU acceleration
-- Create activation functions, transformations, and complex operations
+- Use MPSGraph operations for GPU computation
+- Create activation functions and transformations
 - Test and validate custom layer implementations
 - Deploy custom layers in production models
 
@@ -32,29 +32,35 @@ type LayerSpec struct {
 }
 ```
 
-### Layer Type Registration
+### Layer Type System
 
-All layer types are defined in an enum that must be extended for custom layers:
+Layer types are defined as consecutive integers in the enum (0-11 currently in use):
 
 ```go
 const (
-    Dense LayerType = iota
-    Conv2D
-    ReLU
-    Softmax
-    // Your custom layers would be added here
-    CustomActivation
-    CustomTransform
+    Dense LayerType = iota    // 0
+    Conv2D                    // 1
+    ReLU                      // 2
+    Softmax                   // 3
+    MaxPool2D                 // 4
+    Dropout                   // 5
+    BatchNorm                 // 6
+    LeakyReLU                 // 7
+    ELU                       // 8
+    Sigmoid                   // 9
+    Tanh                      // 10
+    Swish                     // 11
+    // Custom layers extend sequentially: 12, 13, 14...
 )
 ```
 
-### Metal Integration
+### MPSGraph Integration
 
-The actual computation happens in **Metal Performance Shaders Graph (MPSGraph)**, Apple's high-performance GPU compute framework. Custom layers define their computation using MPSGraph primitives.
+The actual computation happens in **Metal Performance Shaders Graph (MPSGraph)**, Apple's high-performance GPU compute framework. Custom layers define their computation using MPSGraph primitives through C bridge functions.
 
-## 🚀 Complete Example 1: Custom Activation Function (Swish)
+## 🚀 Complete Example 1: Using Built-in Swish Layer
 
-Let's implement a custom Swish activation function (x * sigmoid(x)) as a complete working example:
+Swish activation (x * sigmoid(x)) is already implemented in Go-Metal. Here's how to use it:
 
 ```go
 package main
@@ -62,7 +68,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"math"
 	"math/rand"
 
 	"github.com/tsawler/go-metal/cgo_bridge"
@@ -71,9 +76,7 @@ import (
 	"github.com/tsawler/go-metal/training"
 )
 
-// SwishLayerType represents our custom Swish activation
-// Note: In real implementation, this would be added to the LayerType enum
-const SwishLayerType layers.LayerType = 99 // Using high number to avoid conflicts
+// Swish is available as layers.Swish (value 11 in the enum)
 
 func main() {
 	// Initialize Metal device and memory manager
@@ -108,13 +111,12 @@ func demonstrateCustomSwishLayer() error {
 	inputShape := []int{batchSize, inputSize}
 	builder := layers.NewModelBuilder(inputShape)
 
-	// Build model using built-in Swish (which demonstrates the pattern)
-	// In a real custom implementation, you would use your custom layer type
+	// Build model using built-in Swish activation
 	model, err := builder.
 		AddDense(256, true, "dense1").
-		AddSwish("swish1").  // Using built-in Swish as example
+		AddSwish("swish1").
 		AddDense(128, true, "dense2").
-		AddSwish("swish2").  // Custom activation pattern
+		AddSwish("swish2").
 		AddDense(numClasses, true, "output").
 		AddSoftmax(-1, "softmax").
 		Compile()
@@ -130,7 +132,7 @@ func demonstrateCustomSwishLayer() error {
 	for i, layer := range model.Layers {
 		fmt.Printf("  %d. %s (%s)\n", i+1, layer.Name, layer.Type.String())
 		if layer.Type.String() == "Swish" {
-			fmt.Printf("     🎯 Custom Swish: f(x) = x * sigmoid(x)\n")
+			fmt.Printf("     🎯 Swish activation: f(x) = x * sigmoid(x)\n")
 		}
 	}
 
@@ -237,14 +239,14 @@ func generateTestData(samples, features, classes int) ([]float32, []int32) {
 ```
 
 **What this example demonstrates:**
-- Integration of custom activation functions into Go-Metal models
+- Integration of built-in activation functions into Go-Metal models
 - Training compatibility with dynamic engine
-- Performance validation of custom layers
+- Performance validation of layers
 - Architecture inspection and debugging
 
-## 🔬 Complete Example 2: Custom Parametric Layer (PReLU)
+## 🔬 Complete Example 2: Using LeakyReLU (Parametric Activation)
 
-This example shows how to create a parametric layer with learnable parameters:
+This example shows how to use LeakyReLU, which has a learnable negative slope parameter:
 
 ```go
 package main
@@ -270,8 +272,8 @@ func main() {
 
 	memory.InitializeGlobalMemoryManager(device)
 
-	fmt.Println("🔧 Custom PReLU (Parametric ReLU) Demo")
-	fmt.Println("======================================")
+	fmt.Println("🔧 LeakyReLU (Parametric ReLU) Demo")
+	fmt.Println("===================================")
 
 	err = demonstrateParametricLayer()
 	if err != nil {
@@ -282,10 +284,9 @@ func main() {
 }
 
 func demonstrateParametricLayer() error {
-	fmt.Println("🏗️ Simulating PReLU layer implementation...")
+	fmt.Println("🏗️ Creating model with LeakyReLU activations...")
 
-	// Create model demonstrating parametric activation concept
-	// Using LeakyReLU as a fixed-parameter version of what PReLU would be
+	// Create model with LeakyReLU (fixed negative slope parameter)
 	batchSize := 64
 	inputSize := 256
 	numClasses := 5
@@ -293,13 +294,12 @@ func demonstrateParametricLayer() error {
 	inputShape := []int{batchSize, inputSize}
 	builder := layers.NewModelBuilder(inputShape)
 
-	// Build model simulating PReLU with LeakyReLU
-	// In full implementation, PReLU would have learnable alpha per channel
+	// Build model with LeakyReLU having different negative slopes
 	model, err := builder.
 		AddDense(128, true, "dense1").
-		AddLeakyReLU(0.2, "prelu_simulation1"). // Simulates PReLU with fixed alpha
+		AddLeakyReLU(0.2, "leaky_relu1"). // Negative slope = 0.2
 		AddDense(64, true, "dense2").
-		AddLeakyReLU(0.1, "prelu_simulation2"). // Different alpha values
+		AddLeakyReLU(0.1, "leaky_relu2"). // Negative slope = 0.1
 		AddDense(numClasses, true, "output").
 		Compile()
 
@@ -307,21 +307,20 @@ func demonstrateParametricLayer() error {
 		return fmt.Errorf("model compilation failed: %v", err)
 	}
 
-	fmt.Printf("✅ Model with parametric activations compiled (%d layers)\n", len(model.Layers))
+	fmt.Printf("✅ Model with LeakyReLU activations compiled (%d layers)\n", len(model.Layers))
 
-	// Demonstrate the concept of learnable parameters
-	return demonstrateLearnableParameters(model)
+	// Analyze the layer parameters
+	return analyzeLayerParameters(model)
 }
 
-func demonstrateLearnableParameters(model *layers.ModelSpec) error {
-	fmt.Println("\n📊 Analyzing learnable parameters in custom layers:")
+func analyzeLayerParameters(model *layers.ModelSpec) error {
+	fmt.Println("\n📊 Analyzing layer parameters:")
 
 	// Display parameter analysis
 	totalParams := model.TotalParameters
 	fmt.Printf("Total parameters: %d\n", totalParams)
 
 	// Analyze each layer's parameters
-	parameterIndex := 0
 	for _, layer := range model.Layers {
 		switch layer.Type.String() {
 		case "Dense":
@@ -339,14 +338,14 @@ func demonstrateLearnableParameters(model *layers.ModelSpec) error {
 				layer.Name, weightParams, biasParams, weightParams+biasParams)
 
 		case "LeakyReLU":
-			// In a real PReLU implementation, this would have learnable alpha parameters
-			alpha := layer.Parameters["alpha"].(float32)
-			fmt.Printf("Layer '%s': alpha=%.2f (in PReLU, this would be learnable per channel)\n",
-				layer.Name, alpha)
+			// LeakyReLU has fixed alpha parameter, not learnable
+			negativeSlope := layer.Parameters["negative_slope"].(float32)
+			fmt.Printf("Layer '%s': negative_slope=%.2f (fixed parameter, not learnable)\n",
+				layer.Name, negativeSlope)
 		}
 	}
 
-	// Test training to show parameter learning
+	// Test training to show layer behavior
 	return testParametricLayerTraining(model)
 }
 
@@ -417,11 +416,11 @@ func testParametricLayerTraining(model *layers.ModelSpec) error {
 		}
 	}
 
-	fmt.Println("\n💡 In a real PReLU implementation:")
-	fmt.Println("   • Each channel would have a learnable alpha parameter")
-	fmt.Println("   • Alpha values would adapt during training")
-	fmt.Println("   • Different channels could learn different negative slopes")
-	fmt.Println("   • This provides more flexibility than fixed LeakyReLU")
+	fmt.Println("\n💡 About LeakyReLU in Go-Metal:")
+	fmt.Println("   • Uses fixed negative slope parameter (not learnable)")
+	fmt.Println("   • Prevents dying ReLU problem for negative inputs")
+	fmt.Println("   • Good alternative to ReLU for deep networks")
+	fmt.Println("   • Implemented using MPSGraph operations")
 
 	return nil
 }
@@ -723,36 +722,44 @@ func generateMultiModalData(samples, features, classes int) ([]float32, []int32)
 
 **Define the mathematical operation:**
 ```
-Swish: f(x) = x * sigmoid(x)
-PReLU: f(x) = max(0, x) + α * min(0, x)  [α learnable per channel]
-GLU: f(x) = (Wx + b) ⊙ σ(Vx + c)       [⊙ is element-wise product]
+Hypothetical NewActivation: f(x) = x * tanh(x)
+Hypothetical ScaledReLU: f(x) = α * max(0, x)  [α fixed parameter]
 ```
 
 **Determine parameters:**
 - Input/output shapes
-- Learnable parameters (weights, biases, activation parameters)
-- Hyperparameters (fixed configuration values)
+- Fixed parameters (like negative slope in LeakyReLU)
+- Learnable parameters (for layers like Dense, Conv2D)
 
 ### Step 2: Extend Go-Metal Framework
 
-**Add Layer Type (layers/layer_types.go):**
+**Add Layer Type (layers/layer.go):**
 ```go
 const (
-    // Existing types...
-    CustomSwish LayerType = iota + 100
-    CustomPReLU
-    CustomGLU
+    Dense LayerType = iota    // 0
+    Conv2D                    // 1
+    ReLU                      // 2
+    Softmax                   // 3
+    MaxPool2D                 // 4
+    Dropout                   // 5
+    BatchNorm                 // 6
+    LeakyReLU                 // 7
+    ELU                       // 8
+    Sigmoid                   // 9
+    Tanh                      // 10
+    Swish                     // 11
+    // Add new layer types sequentially
+    NewActivation             // 12
+    ScaledReLU               // 13
 )
 
 func (lt LayerType) String() string {
     switch lt {
     // Existing cases...
-    case CustomSwish:
-        return "CustomSwish"
-    case CustomPReLU:
-        return "CustomPReLU"
-    case CustomGLU:
-        return "CustomGLU"
+    case NewActivation:
+        return "NewActivation"
+    case ScaledReLU:
+        return "ScaledReLU"
     default:
         return "Unknown"
     }
@@ -761,9 +768,9 @@ func (lt LayerType) String() string {
 
 **Add Factory Method (layers/layer.go):**
 ```go
-func (mb *ModelBuilder) AddCustomSwish(name string) *ModelBuilder {
+func (mb *ModelBuilder) AddNewActivation(name string) *ModelBuilder {
     layer := LayerSpec{
-        Type:       CustomSwish,
+        Type:       NewActivation,
         Name:       name,
         Parameters: make(map[string]interface{}),
     }
@@ -771,12 +778,12 @@ func (mb *ModelBuilder) AddCustomSwish(name string) *ModelBuilder {
     return mb
 }
 
-func (mb *ModelBuilder) AddCustomPReLU(name string) *ModelBuilder {
+func (mb *ModelBuilder) AddScaledReLU(scale float32, name string) *ModelBuilder {
     layer := LayerSpec{
-        Type: CustomPReLU,
+        Type: ScaledReLU,
         Name: name,
         Parameters: map[string]interface{}{
-            "alpha_init": 0.25, // Initial alpha value
+            "scale": scale, // Fixed scaling factor
         },
     }
     mb.layers = append(mb.layers, layer)
@@ -784,297 +791,181 @@ func (mb *ModelBuilder) AddCustomPReLU(name string) *ModelBuilder {
 }
 ```
 
-**Add Shape Computation:**
+**Add Shape Computation (in computeLayerInfo method):**
 ```go
-func (mb *ModelBuilder) computeCustomSwishInfo(layer *LayerSpec, inputShape []int) ([]int, [][]int, int64, error) {
-    // Swish doesn't change shape and has no parameters
-    return inputShape, [][]int{}, 0, nil
-}
-
-func (mb *ModelBuilder) computeCustomPReLUInfo(layer *LayerSpec, inputShape []int) ([]int, [][]int, int64, error) {
-    // PReLU has one learnable alpha parameter per channel
-    channels := inputShape[len(inputShape)-1]
-    paramShapes := [][]int{{channels}} // Alpha parameters
-    return inputShape, paramShapes, int64(channels), nil
-}
-```
-
-### Step 3: Implement Metal Computation
-
-**Add to Bridge (cgo_bridge/bridge_graph.m):**
-```objective-c
-case CUSTOM_SWISH:
-    currentTensor = addCustomSwishToGraph(engine->graph, currentTensor, layer, layerIdx);
-    break;
-
-case CUSTOM_PRELU:
-    currentTensor = addCustomPReLUToGraph(engine->graph, currentTensor, layer, layerIdx, allParameterPlaceholders);
-    break;
-```
-
-**Implement Metal Operations:**
-```objective-c
-MPSGraphTensor* addCustomSwishToGraph(MPSGraph* graph, 
-                                     MPSGraphTensor* inputTensor,
-                                     layer_spec_c_t* layer,
-                                     int layerIdx) {
-    // Swish: x * sigmoid(x)
-    MPSGraphTensor* sigmoidTensor = [graph sigmoidWithTensor:inputTensor
-                                                        name:[NSString stringWithFormat:@"swish_sigmoid_%d", layerIdx]];
-    
-    MPSGraphTensor* outputTensor = [graph multiplicationWithPrimaryTensor:inputTensor
-                                                          secondaryTensor:sigmoidTensor
-                                                                     name:[NSString stringWithFormat:@"swish_output_%d", layerIdx]];
-    
-    return outputTensor;
-}
-
-MPSGraphTensor* addCustomPReLUToGraph(MPSGraph* graph,
-                                     MPSGraphTensor* inputTensor,
-                                     layer_spec_c_t* layer,
-                                     int layerIdx,
-                                     NSMutableArray* parameterPlaceholders) {
-    // PReLU: max(0, x) + α * min(0, x)
-    
-    // Create alpha parameter placeholder
-    NSArray* inputShape = inputTensor.shape;
-    NSArray* alphaShape = @[inputShape.lastObject]; // Alpha per channel
-    
-    MPSGraphTensor* alphaPlaceholder = [graph placeholderWithShape:alphaShape
-                                                          dataType:MPSDataTypeFloat32
-                                                              name:[NSString stringWithFormat:@"prelu_alpha_%d", layerIdx]];
-    [parameterPlaceholders addObject:alphaPlaceholder];
-    
-    // Compute PReLU
-    MPSGraphTensor* zeroTensor = [graph constantWithScalar:0.0f
-                                                     shape:inputShape
-                                                  dataType:MPSDataTypeFloat32];
-    
-    MPSGraphTensor* positivePart = [graph maximumWithPrimaryTensor:inputTensor
-                                                   secondaryTensor:zeroTensor
-                                                              name:[NSString stringWithFormat:@"prelu_positive_%d", layerIdx]];
-    
-    MPSGraphTensor* negativePart = [graph minimumWithPrimaryTensor:inputTensor
-                                                   secondaryTensor:zeroTensor
-                                                              name:[NSString stringWithFormat:@"prelu_negative_%d", layerIdx]];
-    
-    MPSGraphTensor* scaledNegative = [graph multiplicationWithPrimaryTensor:alphaTensor
-                                                            secondaryTensor:negativePart
-                                                                       name:[NSString stringWithFormat:@"prelu_scaled_%d", layerIdx]];
-    
-    MPSGraphTensor* outputTensor = [graph additionWithPrimaryTensor:positivePart
-                                                    secondaryTensor:scaledNegative
-                                                               name:[NSString stringWithFormat:@"prelu_output_%d", layerIdx]];
-    
-    return outputTensor;
-}
-```
-
-### Step 4: Testing and Validation
-
-**Create Test Cases:**
-```go
-func TestCustomSwishLayer(t *testing.T) {
-    // Test layer creation
-    builder := layers.NewModelBuilder([]int{1, 10})
-    model, err := builder.
-        AddCustomSwish("test_swish").
-        Compile()
-    
-    assert.NoError(t, err)
-    assert.Equal(t, 1, len(model.Layers))
-    assert.Equal(t, "CustomSwish", model.Layers[0].Type.String())
-}
-
-func TestCustomPReLUParameters(t *testing.T) {
-    builder := layers.NewModelBuilder([]int{1, 10})
-    model, err := builder.
-        AddCustomPReLU("test_prelu").
-        Compile()
-    
-    assert.NoError(t, err)
-    assert.Equal(t, int64(10), model.TotalParameters) // 10 alpha parameters
-}
-```
-
-**Validate Training Integration:**
-```go
-func TestCustomLayerTraining(t *testing.T) {
-    // Create model with custom layer
-    model := createModelWithCustomLayers()
-    
-    // Test training compatibility
-    config := training.TrainerConfig{
-        BatchSize:     32,
-        LearningRate:  0.001,
-        OptimizerType: cgo_bridge.Adam,
-        EngineType:    training.Dynamic,
+func (mb *ModelBuilder) computeLayerInfo(layer *LayerSpec, inputShape []int) ([]int, [][]int, int64, error) {
+    switch layer.Type {
+    // Existing cases...
+    case NewActivation, ScaledReLU:
+        return mb.computeActivationInfo(layer, inputShape) // No parameters, same shape
+    // Other cases...
     }
+}
+
+// Activation layers don't change shape and have no learnable parameters
+func (mb *ModelBuilder) computeActivationInfo(layer *LayerSpec, inputShape []int) ([]int, [][]int, int64, error) {
+    outputShape := make([]int, len(inputShape))
+    copy(outputShape, inputShape)
+    return outputShape, [][]int{}, 0, nil
+}
+```
+
+### Step 3: Implement MPSGraph Computation
+
+**Add to Bridge (cgo_bridge/bridge_graph.m switch statement):**
+```objective-c
+case 12: // NewActivation
+    // NewActivation: x * tanh(x)
+    {
+        MPSGraphTensor* tanhTensor = [engine->graph tanhWithTensor:currentTensor
+                                                             name:[NSString stringWithFormat:@"newact_tanh_%d", layerIdx]];
+        currentTensor = [engine->graph multiplicationWithPrimaryTensor:currentTensor
+                                                       secondaryTensor:tanhTensor
+                                                                  name:[NSString stringWithFormat:@"newact_output_%d", layerIdx]];
+    }
+    break;
+
+case 13: // ScaledReLU  
+    // ScaledReLU: scale * max(0, x)
+    {
+        float scale = layer->param_float[0]; // Get scale parameter
+        MPSGraphTensor* reluTensor = [engine->graph reLUWithTensor:currentTensor
+                                                             name:[NSString stringWithFormat:@"scaled_relu_%d", layerIdx]];
+        MPSGraphTensor* scaleTensor = [engine->graph constantWithScalar:scale
+                                                                  shape:reluTensor.shape
+                                                               dataType:MPSDataTypeFloat32];
+        currentTensor = [engine->graph multiplicationWithPrimaryTensor:reluTensor
+                                                       secondaryTensor:scaleTensor
+                                                                  name:[NSString stringWithFormat:@"scaled_output_%d", layerIdx]];
+    }
+    break;
+```
+
+**Key Implementation Points:**
+- Use MPSGraph operations (no custom Metal shaders)
+- Access parameters via `layer->param_float[]` or `layer->param_int[]`
+- Create descriptive tensor names for debugging
+- Handle tensor shapes properly
+
+### Step 4: Update C Bridge Type Mapping
+
+**Add layer type constants to bridge_types.h:**
+```c
+typedef struct {
+    int layer_type;          // 0=Dense, 1=Conv2D, 2=ReLU, 3=Softmax, 4=MaxPool2D, 
+                            // 5=Dropout, 6=BatchNorm, 7=LeakyReLU, 8=ELU, 9=Sigmoid, 
+                            // 10=Tanh, 11=Swish, 12=NewActivation, 13=ScaledReLU
+    char name[64];           // Layer name
+    int input_shape[4];      // Input dimensions [batch, channels, height, width]
+    int input_shape_len;     // Number of valid dimensions
+    int output_shape[4];     // Output dimensions
+    int output_shape_len;    // Number of valid dimensions
     
-    trainer, err := training.NewModelTrainer(model, config)
-    assert.NoError(t, err)
-    defer trainer.Cleanup()
+    // Layer-specific parameters
+    int param_int[8];        // Integer parameters
+    float param_float[8];    // Float parameters (scale for ScaledReLU)
+    int param_int_count;     // Number of valid int parameters
+    int param_float_count;   // Number of valid float parameters
+} layer_spec_c_t;
+```
+
+### Step 5: Update Dynamic Layer Conversion
+
+**Add cases to ConvertToDynamicLayerSpecs method in layers/layer.go:**
+```go
+func (ms *ModelSpec) ConvertToDynamicLayerSpecs() ([]DynamicLayerSpec, error) {
+    // ... existing code ...
     
-    // Test forward and backward passes
-    result, err := trainer.TrainBatch(testInput, inputShape, testLabels, labelShape)
-    assert.NoError(t, err)
-    assert.Greater(t, result.Loss, 0.0)
-}
-```
-
-## 📋 Custom Layer Checklist
-
-### Design Phase
-- [ ] **Mathematical specification** - Define the exact computation
-- [ ] **Parameter analysis** - Identify learnable vs. fixed parameters
-- [ ] **Shape computation** - Determine input/output shape relationships
-- [ ] **Gradient requirements** - Ensure differentiability for training
-
-### Implementation Phase
-- [ ] **Layer type registration** - Add to enum and string conversion
-- [ ] **Factory methods** - Create builder methods for easy usage
-- [ ] **Shape computation** - Implement shape inference logic
-- [ ] **Parameter counting** - Correctly count learnable parameters
-- [ ] **Metal implementation** - Use MPSGraph operations efficiently
-
-### Integration Phase
-- [ ] **Engine compatibility** - Test with dynamic training engine
-- [ ] **Optimizer compatibility** - Verify with all optimizers (Adam, SGD, etc.)
-- [ ] **Checkpoint compatibility** - Ensure serialization works
-- [ ] **Inference compatibility** - Test with inference engine
-
-### Validation Phase
-- [ ] **Unit tests** - Layer creation and shape computation
-- [ ] **Training tests** - End-to-end training compatibility
-- [ ] **Performance tests** - GPU utilization and speed
-- [ ] **Numerical tests** - Gradient checking and accuracy
-
-## 🚀 Advanced Custom Layer Patterns
-
-### Composite Layers
-Combine multiple operations into single logical units:
-```go
-// Residual Block: x + F(x)
-func (mb *ModelBuilder) AddResidualBlock(channels int, name string) *ModelBuilder {
-    // Implementation would create sub-layers internally
-    return mb
-}
-```
-
-### Attention Mechanisms
-Implement attention-based layers:
-```go
-// Self-Attention: softmax(QK^T)V
-func (mb *ModelBuilder) AddSelfAttention(headSize, numHeads int, name string) *ModelBuilder {
-    // Implementation would handle multi-head attention computation
-    return mb
-}
-```
-
-### Normalization Layers
-Custom normalization beyond BatchNorm:
-```go
-// Layer Normalization
-func (mb *ModelBuilder) AddLayerNorm(epsilon float32, name string) *ModelBuilder {
-    // Normalize across feature dimension rather than batch dimension
-    return mb
-}
-```
-
-## 💡 Performance Optimization Tips
-
-### Metal Performance Shaders Best Practices
-- **Use primitive operations**: Combine MPSGraph primitives efficiently
-- **Avoid memory copies**: Keep computations on GPU
-- **Batch operations**: Group similar operations together
-- **Memory layout**: Consider tensor layout for optimal performance
-
-### Training Performance
-- **Parameter initialization**: Use appropriate initialization schemes
-- **Gradient clipping**: Consider numerical stability
-- **Learning rate scaling**: Account for custom layer characteristics
-- **Memory efficiency**: Minimize intermediate tensor allocations
-
-## 🔧 Troubleshooting Custom Layers
-
-### Common Issues
-
-**Compilation Errors:**
-- Layer type not registered in enum
-- Missing shape computation function
-- Parameter count mismatch
-
-**Runtime Errors:**
-- Metal shader implementation missing
-- Incorrect parameter placeholder registration
-- Shape mismatch between layers
-
-**Training Issues:**
-- Gradient explosion/vanishing
-- Numerical instability
-- Poor convergence
-
-### Debugging Strategies
-
-**Layer Inspection:**
-```go
-func debugLayerInfo(model *layers.ModelSpec) {
-    for i, layer := range model.Layers {
-        fmt.Printf("Layer %d: %s (%s)\n", i, layer.Name, layer.Type.String())
-        fmt.Printf("  Input shape: %v\n", layer.InputShape)
-        fmt.Printf("  Output shape: %v\n", layer.OutputShape)
-        fmt.Printf("  Parameters: %d\n", layer.ParameterCount)
+    for i, layer := range ms.Layers {
+        // ... existing cases ...
+        
+        switch layer.Type {
+        // ... existing cases ...
+        
+        case NewActivation:
+            spec.LayerType = 12 // NewActivation = 12
+            spec.ParamIntCount = 0
+            spec.ParamFloatCount = 0
+            // Shape unchanged for activation
+            
+        case ScaledReLU:
+            spec.LayerType = 13 // ScaledReLU = 13
+            
+            scale := getFloatParam(layer.Parameters, "scale", 1.0)
+            spec.ParamFloat[0] = scale
+            spec.ParamFloatCount = 1
+            spec.ParamIntCount = 0
+            // Shape unchanged for activation
+            
+        default:
+            return nil, fmt.Errorf("unsupported layer type: %s", layer.Type.String())
+        }
+        
+        // ... rest of conversion logic ...
     }
 }
 ```
 
-**Training Monitoring:**
-```go
-func monitorCustomLayerTraining(trainer *training.ModelTrainer) {
-    // Monitor gradient norms, loss progression, parameter changes
-    // Add custom logging for your layer's behavior
-}
-```
+## 📋 Custom Layer Implementation Summary
 
-## 🎯 Production Deployment
+### What We've Learned
 
-### Testing Strategy
-1. **Unit tests** for layer creation and shape computation
-2. **Integration tests** with training and inference engines
-3. **Performance benchmarks** comparing to baseline layers
-4. **Numerical validation** against reference implementations
+1. **Go-Metal uses consecutive integer layer types** (0-11), not custom high values
+2. **MPSGraph operations are used exclusively** - no custom Metal shaders needed
+3. **Static switch statements** handle layer types in the C bridge
+4. **Parameter arrays** (`param_float[]`, `param_int[]`) pass configuration to C bridge
+5. **Activation layers** typically don't change tensor shapes or have learnable parameters
 
-### Documentation Requirements
-- Mathematical specification of the layer
-- Usage examples and common patterns
-- Performance characteristics and limitations
-- Compatibility notes with different engines
+### Current Built-in Layers Available
 
-### Maintenance Considerations
-- Version compatibility across Go-Metal updates
-- Performance monitoring in production
-- Fallback mechanisms for unsupported platforms
-- Migration paths for layer API changes
+Go-Metal already provides these layer types ready for use:
+
+| Layer Type | Value | Description | Parameters |
+|------------|-------|-------------|------------|
+| Dense | 0 | Fully connected layer | input_size, output_size, use_bias |
+| Conv2D | 1 | 2D convolution | channels, kernel_size, stride, padding, use_bias |
+| ReLU | 2 | ReLU activation | none |
+| Softmax | 3 | Softmax activation | axis |
+| MaxPool2D | 4 | Max pooling | pool_size, stride |
+| Dropout | 5 | Dropout regularization | rate, training |
+| BatchNorm | 6 | Batch normalization | num_features, eps, momentum, affine |
+| LeakyReLU | 7 | Leaky ReLU activation | negative_slope |
+| ELU | 8 | ELU activation | alpha |
+| Sigmoid | 9 | Sigmoid activation | none |
+| Tanh | 10 | Tanh activation | none |
+| Swish | 11 | Swish activation | none |
+
+### Key Implementation Requirements
+
+To add a custom layer type (e.g., `NewActivation` as type 12):
+
+1. **Add to Go enum** in `layers/layer.go` with next sequential value
+2. **Add builder method** like `AddNewActivation()` 
+3. **Update computeLayerInfo** to handle shape and parameter calculations
+4. **Add C bridge case** in `bridge_graph.m` switch statement  
+5. **Update dynamic conversion** in `ConvertToDynamicLayerSpecs()`
+6. **Use MPSGraph operations** for the actual computation
+
+### Training Engine Compatibility
+
+Custom layers automatically work with:
+- ✅ **Dynamic Training Engine** - supports any layer architecture
+- ✅ **All optimizers** (Adam, SGD, RMSProp, etc.)
+- ✅ **Inference Engine** - optimized for deployment
+- ✅ **Model serialization** - save/load functionality
 
 ## 🚀 Next Steps
 
-Master custom layer development with go-metal:
+Ready to extend Go-Metal? Consider these approaches:
 
-- **[Architecture Guide](../guides/architecture.md)** - Understand Go-Metal's design principles
-- **[Performance Guide](../guides/performance.md)** - Optimize custom layer performance
-- **[Memory Management](../guides/memory-management.md)** - GPU memory best practices
-- **[Advanced Examples](../examples/)** - See custom layers in production models
+1. **Start with existing layers** - LeakyReLU, ELU, Swish provide good examples
+2. **Use built-in components** - Combine existing layers for complex operations  
+3. **Focus on MPSGraph** - Leverage Apple's optimized GPU operations
+4. **Follow the patterns** - Static registration, sequential numbering, parameter arrays
 
-**Ready to extend Go-Metal?** Use these patterns to create high-performance custom layers that integrate seamlessly with the Go-Metal ecosystem!
+For complex architectures, Go-Metal's specification-based approach with MPSGraph provides excellent performance and maintainability!
 
 ---
 
-## 🧠 Key Takeaways
+**Ready to build high-performance neural networks?** Go-Metal's layer system is designed for both simplicity and extensibility, with Apple Silicon optimization built-in.
 
-- **Specification-based design**: Go-Metal uses layer specs + Metal implementation
-- **MPSGraph integration**: Leverage Apple's optimized GPU compute framework
-- **Parameter management**: Proper handling of learnable parameters is crucial
-- **Training compatibility**: Custom layers work with all optimizers and engines
-- **Performance focus**: Metal implementation enables maximum GPU utilization
-
-With custom layers, you can extend Go-Metal to support any neural network architecture while maintaining the performance benefits of Apple Silicon!
