@@ -12,8 +12,6 @@ Go-Metal is a PyTorch-inspired deep learning library built specifically for Appl
 
 Why did I build this? I wanted to increase my knowledge in Machine Learning, and building something like this from scratch seemed like a good way to take a deep dive into that topic. 
 
-**Key Performance Achievement**: 13.5x faster GPU training compared to CPU, with up to 121x speedup for matrix operations.
-
 ### Why Go-Metal?
 
 - **🍎 Native Apple Silicon**: Built specifically for Apple's M-series chips using Metal Performance Shaders
