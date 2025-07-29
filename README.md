@@ -779,7 +779,7 @@ Contributions are welcome.
    # Install task for documentation
    go install github.com/go-task/task/v3/cmd/task@latest
 
-   # Install godocodown
+   # Install godocdown
    go install github.com/robertkrimen/godocdown/godocdown@latest
    
    # This generates documentation (docs.md) in every directory in go-metal
