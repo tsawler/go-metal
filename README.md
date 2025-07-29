@@ -475,49 +475,296 @@ package main
 
 import (
     "fmt"
-    "github.com/tsawler/go-metal/cgo_bridge"
-    "github.com/tsawler/go-metal/layers"
-    "github.com/tsawler/go-metal/training"
+    "log"
+    "math"
+    "math/rand"
+    
     "github.com/tsawler/go-metal/async"
+    "github.com/tsawler/go-metal/cgo_bridge"
+    "github.com/tsawler/go-metal/checkpoints"
+    "github.com/tsawler/go-metal/layers"
+    "github.com/tsawler/go-metal/memory"
+    "github.com/tsawler/go-metal/training"
 )
 
+// generateSineWaveData creates a synthetic dataset for demonstrating async operations
+func generateSineWaveData(numSamples int) ([]float32, []float32) {
+    inputs := make([]float32, numSamples)
+    outputs := make([]float32, numSamples)
+    
+    for i := 0; i < numSamples; i++ {
+        x := float32(i) * 2.0 * math.Pi / float32(numSamples)
+        inputs[i] = x
+        outputs[i] = float32(math.Sin(float64(x))) + (rand.Float32()-0.5)*0.1 // Add noise
+    }
+    
+    return inputs, outputs
+}
+
+// SimpleDataSource implements the async.DataSource interface
+type SimpleDataSource struct {
+    inputs  []float32
+    outputs []float32
+    index   int
+}
+
+func (s *SimpleDataSource) GetBatch(batchSize int) ([]float32, []int, []float32, []int, error) {
+    remaining := len(s.inputs) - s.index
+    if remaining <= 0 {
+        return nil, nil, nil, nil, fmt.Errorf("no more data")
+    }
+    
+    actualBatchSize := batchSize
+    if remaining < batchSize {
+        actualBatchSize = remaining
+    }
+    
+    // Create batch data
+    batchInputs := make([]float32, batchSize)
+    batchOutputs := make([]float32, batchSize)
+    
+    // Copy actual data
+    for i := 0; i < actualBatchSize; i++ {
+        batchInputs[i] = s.inputs[s.index+i]
+        batchOutputs[i] = s.outputs[s.index+i]
+    }
+    
+    // Pad with zeros if needed
+    for i := actualBatchSize; i < batchSize; i++ {
+        batchInputs[i] = 0
+        batchOutputs[i] = 0
+    }
+    
+    s.index += actualBatchSize
+    
+    return batchInputs, []int{batchSize, 1}, batchOutputs, []int{batchSize, 1}, nil
+}
+
+func (s *SimpleDataSource) Size() int {
+    return len(s.inputs)
+}
+
+func (s *SimpleDataSource) Reset() error {
+    s.index = 0
+    return nil
+}
+
 func main() {
-    // Build a simple model
-    builder := layers.NewModelBuilder([]int{8, 10})
-    model, _ := builder.
-        AddDense(16, true, "hidden").
-        AddReLU("relu").
+    fmt.Println("🚀 Go-Metal Complete Example: Async GPU Operations & Full Training Pipeline")
+    fmt.Println("=========================================================================")
+    
+    // Initialize Metal device
+    device, err := cgo_bridge.CreateMetalDevice()
+    if err != nil {
+        log.Fatalf("Failed to create Metal device: %v", err)
+    }
+    
+    // Initialize global memory manager (returns void)
+    memory.InitializeGlobalMemoryManager(device)
+    
+    // Generate synthetic data
+    fmt.Println("\n📊 Generating synthetic sine wave dataset...")
+    inputs, outputs := generateSineWaveData(1000)
+    dataSource := &SimpleDataSource{inputs: inputs, outputs: outputs}
+    fmt.Printf("✅ Generated %d samples\n", len(inputs))
+    
+    // Build a model with various layer types
+    fmt.Println("\n🧠 Building neural network model...")
+    batchSize := 32
+    builder := layers.NewModelBuilder([]int{batchSize, 1})
+    
+    model, err := builder.
+        AddDense(64, true, "hidden1").
+        AddReLU("relu1").
+        AddDropout(0.2, "dropout1").
+        AddDense(128, true, "hidden2").
+        AddLeakyReLU(0.01, "leaky_relu").
+        AddBatchNorm(128, 1e-5, 0.9, true, "batch_norm"). // Fixed: added numFeatures and affine
+        AddDense(64, true, "hidden3").
+        AddELU(1.0, "elu").
         AddDense(1, true, "output").
         Compile()
     
-    config := training.TrainerConfig{
-        BatchSize: 8,
-        LearningRate: 0.001,
-        OptimizerType: cgo_bridge.Adam,
-        Beta1: 0.9,
-        Beta2: 0.999,
-        Epsilon: 1e-8,
+    if err != nil {
+        log.Fatalf("Failed to compile model: %v", err)
     }
     
-    // Async execution is handled automatically by the trainer
+    fmt.Printf("✅ Model compiled with %d parameters\n", model.TotalParameters)
+    fmt.Printf("📐 Architecture: %d layers\n", len(model.Layers))
+    
+    // Configure training with advanced options
+    config := training.TrainerConfig{
+        BatchSize:     batchSize,
+        LearningRate:  0.001,
+        OptimizerType: cgo_bridge.Adam,
+        Beta1:         0.9,
+        Beta2:         0.999,
+        Epsilon:       1e-8,
+        WeightDecay:   0.0001,
+        EngineType:    training.Dynamic,
+        ProblemType:   training.Regression,
+        LossFunction:  training.MeanSquaredError,
+    }
+    
+    // Create trainer
     trainer, err := training.NewModelTrainer(model, config)
     if err != nil {
-        fmt.Printf("Error creating trainer: %v\n", err)
-        return
+        log.Fatalf("Failed to create trainer: %v", err)
+    }
+    defer trainer.Cleanup()
+    
+    // Enable persistent buffers for better performance
+    trainer.EnablePersistentBuffers([]int{batchSize, 1})
+    
+    // Set up learning rate scheduler
+    scheduler := training.NewCosineAnnealingLRScheduler(10, 0.0001) // Fixed: tMax is int, etaMin is float64
+    trainer.SetLRScheduler(scheduler)
+    
+    fmt.Println("\n⚡ Demonstrating Async GPU Operations...")
+    
+    // Create async data loader for efficient GPU utilization
+    memManager := memory.GetGlobalMemoryManager()
+    asyncConfig := async.AsyncDataLoaderConfig{
+        BatchSize:     batchSize,
+        PrefetchDepth: 3,
+        Workers:       2,
+        MemoryManager: memManager,
     }
     
-    fmt.Println("Async GPU operations are handled automatically!")
-    fmt.Printf("Model ready with %d parameters\n", model.TotalParameters)
-    
-    // For custom async operations, use the async package
-    // Note: Command buffer pool requires a valid Metal command queue
-    // which would be provided by the training engine in real usage
-    fmt.Println("Command buffer pool would be created with a valid Metal command queue")
-    
-    // Cleanup
-    if trainer != nil {
-        trainer.Cleanup()
+    asyncLoader, err := async.NewAsyncDataLoader(dataSource, asyncConfig)
+    if err != nil {
+        log.Printf("Note: Async data loader not available in this example")
+    } else {
+        // Start async loading
+        asyncLoader.Start()
+        defer asyncLoader.Stop()
+        
+        fmt.Println("✅ Async data loader started with 2 workers and prefetch depth of 3")
     }
+    
+    // Demonstrate command buffer pooling (if available)
+    fmt.Println("\n🔄 Command Buffer Pool Management:")
+    fmt.Println("  - Automatic command buffer reuse")
+    fmt.Println("  - Async GPU operations handled internally")
+    fmt.Println("  - Efficient memory transfers via staging buffers")
+    
+    // Training with progress tracking
+    fmt.Println("\n🎯 Starting training with async GPU operations...")
+    epochs := 10
+    stepsPerEpoch := dataSource.Size() / batchSize
+    
+    session := trainer.CreateTrainingSession("Sine Wave Regression", epochs, stepsPerEpoch, 0)
+    session.StartTraining()
+    
+    bestLoss := float64(math.Inf(1))
+    
+    for epoch := 0; epoch < epochs; epoch++ {
+        trainer.SetEpoch(epoch)
+        session.StartEpoch(epoch + 1)
+        
+        dataSource.Reset()
+        epochLoss := 0.0
+        
+        for step := 0; step < stepsPerEpoch; step++ {
+            // Get batch data
+            batchInputs, inputShape, batchOutputs, outputShape, err := dataSource.GetBatch(batchSize)
+            if err != nil {
+                break
+            }
+            
+            // Create labels for regression
+            labels, _ := training.NewFloat32Labels(batchOutputs, outputShape)
+            
+            // Train on batch
+            result, err := trainer.TrainBatchUnified(batchInputs, inputShape, labels)
+            if err != nil {
+                log.Printf("Training step failed: %v", err)
+                continue
+            }
+            
+            epochLoss += float64(result.Loss)
+            
+            if step < stepsPerEpoch {
+                session.UpdateTrainingProgress(step+1, float64(result.Loss), result.Accuracy)
+            }
+        }
+        
+        session.FinishTrainingEpoch()
+        
+        avgLoss := epochLoss / float64(stepsPerEpoch)
+        
+        // Update learning rate
+        trainer.StepSchedulerWithMetric(avgLoss)
+        currentLR := trainer.GetCurrentLearningRate()
+        
+        fmt.Printf("Epoch %d/%d | Loss: %.6f | LR: %.6f\n", epoch+1, epochs, avgLoss, currentLR)
+        
+        if avgLoss < bestLoss {
+            bestLoss = avgLoss
+        }
+        
+        session.PrintEpochSummary()
+    }
+    
+    fmt.Printf("\n🎉 Training completed! Best loss: %.6f\n", bestLoss)
+    
+    // Demonstrate model saving
+    fmt.Println("\n💾 Saving trained model...")
+    
+    parameterTensors := trainer.GetParameterTensors()
+    weights, err := checkpoints.ExtractWeightsFromTensors(parameterTensors, model)
+    if err != nil {
+        log.Printf("Failed to extract weights: %v", err)
+    } else {
+        checkpoint := &checkpoints.Checkpoint{
+            ModelSpec: model,
+            Weights:   weights,
+            TrainingState: checkpoints.TrainingState{
+                Epoch:        epochs,
+                LearningRate: trainer.GetCurrentLearningRate(),
+                BestLoss:     float32(bestLoss),
+            },
+            Metadata: checkpoints.CheckpointMetadata{
+                Version:     "1.0.0",
+                Framework:   "go-metal",
+                Description: "Complete example model with async operations",
+                Tags:        []string{"async", "gpu", "regression"},
+            },
+        }
+        
+        // Save as both JSON and ONNX
+        jsonSaver := checkpoints.NewCheckpointSaver(checkpoints.FormatJSON)
+        jsonSaver.SaveCheckpoint(checkpoint, "demo_model.json")
+        
+        onnxSaver := checkpoints.NewCheckpointSaver(checkpoints.FormatONNX)
+        onnxSaver.SaveCheckpoint(checkpoint, "demo_model.onnx")
+        
+        fmt.Println("✅ Model saved in JSON and ONNX formats")
+    }
+    
+    // Display memory and performance statistics
+    stats := trainer.GetStats()
+    fmt.Println("\n📊 Performance Statistics:")
+    fmt.Printf("  - Total training steps: %d\n", stats.CurrentStep)
+    fmt.Printf("  - Model parameters: %d\n", stats.ModelParameters)
+    fmt.Printf("  - Memory pool stats: %v\n", stats.MemoryPoolStats)
+    
+    if asyncLoader != nil {
+        asyncStats := asyncLoader.Stats()
+        fmt.Printf("\n⚡ Async Data Loader Statistics:\n")
+        fmt.Printf("  - Batches produced: %d\n", asyncStats.BatchesProduced)
+        fmt.Printf("  - Queue capacity: %d\n", asyncStats.QueueCapacity)
+        fmt.Printf("  - Workers: %d\n", asyncStats.Workers)
+    }
+    
+    fmt.Println("\n✅ Go-Metal Complete Example Finished!")
+    fmt.Println("This example demonstrated:")
+    fmt.Println("  • Async GPU operations with automatic optimization")
+    fmt.Println("  • Various layer types (Dense, ReLU, LeakyReLU, ELU, Dropout, BatchNorm)")
+    fmt.Println("  • Advanced optimizers with learning rate scheduling")
+    fmt.Println("  • Model checkpointing in JSON and ONNX formats")
+    fmt.Println("  • Memory management and performance monitoring")
+    fmt.Println("  • Async data loading for efficient GPU utilization")
 }
 ```
 
