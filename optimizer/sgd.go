@@ -166,9 +166,25 @@ func (sgd *SGDOptimizerState) Step(gradientBuffers []unsafe.Pointer) error {
 
 	sgd.StepCount++
 
-	// TODO: SGD CGO bridge implementation not yet available
-	// For now, return an error indicating SGD is not fully implemented
-	return fmt.Errorf("SGD optimizer execution not yet implemented in CGO bridge")
+	// Call the CGO bridge function to execute SGD step
+	err := cgo_bridge.ExecuteSGDStepMPSGraph(
+		sgd.device,
+		sgd.WeightBuffers,
+		gradientBuffers,
+		sgd.MomentumBuffers,
+		sgd.bufferSizes,
+		sgd.LearningRate,
+		sgd.Momentum,
+		sgd.WeightDecay,
+		sgd.Nesterov,
+		int(sgd.StepCount),
+	)
+
+	if err != nil {
+		return fmt.Errorf("SGD step execution failed: %v", err)
+	}
+
+	return nil
 }
 
 // UpdateLearningRate updates the learning rate

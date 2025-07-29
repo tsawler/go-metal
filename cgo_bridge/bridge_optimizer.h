@@ -7,6 +7,21 @@ void cacheAdamScalarTensors(training_engine_t* engine);
 void cacheRMSPropScalarTensors(training_engine_t* engine);
 void cacheSGDScalarTensors(training_engine_t* engine);
 
+// SGD optimizer functions
+int execute_sgd_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* momentum_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float momentum,
+    float weight_decay,
+    int nesterov,
+    int step_count
+);
+
 // Adam optimizer functions
 int execute_adam_step_mpsgraph(
     uintptr_t device_ptr,

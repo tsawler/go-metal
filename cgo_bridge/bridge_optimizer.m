@@ -156,6 +156,206 @@ void cacheSGDScalarTensors(training_engine_t* engine) {
     }
 }
 
+// Execute SGD optimization step using MPSGraph for optimal GPU performance
+int execute_sgd_step_mpsgraph(
+    uintptr_t device_ptr,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* momentum_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float momentum,
+    float weight_decay,
+    int nesterov,
+    int step_count
+) {
+    @try {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)device_ptr;
+        if (!device) {
+            NSLog(@"❌ SGD Step: Invalid device pointer");
+            return -1;
+        }
+
+        // Create MPSGraph for SGD operations
+        MPSGraph* graph = [[MPSGraph alloc] init];
+        if (!graph) {
+            NSLog(@"❌ SGD Step: Failed to create MPSGraph");
+            return -2;
+        }
+
+        // Create command queue
+        id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+        if (!commandQueue) {
+            NSLog(@"❌ SGD Step: Failed to create command queue");
+            return -3;
+        }
+
+        for (int i = 0; i < num_weights; i++) {
+            @autoreleasepool {
+                id<MTLBuffer> weightBuffer = (__bridge id<MTLBuffer>)(void*)weight_buffers[i];
+                id<MTLBuffer> gradientBuffer = (__bridge id<MTLBuffer>)(void*)gradient_buffers[i];
+                
+                if (!weightBuffer || !gradientBuffer) {
+                    NSLog(@"❌ SGD Step: Invalid buffer at index %d", i);
+                    continue;
+                }
+
+                // Calculate tensor shape from buffer size
+                int bufferSize = buffer_sizes[i];
+                int numElements = bufferSize / sizeof(float);
+                NSArray<NSNumber*>* shape = @[@(numElements)];
+
+                // Create placeholders for weight and gradient
+                MPSGraphTensor* weightTensor = [graph placeholderWithShape:shape
+                                                                  dataType:MPSDataTypeFloat32
+                                                                      name:[NSString stringWithFormat:@"weight_%d", i]];
+                MPSGraphTensor* gradientTensor = [graph placeholderWithShape:shape
+                                                                     dataType:MPSDataTypeFloat32
+                                                                         name:[NSString stringWithFormat:@"gradient_%d", i]];
+
+                // Apply weight decay if specified
+                MPSGraphTensor* finalGradient = gradientTensor;
+                if (weight_decay > 0.0f) {
+                    MPSGraphTensor* decayConstant = [graph constantWithScalar:weight_decay
+                                                                    dataType:MPSDataTypeFloat32];
+                    MPSGraphTensor* weightDecayTerm = [graph multiplicationWithPrimaryTensor:weightTensor
+                                                                            secondaryTensor:decayConstant
+                                                                                       name:@"weight_decay"];
+                    finalGradient = [graph additionWithPrimaryTensor:gradientTensor
+                                                     secondaryTensor:weightDecayTerm
+                                                                name:@"gradient_with_decay"];
+                }
+
+                MPSGraphTensor* updatedWeight;
+
+                // SGD with momentum
+                if (momentum > 0.0f && momentum_buffers && momentum_buffers[i]) {
+                    id<MTLBuffer> momentumBuffer = (__bridge id<MTLBuffer>)(void*)momentum_buffers[i];
+                    
+                    MPSGraphTensor* momentumTensor = [graph placeholderWithShape:shape
+                                                                        dataType:MPSDataTypeFloat32
+                                                                            name:[NSString stringWithFormat:@"momentum_%d", i]];
+                    
+                    // Create momentum constant
+                    MPSGraphTensor* momentumConstant = [graph constantWithScalar:momentum
+                                                                        dataType:MPSDataTypeFloat32];
+                    
+                    // Update momentum: m = momentum * m + gradient
+                    MPSGraphTensor* scaledMomentum = [graph multiplicationWithPrimaryTensor:momentumTensor
+                                                                            secondaryTensor:momentumConstant
+                                                                                       name:@"scaled_momentum"];
+                    MPSGraphTensor* updatedMomentum = [graph additionWithPrimaryTensor:scaledMomentum
+                                                                       secondaryTensor:finalGradient
+                                                                                  name:@"updated_momentum"];
+
+                    // Create learning rate constant
+                    MPSGraphTensor* learningRateConstant = [graph constantWithScalar:learning_rate
+                                                                            dataType:MPSDataTypeFloat32];
+
+                    MPSGraphTensor* momentumUpdate;
+                    if (nesterov != 0) {
+                        // Nesterov momentum: param = param - lr * (momentum * updated_momentum + gradient)
+                        MPSGraphTensor* nesterovTerm1 = [graph multiplicationWithPrimaryTensor:momentumConstant
+                                                                               secondaryTensor:updatedMomentum
+                                                                                          name:@"nesterov_momentum"];
+                        MPSGraphTensor* nesterovTerm2 = [graph additionWithPrimaryTensor:nesterovTerm1
+                                                                         secondaryTensor:finalGradient
+                                                                                    name:@"nesterov_sum"];
+                        momentumUpdate = [graph multiplicationWithPrimaryTensor:learningRateConstant
+                                                                secondaryTensor:nesterovTerm2
+                                                                           name:@"nesterov_update"];
+                    } else {
+                        // Standard momentum: param = param - lr * updated_momentum
+                        momentumUpdate = [graph multiplicationWithPrimaryTensor:learningRateConstant
+                                                                secondaryTensor:updatedMomentum
+                                                                           name:@"momentum_update"];
+                    }
+
+                    // Update weight: weight = weight - momentum_update
+                    updatedWeight = [graph subtractionWithPrimaryTensor:weightTensor
+                                                        secondaryTensor:momentumUpdate
+                                                                   name:@"updated_weight"];
+
+                    // Execute graph for momentum update
+                    NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
+                    feeds[weightTensor] = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightBuffer
+                                                                                  shape:shape
+                                                                               dataType:MPSDataTypeFloat32];
+                    feeds[gradientTensor] = [[MPSGraphTensorData alloc] initWithMTLBuffer:gradientBuffer
+                                                                                    shape:shape
+                                                                                 dataType:MPSDataTypeFloat32];
+                    feeds[momentumTensor] = [[MPSGraphTensorData alloc] initWithMTLBuffer:momentumBuffer
+                                                                                    shape:shape
+                                                                                 dataType:MPSDataTypeFloat32];
+
+                    NSArray<MPSGraphTensor*>* targetTensors = @[updatedWeight, updatedMomentum];
+                    NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
+                        [graph runWithMTLCommandQueue:commandQueue
+                                                feeds:feeds
+                                        targetTensors:targetTensors
+                                     targetOperations:nil];
+
+                    // Copy results back to buffers
+                    MPSGraphTensorData* weightResult = results[updatedWeight];
+                    MPSGraphTensorData* momentumResult = results[updatedMomentum];
+                    
+                    if (weightResult && momentumResult) {
+                        float* weightPtr = (float*)[weightBuffer contents];
+                        [[weightResult mpsndarray] readBytes:weightPtr strideBytes:nil];
+                        [weightBuffer didModifyRange:NSMakeRange(0, bufferSize)];
+                        
+                        float* momentumPtr = (float*)[momentumBuffer contents];
+                        [[momentumResult mpsndarray] readBytes:momentumPtr strideBytes:nil];
+                        [momentumBuffer didModifyRange:NSMakeRange(0, bufferSize)];
+                    }
+
+                } else {
+                    // Vanilla SGD: weight = weight - learning_rate * gradient
+                    MPSGraphTensor* learningRateConstant = [graph constantWithScalar:learning_rate
+                                                                            dataType:MPSDataTypeFloat32];
+                    MPSGraphTensor* scaledGradient = [graph multiplicationWithPrimaryTensor:learningRateConstant
+                                                                            secondaryTensor:finalGradient
+                                                                                       name:@"scaled_gradient"];
+                    updatedWeight = [graph subtractionWithPrimaryTensor:weightTensor
+                                                        secondaryTensor:scaledGradient
+                                                                   name:@"updated_weight"];
+
+                    // Execute graph for vanilla SGD
+                    NSMutableDictionary<MPSGraphTensor*, MPSGraphTensorData*>* feeds = [[NSMutableDictionary alloc] init];
+                    feeds[weightTensor] = [[MPSGraphTensorData alloc] initWithMTLBuffer:weightBuffer
+                                                                                  shape:shape
+                                                                               dataType:MPSDataTypeFloat32];
+                    feeds[gradientTensor] = [[MPSGraphTensorData alloc] initWithMTLBuffer:gradientBuffer
+                                                                                    shape:shape
+                                                                                 dataType:MPSDataTypeFloat32];
+
+                    NSArray<MPSGraphTensor*>* targetTensors = @[updatedWeight];
+                    NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results = 
+                        [graph runWithMTLCommandQueue:commandQueue
+                                                feeds:feeds
+                                        targetTensors:targetTensors
+                                     targetOperations:nil];
+
+                    // Copy result back to weight buffer
+                    MPSGraphTensorData* weightResult = results[updatedWeight];
+                    if (weightResult) {
+                        float* weightPtr = (float*)[weightBuffer contents];
+                        [[weightResult mpsndarray] readBytes:weightPtr strideBytes:nil];
+                        [weightBuffer didModifyRange:NSMakeRange(0, bufferSize)];
+                    }
+                }
+            }
+        }
+
+        return 0; // Success
+
+    } @catch (NSException* exception) {
+        NSLog(@"❌ SGD Step exception: %@", exception.reason);
+        return -10;
+    }
+}
+
 // Execute Adam optimization step using MPSGraph for optimal GPU performance
 int execute_adam_step_mpsgraph(
     uintptr_t device_ptr,

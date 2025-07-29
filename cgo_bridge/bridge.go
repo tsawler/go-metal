@@ -71,6 +71,21 @@ uintptr_t allocate_metal_buffer(uintptr_t device, int size, int device_type);
 void deallocate_metal_buffer(uintptr_t buffer);
 void destroy_training_engine(uintptr_t engine);
 
+// SGD optimizer functions
+int execute_sgd_step_mpsgraph(
+    uintptr_t device,
+    uintptr_t* weight_buffers,
+    uintptr_t* gradient_buffers,
+    uintptr_t* momentum_buffers,
+    int num_weights,
+    int* buffer_sizes,
+    float learning_rate,
+    float momentum,
+    float weight_decay,
+    int nesterov,
+    int step_count
+);
+
 // Adam optimizer functions
 
 // MPSGraph-based Adam optimizer for optimal GPU performance
@@ -870,6 +885,89 @@ func BuildInferenceGraph(
 ) error {
 	// For now, assume the graph is already built by the engine creation
 	// In a full implementation, this would call a C function to build inference-optimized graph
+	return nil
+}
+
+// ExecuteSGDStepMPSGraph executes a single SGD optimization step using MPSGraph for optimal GPU performance
+func ExecuteSGDStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	momentum float32,
+	weightDecay float32,
+	nesterov bool,
+	stepCount int,
+) error {
+	if len(weightBuffers) != len(gradientBuffers) ||
+		len(weightBuffers) != len(bufferSizes) {
+		return fmt.Errorf("weight, gradient, and buffer size arrays must have the same length")
+	}
+
+	// For SGD with momentum, check momentum buffers
+	if momentum > 0 && len(weightBuffers) != len(momentumBuffers) {
+		return fmt.Errorf("momentum buffers must have same length as weight buffers when momentum > 0")
+	}
+
+	numWeights := len(weightBuffers)
+
+	// Convert Go slices to C arrays
+	cWeightBuffers := make([]C.uintptr_t, numWeights)
+	cGradientBuffers := make([]C.uintptr_t, numWeights)
+	cMomentumBuffers := make([]C.uintptr_t, numWeights)
+	cBufferSizes := make([]C.int, numWeights)
+
+	for i := 0; i < numWeights; i++ {
+		cWeightBuffers[i] = C.uintptr_t(uintptr(weightBuffers[i]))
+		cGradientBuffers[i] = C.uintptr_t(uintptr(gradientBuffers[i]))
+		if momentum > 0 && i < len(momentumBuffers) {
+			cMomentumBuffers[i] = C.uintptr_t(uintptr(momentumBuffers[i]))
+		} else {
+			cMomentumBuffers[i] = 0 // NULL pointer for vanilla SGD
+		}
+		cBufferSizes[i] = C.int(bufferSizes[i])
+	}
+
+	// Get pointers to first elements or nil
+	var cWeightPtr *C.uintptr_t
+	var cGradientPtr *C.uintptr_t
+	var cMomentumPtr *C.uintptr_t
+	var cSizesPtr *C.int
+
+	if numWeights > 0 {
+		cWeightPtr = &cWeightBuffers[0]
+		cGradientPtr = &cGradientBuffers[0]
+		cMomentumPtr = &cMomentumBuffers[0]
+		cSizesPtr = &cBufferSizes[0]
+	}
+
+	var nesterovInt int
+	if nesterov {
+		nesterovInt = 1
+	} else {
+		nesterovInt = 0
+	}
+
+	result := C.execute_sgd_step_mpsgraph(
+		C.uintptr_t(uintptr(device)),
+		cWeightPtr,
+		cGradientPtr,
+		cMomentumPtr,
+		C.int(numWeights),
+		cSizesPtr,
+		C.float(learningRate),
+		C.float(momentum),
+		C.float(weightDecay),
+		C.int(nesterovInt),
+		C.int(stepCount),
+	)
+
+	if result != 0 {
+		return fmt.Errorf("SGD step execution failed with error code: %d", result)
+	}
+
 	return nil
 }
 

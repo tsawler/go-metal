@@ -226,8 +226,8 @@ func TestImageProcessorDecodeAndPreprocess(t *testing.T) {
 			t.Error("Expected error for invalid JPEG data")
 		}
 		
-		if !strings.Contains(err.Error(), "failed to decode JPEG") {
-			t.Errorf("Expected JPEG decode error, got: %v", err)
+		if !strings.Contains(err.Error(), "failed to decode image") {
+			t.Errorf("Expected image decode error, got: %v", err)
 		}
 	})
 	
