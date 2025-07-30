@@ -1172,7 +1172,7 @@ testScaled := scaler.transform(testData)  // Apply same scaling
 #### Quick Diagnostic Guide
 
 | Symptom | Likely Cause | First Action |
-|---------|--------------|--------------||
+|---------|--------------|--------------|
 | Loss = NaN | Unscaled features, high LR | Check data scaling, reduce LR |
 | Loss not decreasing | Underfitting, wrong loss | Increase capacity, check loss function |
 | Validation loss increases | Overfitting | Add regularization, early stopping |
