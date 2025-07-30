@@ -387,45 +387,36 @@ Let's explore how different loss functions handle outliers and noise.
 
 ### Comparing MSE, MAE, and Huber Loss
 
-```go
-func compareRegressionLosses() {
-    fmt.Println("🔍 Comparing Regression Loss Functions")
-    
-    lossFunctions := []struct {
-        name string
-        lossType training.LossFunction
-        description string
-        useCase string
-    }{
-        {
-            "Mean Squared Error",
-            training.MeanSquaredError,
-            "Quadratic penalty, smooth gradients",
-            "Standard regression, normal data",
-        },
-        {
-            "Mean Absolute Error", 
-            training.MeanAbsoluteError,
-            "Linear penalty, robust to outliers",
-            "Data with outliers, robust regression",
-        },
-        {
-            "Huber Loss",
-            training.Huber,
-            "Combines MSE + MAE benefits",
-            "Best of both worlds",
-        },
-    }
-    
-    fmt.Printf("%-20s | %-35s | %-30s\n", "Loss Function", "Description", "Best Use Case")
-    fmt.Println("---------------------|-------------------------------------|------------------------------")
-    
-    for _, loss := range lossFunctions {
-        fmt.Printf("%-20s | %-35s | %-30s\n", 
-                   loss.name, loss.description, loss.useCase)
-    }
-}
-```
+Choosing the right loss function is crucial for regression performance. Here's a comparison of the three main loss functions available in go-metal:
+
+| Loss Function | Description | Best Use Case | Formula |
+|---------------|-------------|---------------|----------|
+| **Mean Squared Error (MSE)** | Quadratic penalty, smooth gradients | Standard regression with normally distributed errors | `(y_true - y_pred)²` |
+| **Mean Absolute Error (MAE)** | Linear penalty, robust to outliers | Data with outliers or heavy-tailed distributions | `|y_true - y_pred|` |
+| **Huber Loss** | Combines MSE + MAE benefits | Best of both worlds - smooth near zero, robust to outliers | Quadratic for small errors, linear for large |
+
+#### When to Use Each Loss Function
+
+**Mean Squared Error (MSE)**
+- ✅ Default choice for most regression problems
+- ✅ Penalizes large errors more heavily (quadratic)
+- ✅ Smooth gradients lead to stable training
+- ❌ Sensitive to outliers
+- Use when: Your data is clean and errors are normally distributed
+
+**Mean Absolute Error (MAE)**
+- ✅ Robust to outliers
+- ✅ All errors weighted equally (linear penalty)
+- ✅ More interpretable (same units as target)
+- ❌ Non-smooth at zero (can cause training instability)
+- Use when: Your data contains outliers or you want equal treatment of all errors
+
+**Huber Loss**
+- ✅ Combines benefits of MSE and MAE
+- ✅ Smooth gradients near zero (like MSE)
+- ✅ Robust to outliers (like MAE)
+- ✅ Tunable delta parameter for transition point
+- Use when: You want robustness without sacrificing training stability
 
 ### Outlier-Resistant Regression Example
 
@@ -611,114 +602,256 @@ func buildTimeSeriesModel(batchSize, sequenceLength, outputSize int) (*layers.Mo
 
 ### Feature Scaling and Normalization
 
+Feature scaling is crucial for regression models to ensure all features contribute equally to the learning process and to improve numerical stability during optimization.
+
+#### Why Scale Features?
+
+Features often have different units and ranges which can cause problems:
+- **Different units**: Age (0-100 years) vs Income ($0-$1,000,000) vs Square footage (500-5000 sq ft)
+- **Different ranges**: Small features get overshadowed by large ones
+- **Optimization efficiency**: Gradient descent converges faster with scaled features
+- **Numerical stability**: Prevents overflow/underflow in calculations
+
+#### Common Scaling Methods
+
+**1. Min-Max Normalization**
+Scales features to a fixed range, typically [0, 1]:
 ```go
-func demonstrateFeatureScaling() {
-    fmt.Println("📊 Feature Scaling Techniques")
+x_scaled = (x - min) / (max - min)
+```
+- **Pros**: Bounded range, preserves zero values
+- **Cons**: Sensitive to outliers
+- **Use when**: You know the approximate min/max values
+
+**2. Z-Score Standardization**
+Transforms features to have zero mean and unit variance:
+```go
+x_scaled = (x - mean) / std
+```
+- **Pros**: Handles outliers better than min-max
+- **Cons**: No bounded range
+- **Use when**: Features are normally distributed
+
+**3. Robust Scaling**
+Uses median and interquartile range (IQR) instead of mean and standard deviation:
+```go
+x_scaled = (x - median) / IQR
+```
+- **Pros**: Very robust to outliers
+- **Cons**: Less common, may need explanation
+- **Use when**: Dataset contains many outliers
+
+#### Practical Implementation Example
+
+```go
+// Min-max scaling implementation
+func minMaxScale(data []float32) []float32 {
+    min := data[0]
+    max := data[0]
     
-    fmt.Println("\n🎯 Why Scale Features?")
-    fmt.Println("   • Different units (age vs income vs sqft)")
-    fmt.Println("   • Different ranges (0-100 vs 0-1000000)")
-    fmt.Println("   • Optimization efficiency")
-    fmt.Println("   • Numerical stability")
+    // Find min and max
+    for _, val := range data {
+        if val < min {
+            min = val
+        }
+        if val > max {
+            max = val
+        }
+    }
     
-    fmt.Println("\n📏 Scaling Methods:")
+    // Scale data
+    scaled := make([]float32, len(data))
+    rangeVal := max - min
+    if rangeVal > 0 {
+        for i, val := range data {
+            scaled[i] = (val - min) / rangeVal
+        }
+    }
     
-    fmt.Println("\n1. Min-Max Normalization:")
-    fmt.Println("   x_scaled = (x - min) / (max - min)")
-    fmt.Println("   Result: [0, 1] range")
+    return scaled
+}
+
+// Z-score standardization implementation
+func standardize(data []float32) []float32 {
+    // Calculate mean
+    var sum float32
+    for _, val := range data {
+        sum += val
+    }
+    mean := sum / float32(len(data))
     
-    fmt.Println("\n2. Z-Score Standardization:")
-    fmt.Println("   x_scaled = (x - mean) / std")
-    fmt.Println("   Result: mean=0, std=1")
+    // Calculate standard deviation
+    var variance float32
+    for _, val := range data {
+        diff := val - mean
+        variance += diff * diff
+    }
+    std := float32(math.Sqrt(float64(variance / float32(len(data)))))
     
-    fmt.Println("\n3. Robust Scaling:")
-    fmt.Println("   x_scaled = (x - median) / IQR")
-    fmt.Println("   Result: Less sensitive to outliers")
+    // Standardize data
+    scaled := make([]float32, len(data))
+    if std > 0 {
+        for i, val := range data {
+            scaled[i] = (val - mean) / std
+        }
+    }
     
-    fmt.Println("\n💡 Implementation:")
-    fmt.Println("   // Min-max example")
-    fmt.Println("   min, max := 0.0, 1000.0")
-    fmt.Println("   scaled := (value - min) / (max - min)")
+    return scaled
 }
 ```
 
 ### Regression Evaluation Metrics
 
+Evaluating regression models requires understanding different metrics, each providing unique insights into model performance.
+
+#### Key Regression Metrics
+
+**1. Mean Squared Error (MSE)**
+- **Formula**: `MSE = (1/n) * Σ(y_true - y_pred)²`
+- **Interpretation**: Average of squared differences; lower is better
+- **Units**: Squared units of the target variable
+- **Use Case**: Standard metric for model comparison
+- **Pros**: Penalizes large errors heavily, smooth for optimization
+- **Cons**: Not interpretable in original units, sensitive to outliers
+
+**2. Root Mean Squared Error (RMSE)**
+- **Formula**: `RMSE = √MSE`
+- **Interpretation**: Square root of MSE; lower is better
+- **Units**: Same as target variable
+- **Use Case**: When you need interpretable error magnitude
+- **Pros**: Interpretable units, maintains MSE properties
+- **Cons**: Still sensitive to outliers
+
+**3. Mean Absolute Error (MAE)**
+- **Formula**: `MAE = (1/n) * Σ|y_true - y_pred|`
+- **Interpretation**: Average absolute difference; lower is better
+- **Units**: Same as target variable
+- **Use Case**: When robustness to outliers is important
+- **Pros**: Robust to outliers, easy to interpret
+- **Cons**: Less smooth for optimization
+
+**4. R² Score (Coefficient of Determination)**
+- **Formula**: `R² = 1 - (SS_residual / SS_total)`
+- **Interpretation**: Proportion of variance explained; 0-1, higher is better
+- **Units**: Dimensionless (percentage when multiplied by 100)
+- **Use Case**: Understanding model explanatory power
+- **Pros**: Normalized metric, easy comparison across datasets
+- **Cons**: Can be misleading for non-linear relationships
+
+#### Practical Implementation
+
 ```go
-func regressionEvaluationMetrics() {
-    fmt.Println("📈 Regression Evaluation Metrics")
+// Calculate regression metrics
+func calculateMetrics(predictions, targets []float32) map[string]float32 {
+    n := float32(len(predictions))
+    var mse, mae, targetMean float32
     
-    metrics := []struct {
-        name string
-        formula string
-        interpretation string
-        use_case string
-    }{
-        {
-            "Mean Squared Error (MSE)",
-            "MSE = (1/n) * Σ(y_true - y_pred)²",
-            "Lower is better, units²",
-            "Standard regression metric",
-        },
-        {
-            "Root Mean Squared Error (RMSE)",
-            "RMSE = √MSE",
-            "Lower is better, same units as target",
-            "Interpretable error magnitude",
-        },
-        {
-            "Mean Absolute Error (MAE)",
-            "MAE = (1/n) * Σ|y_true - y_pred|",
-            "Lower is better, same units as target",
-            "Robust to outliers",
-        },
-        {
-            "R² Score (Coefficient of Determination)",
-            "R² = 1 - SS_res/SS_tot",
-            "0-1, higher is better",
-            "Proportion of variance explained",
-        },
+    // Calculate target mean for R²
+    for _, target := range targets {
+        targetMean += target
+    }
+    targetMean /= n
+    
+    // Calculate errors and variances
+    var ssRes, ssTot float32
+    for i := range predictions {
+        error := targets[i] - predictions[i]
+        mse += error * error
+        mae += float32(math.Abs(float64(error)))
+        
+        ssRes += error * error
+        ssTot += (targets[i] - targetMean) * (targets[i] - targetMean)
     }
     
-    fmt.Printf("%-35s | %-30s | %-25s | %-25s\n",
-               "Metric", "Formula", "Interpretation", "Use Case")
-    fmt.Println("-------------------------------------|--------------------------------|---------------------------|-------------------------")
+    mse /= n
+    mae /= n
+    rmse := float32(math.Sqrt(float64(mse)))
+    r2 := 1.0 - (ssRes / ssTot)
     
-    for _, metric := range metrics {
-        fmt.Printf("%-35s | %-30s | %-25s | %-25s\n",
-                   metric.name, metric.formula, metric.interpretation, metric.use_case)
+    return map[string]float32{
+        "MSE":  mse,
+        "RMSE": rmse,
+        "MAE":  mae,
+        "R2":   r2,
     }
 }
 ```
 
 ### Model Validation Techniques
 
+Proper validation is essential to ensure your regression model generalizes well to unseen data. Here are the key techniques:
+
+#### Train-Validation-Test Split
+
+Divide your dataset into three parts:
+- **Training Set (60-70%)**: Used for model learning and parameter updates
+- **Validation Set (15-20%)**: Used for hyperparameter tuning and model selection
+- **Test Set (15-20%)**: Used for final, unbiased evaluation
+
 ```go
-func demonstrateModelValidation() {
-    fmt.Println("✅ Model Validation Techniques")
+// Example data split implementation
+func splitData(data []float32, labels []float32, trainRatio, valRatio float32) (
+    trainData, trainLabels,
+    valData, valLabels,
+    testData, testLabels []float32) {
     
-    fmt.Println("\n🎯 Train-Validation-Test Split:")
-    fmt.Println("   • Training: 60-70% (model learning)")
-    fmt.Println("   • Validation: 15-20% (hyperparameter tuning)")
-    fmt.Println("   • Test: 15-20% (final evaluation)")
+    n := len(data)
+    trainEnd := int(float32(n) * trainRatio)
+    valEnd := trainEnd + int(float32(n) * valRatio)
     
-    fmt.Println("\n🔄 Cross-Validation:")
-    fmt.Println("   • K-fold: Split data into K parts")
-    fmt.Println("   • Train on K-1 parts, validate on 1")
-    fmt.Println("   • Repeat K times, average results")
+    trainData = data[:trainEnd]
+    trainLabels = labels[:trainEnd]
+    valData = data[trainEnd:valEnd]
+    valLabels = labels[trainEnd:valEnd]
+    testData = data[valEnd:]
+    testLabels = labels[valEnd:]
     
-    fmt.Println("\n📊 Overfitting Detection:")
-    fmt.Println("   • Training loss decreases, validation increases")
-    fmt.Println("   • Large gap between training and validation")
-    fmt.Println("   • Model memorizes rather than generalizes")
-    
-    fmt.Println("\n🔧 Prevention Techniques:")
-    fmt.Println("   • Regularization (L1, L2, dropout)")
-    fmt.Println("   • Early stopping")
-    fmt.Println("   • More training data")
-    fmt.Println("   • Simpler model architecture")
+    return
 }
 ```
+
+#### Cross-Validation
+
+**K-Fold Cross-Validation** provides more robust evaluation:
+1. Split data into K equal parts (folds)
+2. Train on K-1 folds, validate on the remaining fold
+3. Repeat K times, using each fold as validation once
+4. Average the K results for final metric
+
+**Benefits**:
+- Uses all data for both training and validation
+- Reduces variance in performance estimates
+- Especially useful for smaller datasets
+
+#### Overfitting Detection and Prevention
+
+**Signs of Overfitting**:
+- Training loss continues decreasing while validation loss increases
+- Large gap between training and validation performance
+- Model performs poorly on new, unseen data
+- Extremely high R² on training data but low on validation
+
+**Prevention Techniques**:
+
+1. **Regularization**
+   - L1 (Lasso): Encourages sparsity, feature selection
+   - L2 (Ridge): Prevents large weights, smooths model
+   - Elastic Net: Combines L1 and L2
+
+2. **Early Stopping**
+   - Monitor validation loss during training
+   - Stop when validation loss stops improving
+   - Save best model checkpoint
+
+3. **Data Augmentation**
+   - Generate synthetic training examples
+   - Add controlled noise to inputs
+   - Apply domain-specific transformations
+
+4. **Model Simplification**
+   - Reduce number of layers/parameters
+   - Use dropout for neural networks
+   - Feature selection to remove irrelevant inputs
 
 ## 🛠️ Practical Applications
 
@@ -779,107 +912,272 @@ func completeHousePriceExample() {
 
 ### Stock Price Prediction
 
+#### Problem Overview
+
+Stock price prediction demonstrates time series regression with unique challenges:
+
+**Problem Setup**:
+- **Input**: Historical price sequences (open, high, low, close, volume)
+- **Output**: Next period's price or price movement
+- **Challenges**: High volatility, market noise, external factors
+
+#### Model Architecture Considerations
+
+**Input Features**:
+- Raw price data (OHLCV)
+- Technical indicators (moving averages, RSI, MACD)
+- Price transformations (returns, log returns)
+- Volume indicators
+- Time-based features (day of week, month)
+
+**Loss Function Selection**:
+- **MAE or Huber Loss**: More robust to price spikes and outliers
+- **Custom Loss**: Weight recent errors more heavily
+- **Directional Loss**: Penalize wrong direction predictions more
+
+**Architecture Design**:
 ```go
-func stockPricePredictionExample() {
-    fmt.Println("📈 Stock Price Prediction Example")
+// Example stock prediction model structure
+model, err := builder.
+    // Process sequential data
+    AddDense(256, true, "sequence_processing").
+    AddReLU("relu1").
+    AddDropout(0.2, "dropout1").  // Prevent overfitting
     
-    fmt.Println("\n🎯 Problem Setup:")
-    fmt.Println("   • Input: Historical prices (sequence)")
-    fmt.Println("   • Output: Next day's price")
-    fmt.Println("   • Challenge: High volatility, noise")
+    // Extract temporal patterns
+    AddDense(128, true, "temporal_features").
+    AddReLU("relu2").
+    AddDropout(0.2, "dropout2").
     
-    fmt.Println("\n🔧 Model Considerations:")
-    fmt.Println("   • Use MAE or Huber (robust to outliers)")
-    fmt.Println("   • Sequence-to-one prediction")
-    fmt.Println("   • Feature engineering (moving averages, etc.)")
-    
-    fmt.Println("\n⚠️ Important Notes:")
-    fmt.Println("   • Stock prediction is inherently difficult")
-    fmt.Println("   • Past performance ≠ future results")
-    fmt.Println("   • Consider this as a technical exercise")
-}
+    // Final prediction
+    AddDense(64, true, "prediction_layer").
+    AddReLU("relu3").
+    AddDense(1, true, "price_output").
+    Compile()
 ```
+
+#### Important Considerations
+
+⚠️ **Disclaimer**: Stock market prediction is extremely challenging due to:
+- Market efficiency hypothesis
+- External factors (news, economics, sentiment)
+- Non-stationary data distributions
+- High noise-to-signal ratio
+
+**Best Practices**:
+1. Treat as a learning exercise, not investment advice
+2. Use proper backtesting with realistic constraints
+3. Account for transaction costs and slippage
+4. Implement risk management strategies
+5. Consider ensemble methods for robustness
 
 ## 🎯 Best Practices Summary
 
 ### Regression Model Design
 
+#### Architecture Design Best Practices
+
+**1. Start Simple, Add Complexity Gradually**
+- Begin with a linear model (single dense layer)
+- Add hidden layers only if linear model underperforms
+- Each layer should have a clear purpose
+- Monitor validation performance with each addition
+
+**2. Layer Configuration**
+- **Hidden Layers**: Use ReLU activation for non-linearity
+- **Output Layer**: No activation function (raw continuous output)
+- **Layer Sizes**: Gradually decrease neurons (funnel architecture)
+- **Initialization**: Use appropriate weight initialization (Xavier/He)
+
+**Example Progressive Architecture**:
 ```go
-func regressionBestPractices() {
-    fmt.Println("🎓 Regression Best Practices")
+// Start simple
+model := builder.AddDense(1, true, "linear").Compile()
+
+// Add complexity if needed
+model := builder.
+    AddDense(64, true, "hidden1").AddReLU("relu1").
+    AddDense(32, true, "hidden2").AddReLU("relu2").
+    AddDense(1, true, "output").Compile()
+```
+
+#### Data Preparation Guidelines
+
+**Essential Steps**:
+1. **Feature Scaling**: Normalize or standardize all inputs
+2. **Outlier Handling**: Identify and handle appropriately
+3. **Missing Values**: Impute or remove
+4. **Feature Engineering**: Create meaningful derived features
+5. **Data Splitting**: Ensure no data leakage between sets
+
+**Data Leakage Prevention**:
+- Scale using only training set statistics
+- Don't use future information in features
+- Maintain temporal order for time series
+- Validate feature engineering on separate data
+
+#### Loss Function Selection Strategy
+
+| Data Characteristics | Recommended Loss | Reason |
+|---------------------|------------------|--------|
+| Clean, normal distribution | MSE | Smooth optimization, fast convergence |
+| Contains outliers | MAE or Huber | Robust to extreme values |
+| Mixed characteristics | Huber | Balanced approach |
+| Financial data | MAE | Equal treatment of all errors |
+| Scientific measurements | MSE | Assumes Gaussian noise |
+
+#### Training Configuration
+
+**Hyperparameter Guidelines**:
+- **Learning Rate**: Start with 0.001-0.01 (lower than classification)
+- **Batch Size**: 32-128 (larger for stable gradients)
+- **Optimizer**: Adam (good default), SGD with momentum (simpler)
+- **Epochs**: Use early stopping based on validation loss
+
+**Monitoring and Evaluation**:
+1. Track both training and validation metrics
+2. Plot learning curves to detect overfitting
+3. Use multiple metrics (MSE, MAE, R²)
+4. Implement early stopping with patience
+5. Save best model based on validation performance
+
+**Early Stopping Implementation**:
+```go
+bestLoss := float32(math.Inf(1))
+patience := 10
+noImprovement := 0
+
+for epoch := 1; epoch <= maxEpochs; epoch++ {
+    // Training step
+    result, _ := trainer.TrainBatch(...)
     
-    fmt.Println("\n🏗️ Architecture Design:")
-    fmt.Println("   ✅ Start with simple linear model")
-    fmt.Println("   ✅ Add complexity gradually (more layers)")
-    fmt.Println("   ✅ No activation on final layer (raw output)")
-    fmt.Println("   ✅ Use ReLU for hidden layers")
+    // Validation step
+    valLoss := evaluateValidation(...)
     
-    fmt.Println("\n📊 Data Preparation:")
-    fmt.Println("   ✅ Scale/normalize input features")
-    fmt.Println("   ✅ Handle outliers appropriately")
-    fmt.Println("   ✅ Split data properly (train/val/test)")
-    fmt.Println("   ✅ Check for data leakage")
-    
-    fmt.Println("\n🎯 Loss Function Selection:")
-    fmt.Println("   ✅ MSE: Standard choice, smooth gradients")
-    fmt.Println("   ✅ MAE: Robust to outliers")
-    fmt.Println("   ✅ Huber: Best of both worlds")
-    
-    fmt.Println("\n⚙️ Training Configuration:")
-    fmt.Println("   ✅ Lower learning rates than classification")
-    fmt.Println("   ✅ Monitor validation loss for overfitting")
-    fmt.Println("   ✅ Use early stopping")
-    fmt.Println("   ✅ Evaluate with multiple metrics")
+    if valLoss < bestLoss {
+        bestLoss = valLoss
+        noImprovement = 0
+        // Save model checkpoint
+    } else {
+        noImprovement++
+        if noImprovement >= patience {
+            fmt.Println("Early stopping triggered")
+            break
+        }
+    }
 }
 ```
 
 ### Common Pitfalls and Solutions
 
+#### 1. Unscaled Features
+
+**Problem**: Different feature scales cause optimization issues
+**Symptoms**:
+- Extremely slow convergence
+- Loss jumping erratically
+- Gradient explosion or vanishing
+- Some features dominating others
+
+**Solutions**:
 ```go
-func commonRegressionPitfalls() {
-    fmt.Println("⚠️ Common Regression Pitfalls")
-    
-    pitfalls := []struct {
-        problem string
-        symptom string
-        solution string
-    }{
-        {
-            "Unscaled features",
-            "Slow convergence, numerical issues",
-            "Normalize inputs to [0,1] or standardize",
-        },
-        {
-            "Wrong loss function",
-            "Poor convergence, outlier sensitivity",
-            "Use MAE/Huber for outliers, MSE for clean data",
-        },
-        {
-            "Overfitting",
-            "Training loss << validation loss",
-            "Regularization, more data, simpler model",
-        },
-        {
-            "Underfitting",
-            "High training and validation loss",
-            "More complex model, better features",
-        },
-        {
-            "Data leakage",
-            "Unrealistically good performance",
-            "Careful feature engineering, proper splits",
-        },
-    }
-    
-    fmt.Printf("%-20s | %-30s | %-35s\n", "Problem", "Symptom", "Solution")
-    fmt.Println("---------------------|--------------------------------|------------------------------------")
-    
-    for _, pitfall := range pitfalls {
-        fmt.Printf("%-20s | %-30s | %-35s\n",
-                   pitfall.problem, pitfall.symptom, pitfall.solution)
-    }
+// Always scale your features
+scaledData := make([]float32, len(data))
+for i := range data {
+    scaledData[i] = (data[i] - min) / (max - min)  // Min-max scaling
+    // OR
+    scaledData[i] = (data[i] - mean) / std  // Standardization
 }
 ```
+
+#### 2. Wrong Loss Function Choice
+
+**Problem**: Loss function doesn't match data characteristics
+**Symptoms**:
+- Model sensitive to outliers (using MSE)
+- Unstable training (using MAE)
+- Poor convergence
+
+**Solutions**:
+- Clean data → MSE
+- Outliers present → MAE or Huber
+- Unknown distribution → Start with Huber
+- Monitor performance with multiple metrics
+
+#### 3. Overfitting
+
+**Problem**: Model memorizes training data
+**Symptoms**:
+- Training loss << validation loss
+- Perfect training performance, poor test performance
+- Loss curves diverge after initial epochs
+
+**Solutions**:
+1. **Regularization**:
+   ```go
+   // Add L2 regularization
+   config.L2Penalty = 0.001
+   ```
+2. **Dropout layers** (for neural networks)
+3. **Reduce model complexity**
+4. **Collect more training data**
+5. **Data augmentation**
+
+#### 4. Underfitting
+
+**Problem**: Model too simple for the data
+**Symptoms**:
+- High training AND validation loss
+- Loss plateaus early
+- Poor performance across all metrics
+
+**Solutions**:
+1. **Increase model capacity**:
+   ```go
+   // Add more layers or neurons
+   builder.AddDense(128, true, "layer1").
+          AddReLU("relu1").
+          AddDense(64, true, "layer2")
+   ```
+2. **Feature engineering** - create polynomial or interaction features
+3. **Reduce regularization**
+4. **Train for more epochs**
+
+#### 5. Data Leakage
+
+**Problem**: Test information leaks into training
+**Symptoms**:
+- Unrealistically high performance
+- Model fails in production
+- Large train-test performance gap
+
+**Common Causes and Solutions**:
+
+| Leakage Type | Example | Solution |
+|--------------|---------|----------|
+| Temporal | Using future data in features | Maintain strict time ordering |
+| Preprocessing | Scaling with full dataset stats | Scale using only training data |
+| Duplicate data | Same samples in train and test | Remove duplicates before splitting |
+| Target leakage | Features contain target information | Careful feature selection |
+
+**Prevention Checklist**:
+```go
+// Correct approach
+trainData, testData := splitData(data)
+scaler := fitScaler(trainData)  // Fit only on training
+trainScaled := scaler.transform(trainData)
+testScaled := scaler.transform(testData)  // Apply same scaling
+```
+
+#### Quick Diagnostic Guide
+
+| Symptom | Likely Cause | First Action |
+|---------|--------------|--------------||
+| Loss = NaN | Unscaled features, high LR | Check data scaling, reduce LR |
+| Loss not decreasing | Underfitting, wrong loss | Increase capacity, check loss function |
+| Validation loss increases | Overfitting | Add regularization, early stopping |
+| Erratic loss values | Batch too small, high LR | Increase batch size, reduce LR |
+| Good metrics, bad predictions | Data leakage | Review preprocessing pipeline |
 
 ## 🚀 Next Steps
 
