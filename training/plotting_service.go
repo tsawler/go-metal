@@ -524,7 +524,7 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 		
 		if batchResp.Success {
 			fmt.Printf("✅ Successfully sent %d plots to sidecar (batch ID: %s)\n", batchResp.Summary.Successful, batchResp.BatchID)
-			fmt.Printf("🔍 Debug: Dashboard URL from response: '%s'\n", batchResp.DashboardURL)
+			// fmt.Printf("🔍 Debug: Dashboard URL from response: '%s'\n", batchResp.DashboardURL)
 			
 			// Map batch results back to our plot types
 			plotTypeIndex := 0
@@ -549,7 +549,7 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 			// Try to open dashboard if available
 			if batchResp.DashboardURL != "" {
 				dashboardURL := fmt.Sprintf("%s%s", ps.baseURL, batchResp.DashboardURL)
-				fmt.Printf("🔍 Debug: Full dashboard URL: '%s'\n", dashboardURL)
+				// fmt.Printf("🔍 Debug: Full dashboard URL: '%s'\n", dashboardURL)
 				if err := ps.OpenInBrowser(dashboardURL); err != nil {
 					fmt.Printf("Warning: Failed to open dashboard automatically: %v\n", err)
 					fmt.Printf("Please open manually: %s\n", dashboardURL)
@@ -563,7 +563,7 @@ func (ps *PlottingService) GenerateAndSendAllPlotsWithBrowser(collector *Visuali
 				for _, result := range results {
 					if result.Success && result.ViewURL != "" {
 						plotURL := fmt.Sprintf("%s%s", ps.baseURL, result.ViewURL)
-						fmt.Printf("🔍 Debug: Opening individual plot: %s\n", plotURL)
+						// fmt.Printf("🔍 Debug: Opening individual plot: %s\n", plotURL)
 						if err := ps.OpenInBrowser(plotURL); err != nil {
 							fmt.Printf("Warning: Failed to open plot automatically: %v\n", err)
 						} else {
