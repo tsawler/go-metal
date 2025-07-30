@@ -3,6 +3,7 @@ package layers
 import (
 	"fmt"
 
+	"github.com/tsawler/go-metal/cgo_bridge"
 	"github.com/tsawler/go-metal/memory"
 )
 
@@ -1611,7 +1612,7 @@ func boolToInt32(b bool) int32 {
 	return 0
 }
 
-// ConvertToCGOLayerSpecs converts DynamicLayerSpec array to CGO-compatible format
+// ConvertToCGOLayerSpecs converts DynamicLayerSpec array to CGO-compatible LayerSpecC format
 // convertIntSliceToInt32Array converts []int to [4]int32 for CGO compatibility
 func convertIntSliceToInt32Array(slice []int) [4]int32 {
 	var arr [4]int32
@@ -1621,22 +1622,24 @@ func convertIntSliceToInt32Array(slice []int) [4]int32 {
 	return arr
 }
 
-func ConvertToCGOLayerSpecs(dynamicSpecs []DynamicLayerSpec) []interface{} {
-	// We need to import the cgo_bridge package to use LayerSpecC
-	// For now, return interface{} and handle conversion in the engine
-	specs := make([]interface{}, len(dynamicSpecs))
+func ConvertToCGOLayerSpecs(dynamicSpecs []DynamicLayerSpec) []cgo_bridge.LayerSpecC {
+	specs := make([]cgo_bridge.LayerSpecC, len(dynamicSpecs))
 	for i, spec := range dynamicSpecs {
-		specs[i] = map[string]interface{}{
-			"layer_type":        spec.LayerType,
-			"name_bytes":        spec.NameBytes,
-			"input_shape":       spec.InputShape,
-			"input_shape_len":   spec.InputShapeLen,
-			"output_shape":      spec.OutputShape,
-			"output_shape_len":  spec.OutputShapeLen,
-			"param_int":         spec.ParamInt,
-			"param_float":       spec.ParamFloat,
-			"param_int_count":   spec.ParamIntCount,
-			"param_float_count": spec.ParamFloatCount,
+		specs[i] = cgo_bridge.LayerSpecC{
+			LayerType:        spec.LayerType,
+			Name:             spec.NameBytes,
+			InputShape:       spec.InputShape,
+			InputShapeLen:    spec.InputShapeLen,
+			OutputShape:      spec.OutputShape,
+			OutputShapeLen:   spec.OutputShapeLen,
+			ParamInt:         spec.ParamInt,
+			ParamFloat:       spec.ParamFloat,
+			ParamIntCount:    spec.ParamIntCount,
+			ParamFloatCount:  spec.ParamFloatCount,
+			RunningMean:      spec.RunningMean,
+			RunningVar:       spec.RunningVar,
+			RunningStatsSize: int32(len(spec.RunningMean)),
+			HasRunningStats:  boolToInt32(spec.HasRunningStats),
 		}
 	}
 	return specs
