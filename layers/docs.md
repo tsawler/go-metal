@@ -8,7 +8,7 @@
 #### func  ConvertToCGOLayerSpecs
 
 ```go
-func ConvertToCGOLayerSpecs(dynamicSpecs []DynamicLayerSpec) []interface{}
+func ConvertToCGOLayerSpecs(dynamicSpecs []DynamicLayerSpec) []cgo_bridge.LayerSpecC
 ```
 
 #### type DynamicLayerSpec

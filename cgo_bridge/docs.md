@@ -406,6 +406,25 @@ func ExecuteRMSPropStepMPSGraph(
 ExecuteRMSPropStepMPSGraph executes a single RMSProp optimization step using
 MPSGraph for optimal GPU performance
 
+#### func  ExecuteSGDStepMPSGraph
+
+```go
+func ExecuteSGDStepMPSGraph(
+	device unsafe.Pointer,
+	weightBuffers []unsafe.Pointer,
+	gradientBuffers []unsafe.Pointer,
+	momentumBuffers []unsafe.Pointer,
+	bufferSizes []int,
+	learningRate float32,
+	momentum float32,
+	weightDecay float32,
+	nesterov bool,
+	stepCount int,
+) error
+```
+ExecuteSGDStepMPSGraph executes a single SGD optimization step using MPSGraph
+for optimal GPU performance
+
 #### func  ExecuteTrainingStep
 
 ```go
