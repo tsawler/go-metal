@@ -603,124 +603,300 @@ func demonstrateConvMath() {
 
 ### Performance Optimization for CNNs
 
+⚡ **CNN Performance Optimization Guide**
+
+#### Batch Size Optimization
+
+🎯 **Recommended Batch Sizes**:
+
+| GPU Memory | CNN Type | Recommended Batch Size | Notes |
+|------------|----------|----------------------|-------|
+| 8GB | Small CNN (3-5 layers) | 32-64 | Good balance |
+| 8GB | Medium CNN (10-15 layers) | 16-32 | Memory constrained |
+| 8GB | Large CNN (20+ layers) | 8-16 | May need gradient accumulation |
+| 16GB+ | Any size | 32-128 | More flexibility |
+
+**Tips**:
+- Start with smaller batch sizes for CNNs (more memory intensive than MLPs)
+- Increase gradually while monitoring GPU memory
+- Power of 2 sizes (8, 16, 32, 64) often perform better on GPUs
+- Use gradient accumulation for effective larger batches
+
+#### Channel Progression Strategy
+
+🔢 **Optimal Filter Counts**:
+
+```
+First Layer:  16-32 filters (captures basic edges/colors)
+     ↓
+Middle Layers: Double when spatial size halves
+     ↓
+Deep Layers:  128-512 filters (high-level features)
+```
+
+**Common Progressions**:
+- Small models: 16 → 32 → 64
+- Medium models: 32 → 64 → 128
+- Large models: 64 → 128 → 256 → 512
+
+#### Architecture Optimization
+
+🏗️ **Kernel Size Guidelines**:
+
+| Pattern | Memory Cost | Computation | When to Use |
+|---------|------------|-------------|-------------|
+| Many 3×3 | Medium | Medium | Default choice - proven effective |
+| Few 5×5 | High | High | Early layers for larger receptive field |
+| 1×1 convs | Low | Low | Channel reduction, feature combination |
+| Depthwise separable | Very Low | Low | Mobile/embedded deployment |
+
+#### Memory Management
+
+💾 **Memory Usage Estimation**:
+
 ```go
-func optimizeCNNPerformance() {
-    fmt.Println("⚡ CNN Performance Optimization Tips")
-    
-    fmt.Println("\n🎯 Batch Size Optimization:")
-    fmt.Println("   • Start with 8-16 for CNNs (memory intensive)")
-    fmt.Println("   • Increase gradually based on available GPU memory")
-    fmt.Println("   • Power of 2 sizes often perform better")
-    
-    fmt.Println("\n🔢 Channel Progression:")
-    fmt.Println("   • Start with 16-32 filters in first layer")
-    fmt.Println("   • Double filters when spatial size halves")
-    fmt.Println("   • Common progressions: 32→64→128 or 16→32→64→128")
-    
-    fmt.Println("\n🏗️ Architecture Patterns:")
-    fmt.Println("   • Use 3×3 kernels as standard (proven effective)")
-    fmt.Println("   • Add 1×1 for channel reduction")
-    fmt.Println("   • Use 5×5 sparingly (higher memory cost)")
-    
-    fmt.Println("\n💾 Memory Management:")
-    fmt.Println("   • CNNs require more GPU memory than MLPs")
-    fmt.Println("   • Monitor memory usage with smaller test batches")
-    fmt.Println("   • Use mixed precision for larger models")
+// Rough memory calculation for a conv layer
+memoryMB := (batchSize * channels * height * width * 4) / (1024 * 1024)
+
+// Example: 32×64×28×28 feature map
+// Memory: 32 * 64 * 28 * 28 * 4 / (1024*1024) ≈ 6.25 MB
+```
+
+**Memory Optimization Techniques**:
+1. **Gradient Checkpointing**: Trade computation for memory
+2. **Mixed Precision (FP16)**: Halve memory usage
+3. **In-place Operations**: Reuse tensors when possible
+4. **Batch Size Reduction**: Most direct way to reduce memory
+
+#### Performance Profiling
+
+```go
+// Profile CNN performance
+type CNNProfile struct {
+    LayerName       string
+    ComputeTimeMs   float64
+    MemoryMB        float64
+    FLOPs          int64
 }
+
+// Key metrics to monitor:
+// - Forward pass time
+// - Backward pass time
+// - Peak memory usage
+// - GPU utilization percentage
 ```
 
 ## 📊 CNN Architecture Comparison
 
 ### Model Complexity Analysis
 
-```go
-func compareCNNArchitectures() {
-    fmt.Println("📊 CNN Architecture Comparison")
-    fmt.Println()
-    
-    architectures := []struct {
-        name string
-        layers int
-        filters string
-        use_case string
-        complexity string
-    }{
-        {"Simple CNN", 7, "16→32", "Learning/Testing", "Low"},
-        {"Advanced CNN", 15, "32→64→128", "Real datasets", "Medium"},
-        {"Multi-Scale", 11, "16→32→32→64", "Complex patterns", "Medium"},
-        {"MNIST CNN", 13, "32→32→64→64", "Digit recognition", "Medium"},
-        {"CIFAR CNN", 19, "32→64→128", "Color images", "High"},
-    }
-    
-    fmt.Printf("%-12s | %-6s | %-12s | %-15s | %-10s\n",
-               "Architecture", "Layers", "Filters", "Use Case", "Complexity")
-    fmt.Println("-------------|--------|--------------|-----------------|----------")
-    
-    for _, arch := range architectures {
-        fmt.Printf("%-12s | %-6d | %-12s | %-15s | %-10s\n",
-                   arch.name, arch.layers, arch.filters, 
-                   arch.use_case, arch.complexity)
-    }
-}
-```
+📊 **CNN Architecture Comparison**
+
+| Architecture | Layers | Filter Progression | Use Case | Complexity | Parameters |
+|--------------|--------|-------------------|----------|------------|------------|
+| **Simple CNN** | 7 | 16→32 | Learning/Testing | Low | ~50K |
+| **Advanced CNN** | 15 | 32→64→128 | Real datasets | Medium | ~500K |
+| **Multi-Scale** | 11 | 16→32→32→64 | Complex patterns | Medium | ~200K |
+| **MNIST CNN** | 13 | 32→32→64→64 | Digit recognition | Medium | ~400K |
+| **CIFAR CNN** | 19 | 32→64→128 | Color images | High | ~1M |
+
+#### Architecture Details
+
+**Simple CNN** (Tutorial Model):
+- 2 conv blocks + classifier
+- Suitable for grayscale images
+- Fast training, good for learning
+
+**Advanced CNN** (General Purpose):
+- 3-4 conv blocks with pooling
+- Batch normalization layers
+- Dropout regularization
+- Handles RGB images well
+
+**Multi-Scale CNN** (Feature Pyramid):
+- Multiple kernel sizes
+- Captures features at different scales
+- Good for varied object sizes
+
+**MNIST CNN** (Digit Specialist):
+- Optimized for 28×28 grayscale
+- High accuracy (>99%)
+- Efficient architecture
+
+**CIFAR CNN** (Complex Images):
+- Deeper architecture
+- More filters for color features
+- Data augmentation recommended
 
 ## 🎓 Best Practices Summary
 
 ### CNN Design Principles
 
+🎓 **CNN Best Practices**
+
+#### Architecture Design
+
+🏗️ **Design Principles**:
+
+✅ **Start simple, add complexity gradually**
+- Begin with 2-3 conv blocks
+- Add layers only if performance plateaus
+- Monitor validation accuracy improvements
+
+✅ **Use proven patterns**
+- VGG-style: Stacked 3×3 convolutions
+- ResNet-style: Skip connections for deeper networks
+- Inception-style: Multi-scale feature extraction
+
+✅ **Ensure gradual spatial reduction**
+- Avoid aggressive pooling early
+- Typical reduction: 32→16→8→4
+- Maintain aspect ratios when possible
+
+✅ **Filter progression strategy**
+- Start with 16-32 filters
+- Double filters when halving spatial size
+- Common: 32→64→128→256
+
+#### Training Configuration
+
+⚙️ **Optimal Settings**:
+
+| Parameter | Recommended Range | Notes |
+|-----------|------------------|-------|
+| Learning Rate | 0.001-0.01 | Lower than MLPs due to complexity |
+| Optimizer | Adam | Good default, stable convergence |
+| Weight Decay | 1e-4 to 1e-3 | Helps prevent overfitting |
+| Dropout | 0.3-0.5 | Apply in FC layers only |
+| Batch Size | 16-64 | Limited by GPU memory |
+
+#### Data Handling
+
+📊 **Data Best Practices**:
+
+✅ **Image Preprocessing**:
 ```go
-func cnnBestPractices() {
-    fmt.Println("🎓 CNN Best Practices")
-    
-    fmt.Println("\n🏗️ Architecture Design:")
-    fmt.Println("   ✅ Start simple, add complexity gradually")
-    fmt.Println("   ✅ Use proven patterns (VGG-style, ResNet-inspired)")
-    fmt.Println("   ✅ Ensure spatial dimensions reduce gradually")
-    fmt.Println("   ✅ Increase filter count as spatial size decreases")
-    
-    fmt.Println("\n⚙️ Training Configuration:")
-    fmt.Println("   ✅ Lower learning rates for CNNs (0.001-0.01)")
-    fmt.Println("   ✅ Use Adam optimizer for most cases")
-    fmt.Println("   ✅ Apply dropout in fully connected layers")
-    fmt.Println("   ✅ Monitor GPU memory usage carefully")
-    
-    fmt.Println("\n📊 Data Handling:")
-    fmt.Println("   ✅ Normalize input images to [0, 1] range")
-    fmt.Println("   ✅ Use NCHW format: [batch, channels, height, width]")
-    fmt.Println("   ✅ Ensure consistent image dimensions")
-    fmt.Println("   ✅ Consider data augmentation for real datasets")
-    
-    fmt.Println("\n🚀 Performance Tips:")
-    fmt.Println("   ✅ Use smaller batch sizes for CNNs vs MLPs")
-    fmt.Println("   ✅ Profile memory usage before scaling up")
-    fmt.Println("   ✅ Consider mixed precision for large models")
-    fmt.Println("   ✅ Monitor training speed vs accuracy trade-offs")
+// Standard normalization
+func normalizeImage(img []float32) []float32 {
+    for i := range img {
+        img[i] = img[i] / 255.0  // Scale to [0, 1]
+    }
+    return img
+}
+
+// Channel-wise normalization (ImageNet style)
+func normalizeImageNet(img []float32, channels int) []float32 {
+    mean := []float32{0.485, 0.456, 0.406}
+    std := []float32{0.229, 0.224, 0.225}
+    // Apply per channel
 }
 ```
 
+✅ **Data Format Consistency**:
+- Always use NCHW format: [batch, channels, height, width]
+- Ensure all images have same dimensions
+- Handle different aspect ratios properly (crop/pad)
+
+✅ **Data Augmentation** (for production models):
+- Random crops
+- Horizontal flips
+- Color jittering
+- Rotation (small angles)
+
+#### Performance Optimization
+
+🚀 **Performance Guidelines**:
+
+| Optimization | Impact | Implementation |
+|--------------|--------|----------------|
+| Smaller batch sizes | Reduces memory | Start with 16, increase carefully |
+| Mixed precision | 2x speedup, 50% memory | Use FP16 for large models |
+| Gradient accumulation | Effective larger batches | Accumulate over mini-batches |
+| Profile first | Identify bottlenecks | Use profiling tools |
+
+#### Common Pitfalls to Avoid
+
+❌ **Avoid These Mistakes**:
+1. Too aggressive pooling early (loses information)
+2. Very deep networks without skip connections
+3. Large kernels (7×7, 9×9) throughout network
+4. Forgetting to normalize inputs
+5. Batch size too large for GPU memory
+6. Learning rate too high (NaN losses)
+
 ### Common CNN Patterns
 
+🔧 **Proven Architectural Patterns**
+
+#### Conv Block Pattern
+
+📐 **Standard Convolutional Block**:
+```
+Conv2D → ReLU → Conv2D → ReLU → MaxPool2D
+```
+
+- Two convolutions extract features at different levels
+- ReLU adds non-linearity between convolutions
+- MaxPooling reduces spatial dimensions
+- Pattern inspired by VGG architecture
+
+#### Classifier Head Pattern
+
+🎯 **Standard Classification Head**:
+```
+Flatten → Dense(256) → ReLU → Dropout(0.5) → Dense(num_classes)
+```
+
+- Flatten converts 2D features to 1D vector
+- First Dense layer learns high-level combinations
+- Dropout prevents overfitting
+- Final Dense outputs class probabilities
+
+#### Filter Progression Pattern
+
+📊 **Typical Channel Progression**:
+
+| Layer | Input Shape | Output Shape | Description |
+|-------|-------------|--------------|-------------|
+| Input | 3×32×32 | - | RGB image |
+| Conv1 | 3×32×32 | 32×30×30 | Initial feature extraction |
+| Pool1 | 32×30×30 | 32×15×15 | Spatial reduction |
+| Conv2 | 32×15×15 | 64×13×13 | Deeper features |
+| Pool2 | 64×13×13 | 64×6×6 | Further reduction |
+| Conv3 | 64×6×6 | 128×4×4 | High-level features |
+
+**Key principle**: Double channels when halving spatial dimensions
+
+#### Optimization Patterns
+
+⚡ **Kernel Size Selection**:
+
+| Kernel Size | Use Case | Advantages | Disadvantages |
+|------------|----------|------------|---------------|
+| **1×1** | Channel reduction | Efficient, learns channel combinations | No spatial information |
+| **3×3** | Standard feature extraction | Good balance of efficiency and effectiveness | May need multiple layers |
+| **5×5** | Larger receptive field | Captures broader patterns | Higher computational cost |
+| **7×7** | Initial layers only | Large context from input | Very expensive, rarely used |
+
+#### Modern Architectural Patterns
+
+**Residual Connections** (ResNet-inspired):
 ```go
-func demonstrateCommonPatterns() {
-    fmt.Println("🔧 Common CNN Patterns")
-    
-    fmt.Println("\n📐 Conv Block Pattern:")
-    fmt.Println("   Conv2D → ReLU → Conv2D → ReLU")
-    fmt.Println("   (Two convolutions before pooling/reduction)")
-    
-    fmt.Println("\n🎯 Classifier Head Pattern:")
-    fmt.Println("   Flatten → Dense → ReLU → Dropout → Dense")
-    fmt.Println("   (Progressive reduction to final classes)")
-    
-    fmt.Println("\n📊 Filter Progression:")
-    fmt.Println("   3×32×32 → 16×30×30 → 32×28×28 → 64×26×26")
-    fmt.Println("   (Double filters as spatial size decreases)")
-    
-    fmt.Println("\n⚡ Optimization Patterns:")
-    fmt.Println("   • 1×1 conv for channel reduction")
-    fmt.Println("   • 3×3 conv for feature extraction")
-    fmt.Println("   • 5×5 conv for larger patterns (sparingly)")
-}
+// Skip connection pattern
+input := previousLayer
+conv1 := builder.AddConv2D(filters, 3, 1, 1, true, "conv1")
+relu1 := builder.AddReLU("relu1")
+conv2 := builder.AddConv2D(filters, 3, 1, 1, true, "conv2")
+// Add input to conv2 output (residual connection)
+```
+
+**Inception Module** (GoogLeNet-inspired):
+```go
+// Multiple kernel sizes in parallel
+branch1 := builder.AddConv2D(64, 1, 1, 0, true, "1x1")      // 1×1 conv
+branch2 := builder.AddConv2D(128, 3, 1, 1, true, "3x3")    // 3×3 conv
+branch3 := builder.AddConv2D(32, 5, 1, 2, true, "5x5")     // 5×5 conv
+// Concatenate branches
 ```
 
 ## 🚀 Next Steps
