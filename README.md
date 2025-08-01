@@ -812,4 +812,4 @@ Go-Metal is released under the MIT License. See [LICENSE.md](LICENSE.md) for det
 
 **Ready to build high-performance ML applications on Apple Silicon with Go?** 
 
-[Get Started](docs/getting-started/quick-start.md) | [View Examples](app/) | [API Documentation](docs/)
+[Get Started](docs/getting-started/quick-start.md) | [View Examples](examples/) | [API Documentation](docs/)
