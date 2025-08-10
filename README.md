@@ -795,6 +795,7 @@ Contributions are welcome.
 - Additional activation functions (GELU)
 - Performance optimizations
 - Advanced optimization techniques (learning rate scheduling, gradient clipping)
+- The current plan for enhancements can be found [here](enhancements.md).
 
 ## 📄 License
 
