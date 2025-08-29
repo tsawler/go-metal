@@ -4,9 +4,49 @@ import (
 	"fmt"
 	"sync"
 	"unsafe"
-	
+
 	"github.com/tsawler/go-metal/cgo_bridge"
 )
+
+var (
+	// defaultMaxPoolSizes maps buffer size thresholds to max pool sizes.
+	// Keys are upper bounds for bufferSize; values are maxPoolSize.
+	// Use a map for easy configuration.
+	defaultMaxPoolSizes = map[int]int{
+		4096:     100, // <= 4KB
+		65536:    50,  // <= 64KB
+		1048576:  20,  // <= 1MB
+		16777216: 20,  // <= 16MB
+		-1:       15,  // > 16MB (use -1 as sentinel for largest)
+	}
+	maxPoolSizesMutex sync.RWMutex // Protects the map for thread-safety
+)
+
+// SetMaxPoolSizeForTier sets the max pool size for a given buffer size upper bound.
+// Call this before initializing the memory manager to customize capacities.
+// threshold: Upper bound for bufferSize (e.g., 4096 for <=4KB tier).
+// maxSize: New max pool size for that tier.
+func SetMaxPoolSizeForTier(threshold, maxSize int) {
+	if maxSize <= 0 {
+		panic("maxSize must be positive")
+	}
+	maxPoolSizesMutex.Lock()
+	defaultMaxPoolSizes[threshold] = maxSize
+	maxPoolSizesMutex.Unlock()
+}
+
+// ResetMaxPoolSizes resets to default values.
+func ResetMaxPoolSizes() {
+	maxPoolSizesMutex.Lock()
+	defaultMaxPoolSizes = map[int]int{
+		4096:     100,
+		65536:    50,
+		1048576:  20,
+		16777216: 20,
+		-1:       15,
+	}
+	maxPoolSizesMutex.Unlock()
+}
 
 // BufferPool manages a pool of Metal buffers of a specific size
 type BufferPool struct {
@@ -42,11 +82,11 @@ func (bp *BufferPool) Get() (unsafe.Pointer, error) {
 			bp.allocated++
 		}
 		bp.mutex.Unlock()
-		
+
 		if !canAllocate {
 			return nil, fmt.Errorf("buffer pool at capacity (%d)", bp.maxSize)
 		}
-		
+
 		// Allocate new Metal buffer via CGO
 		buffer, err := allocateMetalBuffer(bp.bufferSize, bp.device)
 		if err != nil {
@@ -55,7 +95,7 @@ func (bp *BufferPool) Get() (unsafe.Pointer, error) {
 			bp.mutex.Unlock()
 			return nil, fmt.Errorf("failed to allocate Metal buffer: %v", err)
 		}
-		
+
 		return buffer, nil
 	}
 }
@@ -65,7 +105,7 @@ func (bp *BufferPool) Return(buffer unsafe.Pointer) {
 	if buffer == nil {
 		return
 	}
-	
+
 	select {
 	case bp.buffers <- buffer:
 		// Successfully returned to pool
@@ -87,16 +127,16 @@ func (bp *BufferPool) Stats() (available int, allocated int, maxSize int) {
 
 // MemoryManager manages GPU buffer lifecycle and pooling
 type MemoryManager struct {
-	pools       map[PoolKey]*BufferPool // Pools by size and device
-	poolsMutex  sync.RWMutex            // Protects pools map
-	device      unsafe.Pointer          // MTLDevice
-	
+	pools      map[PoolKey]*BufferPool // Pools by size and device
+	poolsMutex sync.RWMutex            // Protects pools map
+	device     unsafe.Pointer          // MTLDevice
+
 	// Pool size tiers (in bytes)
-	poolSizes   []int
-	
+	poolSizes []int
+
 	// Buffer size tracking
-	bufferSizes     map[unsafe.Pointer]int // Maps buffer pointer to its allocated size
-	bufferSizesMutex sync.RWMutex         // Protects bufferSizes map
+	bufferSizes      map[unsafe.Pointer]int // Maps buffer pointer to its allocated size
+	bufferSizesMutex sync.RWMutex           // Protects bufferSizes map
 }
 
 // PoolKey represents a key for the buffer pool map
@@ -125,20 +165,20 @@ func (mm *MemoryManager) GetBuffer(size int, device DeviceType) (unsafe.Pointer,
 	// Find the smallest pool that can accommodate this size
 	poolSize := mm.findPoolSize(size)
 	key := PoolKey{Size: poolSize, Device: device}
-	
+
 	// Get or create the pool
 	pool := mm.getOrCreatePool(key)
-	
+
 	buffer, err := pool.Get()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Track the buffer size
 	mm.bufferSizesMutex.Lock()
 	mm.bufferSizes[buffer] = poolSize
 	mm.bufferSizesMutex.Unlock()
-	
+
 	return buffer, nil
 }
 
@@ -147,21 +187,21 @@ func (mm *MemoryManager) ReturnBuffer(buffer unsafe.Pointer, size int, device De
 	if buffer == nil {
 		return
 	}
-	
+
 	poolSize := mm.findPoolSize(size)
 	key := PoolKey{Size: poolSize, Device: device}
-	
+
 	mm.poolsMutex.RLock()
 	pool, exists := mm.pools[key]
 	mm.poolsMutex.RUnlock()
-	
+
 	if exists {
 		pool.Return(buffer)
 	} else {
 		// No pool exists, just deallocate
 		deallocateMetalBuffer(buffer)
 	}
-	
+
 	// Clean up buffer size tracking
 	mm.bufferSizesMutex.Lock()
 	delete(mm.bufferSizes, buffer)
@@ -184,57 +224,62 @@ func (mm *MemoryManager) getOrCreatePool(key PoolKey) *BufferPool {
 	mm.poolsMutex.RLock()
 	pool, exists := mm.pools[key]
 	mm.poolsMutex.RUnlock()
-	
+
 	if exists {
 		return pool
 	}
-	
+
 	// Create new pool
 	mm.poolsMutex.Lock()
 	defer mm.poolsMutex.Unlock()
-	
+
 	// Double-check after acquiring write lock
 	if pool, exists := mm.pools[key]; exists {
 		return pool
 	}
-	
+
 	// Determine max pool size based on buffer size
 	maxPoolSize := calculateMaxPoolSize(key.Size)
 	pool = NewBufferPool(key.Size, maxPoolSize, key.Device)
 	mm.pools[key] = pool
-	
+
 	return pool
 }
 
 // calculateMaxPoolSize determines the maximum number of buffers for a pool
+// Find the appropriate tier by iterating over thresholds in order.
 func calculateMaxPoolSize(bufferSize int) int {
-	// Smaller buffers get larger pools
-	switch {
-	case bufferSize <= 4096:     // <= 4KB
-		return 100
-	case bufferSize <= 65536:    // <= 64KB  
-		return 50
-	case bufferSize <= 1048576:  // <= 1MB
-		return 20
-	case bufferSize <= 16777216: // <= 16MB
-		return 20  // Increased from 10 for CNN gradient tensors
-	default:                     // > 16MB
-		return 15  // Increased from 5 for large CNN models
+	maxPoolSizesMutex.RLock()
+	defer maxPoolSizesMutex.RUnlock()
+
+	// Thresholds in ascending order (hardcoded for iteration, but values from map)
+	thresholds := []int{4096, 65536, 1048576, 16777216}
+	for _, thresh := range thresholds {
+		if bufferSize <= thresh {
+			if val, ok := defaultMaxPoolSizes[thresh]; ok {
+				return val
+			}
+		}
 	}
+	// Fallback to largest tier
+	if val, ok := defaultMaxPoolSizes[-1]; ok {
+		return val
+	}
+	return 15 // Default if map is corrupted
 }
 
 // Stats returns memory manager statistics
 func (mm *MemoryManager) Stats() map[PoolKey]string {
 	mm.poolsMutex.RLock()
 	defer mm.poolsMutex.RUnlock()
-	
+
 	stats := make(map[PoolKey]string)
 	for key, pool := range mm.pools {
 		available, allocated, maxSize := pool.Stats()
-		stats[key] = fmt.Sprintf("available=%d, allocated=%d, max=%d", 
+		stats[key] = fmt.Sprintf("available=%d, allocated=%d, max=%d",
 			available, allocated, maxSize)
 	}
-	
+
 	return stats
 }
 
@@ -263,7 +308,7 @@ func GetGlobalMemoryManager() *MemoryManager {
 func allocateMetalBuffer(size int, device DeviceType) (unsafe.Pointer, error) {
 	// Get the device from global memory manager
 	metalDevice := GetGlobalMemoryManager().device
-	
+
 	// Convert device type
 	var cgoDev cgo_bridge.DeviceType
 	switch device {
@@ -276,11 +321,11 @@ func allocateMetalBuffer(size int, device DeviceType) (unsafe.Pointer, error) {
 	default:
 		cgoDev = cgo_bridge.GPU
 	}
-	
+
 	return cgo_bridge.AllocateMetalBuffer(metalDevice, size, cgoDev)
 }
 
-// deallocateMetalBuffer deallocates a Metal buffer via CGO  
+// deallocateMetalBuffer deallocates a Metal buffer via CGO
 func deallocateMetalBuffer(buffer unsafe.Pointer) {
 	cgo_bridge.DeallocateMetalBuffer(buffer)
 }
@@ -300,19 +345,19 @@ func (mm *MemoryManager) ReleaseBuffer(buffer unsafe.Pointer) {
 	if buffer == nil {
 		return
 	}
-	
+
 	// Look up the actual buffer size
 	mm.bufferSizesMutex.RLock()
 	size, exists := mm.bufferSizes[buffer]
 	mm.bufferSizesMutex.RUnlock()
-	
+
 	if !exists {
 		// Buffer not tracked - this shouldn't happen in normal operation
 		// Use a reasonable default size and log a warning
 		size = 4194304 // 4MB default as fallback
 		fmt.Printf("Warning: releasing untracked buffer %p, using default size %d\n", buffer, size)
 	}
-	
+
 	mm.ReturnBuffer(buffer, size, GPU)
 }
 
